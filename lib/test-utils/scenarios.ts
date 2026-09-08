@@ -84,6 +84,29 @@ export function rangeBound(): Candle[] {
   return makeCandles(specs);
 }
 
+/**
+ * A long uptrend that repeatedly pulls back into its prior support — enough
+ * history to warm up the EMA 200 and enough recurring opportunities for a
+ * backtest to have something to replay.
+ */
+export function repeatedPullbacks(cycles = 90): Candle[] {
+  const specs: CandleSpec[] = [];
+  for (let c = 0; c < cycles; c += 1) {
+    const low = 100 + c * 2;
+    const high = low + 10;
+    specs.push(
+      { close: low, low: low - 1 },
+      { close: low + 3 },
+      { close: high, high: high + 1 },
+      { close: high - 4 },
+      // Dips back through the prior swing low, which is what puts price
+      // inside the support zone rather than just near it.
+      { close: low - 3, low: low - 4, volume: 150 },
+    );
+  }
+  return makeCandles(specs);
+}
+
 /** Not enough candles for the engine to say anything responsible. */
 export function thinHistory(): Candle[] {
   return makeCandles(legs(4, 100, 4, 12));

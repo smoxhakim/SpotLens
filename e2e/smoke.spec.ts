@@ -270,3 +270,26 @@ test("learn and asset APIs are public and typed", async ({ request }) => {
 
   expect((await request.get("/api/assets/NOTACOIN")).status()).toBe(404);
 });
+
+test("backtesting requires an account and states its disclaimer", async ({ page }) => {
+  await page.goto("/backtest");
+
+  await expect(page.getByRole("heading", { name: "Backtest" })).toBeVisible();
+  // The "past performance" warning is required on every backtest surface.
+  await expect(page.getByText(/does not guarantee future results/i)).toBeVisible();
+  await expect(page.getByRole("link", { name: "Sign in" }).first()).toBeVisible();
+});
+
+test("the backtest API rejects anonymous callers and bad ranges", async ({ request }) => {
+  const anonymous = await request.post("/api/backtest/run", {
+    data: {
+      tradingPairId: "00000000-0000-4000-8000-000000000000",
+      timeframe: "H4",
+      startDate: "2024-01-01",
+      endDate: "2024-03-01",
+    },
+  });
+  expect(anonymous.status()).toBe(401);
+
+  expect((await request.get("/api/backtest")).status()).toBe(401);
+});
