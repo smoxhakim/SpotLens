@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 
+import { timeframeSchema } from "@/lib/market-data/schema";
+
 import { isDenied, requireUser } from "@/lib/api/auth-guard";
 import { apiError, handleRouteError } from "@/lib/api/response";
 import { RATE_LIMITS, enforceRateLimit } from "@/lib/rate-limit";
@@ -15,7 +17,7 @@ export const maxDuration = 60;
 
 const bodySchema = z.object({
   tradingPairId: z.string().uuid(),
-  timeframe: z.enum(["M15", "H1", "H4", "D1", "W1"]),
+  timeframe: timeframeSchema,
   startDate: z.coerce.date(),
   endDate: z.coerce.date(),
 });

@@ -49,6 +49,14 @@ export interface MarketReadOptions extends ZoneOptions {
   swingLookback?: number;
   rsiPeriod?: number;
   volumePeriod?: number;
+  /**
+   * Whether the final candle is still open.
+   *
+   * Passed in rather than derived from the clock, so the engine stays a pure
+   * function of its inputs — the backtester replays closed candles and must
+   * get identical results every time.
+   */
+  lastCandleIsForming?: boolean;
 }
 
 /**
@@ -75,8 +83,19 @@ export function runMarketRead(candles: Candle[], options: MarketReadOptions = {}
 
   const trendRead = detectTrend(candles, swingLookback);
   const zones = detectZones(candles, { ...options, swingLookback });
-  const volumeRead = analyzeVolume(candles, volumePeriod);
   const rsiValue = latestRsi(series, rsiPeriod);
+
+  // Volume is the one measure that cannot read a half-built candle.
+  //
+  // Price, RSI and the moving averages are all levels — a forming candle's
+  // close is a real price right now. Volume is an accumulation: sixteen minutes
+  // into an hour it holds sixteen minutes of trading, and comparing that
+  // against candles that had a full hour makes every fresh candle look dead.
+  // That fed straight into the status engine, which held back valid setups for
+  // "thin volume" that was only thin because the hour had just started.
+  const volumeCandles =
+    options.lastCandleIsForming && candles.length > 1 ? candles.slice(0, -1) : candles;
+  const volumeRead = analyzeVolume(volumeCandles, volumePeriod);
 
   return {
     price,

@@ -3,7 +3,7 @@
 import { useMemo } from "react";
 
 import { runMarketRead, type MarketRead } from "@/lib/analysis";
-import type { Candle } from "@/lib/market-data/provider";
+import { isLastCandleForming, type Candle } from "@/lib/market-data/provider";
 
 /**
  * Runs the deterministic engine over the candles the chart already holds.
@@ -16,6 +16,6 @@ import type { Candle } from "@/lib/market-data/provider";
 export function useMarketRead(candles: Candle[] | undefined): MarketRead | null {
   return useMemo(() => {
     if (!candles || candles.length === 0) return null;
-    return runMarketRead(candles);
+    return runMarketRead(candles, { lastCandleIsForming: isLastCandleForming(candles) });
   }, [candles]);
 }

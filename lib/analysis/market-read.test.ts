@@ -77,6 +77,43 @@ describe("runMarketRead", () => {
     expect(a.lastCandleTime).toBe(truncated.at(-1)!.openTime);
   });
 
+  it("ignores a half-built candle when judging volume", () => {
+    // A forming candle holds only part of its period's trading. Comparing that
+    // against candles that ran their full length made every fresh candle look
+    // dead, which then held back valid setups for "thin volume".
+    const closed = makeCandles(trendingUp(300).map((close) => ({ close, volume: 1000 })));
+    const withForming = [
+      ...closed,
+      // A brand-new candle, 5% of the way through its period.
+      ...makeCandles([{ close: closed.at(-1)!.close, volume: 50 }], {
+        startTime: closed.at(-1)!.openTime + 60 * 60_000,
+      }),
+    ];
+
+    const naive = runMarketRead(withForming);
+    const corrected = runMarketRead(withForming, { lastCandleIsForming: true });
+
+    // Naively, the partial candle reads as almost no volume at all.
+    expect(naive.volume.read!.relative).toBeLessThan(0.2);
+    // Corrected, volume is judged on the last completed candle.
+    expect(corrected.volume.read!.relative).toBeCloseTo(1, 1);
+  });
+
+  it("stays deterministic — the flag is an input, never the clock", () => {
+    const candles = makeCandles(trendingUp());
+
+    // Same candles and same flag must always give the same read, which is what
+    // lets the backtester replay history reproducibly.
+    expect(JSON.stringify(runMarketRead(candles, { lastCandleIsForming: true }))).toBe(
+      JSON.stringify(runMarketRead(candles, { lastCandleIsForming: true })),
+    );
+  });
+
+  it("does not drop the only candle it has", () => {
+    const single = makeCandles([{ close: 100, volume: 10 }]);
+    expect(() => runMarketRead(single, { lastCandleIsForming: true })).not.toThrow();
+  });
+
   it("reads a sustained climb as bullish", () => {
     const read = runMarketRead(makeCandles(trendingUp()));
     expect(read.trend.trend).toBe("BULLISH");

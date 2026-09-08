@@ -18,7 +18,12 @@ import { ema } from "@/lib/indicators";
 import { closes } from "@/lib/indicators";
 import { ANALYSIS_DISCLAIMER, SPOT_ONLY_NOTE } from "@/lib/constants/disclaimers";
 import { defaultHigherTimeframe } from "@/lib/analysis";
-import { TIMEFRAME_LABELS, isTimeframe, type Timeframe } from "@/lib/market-data/provider";
+import {
+  TIMEFRAME_LABELS,
+  isNoisyTimeframe,
+  isTimeframe,
+  type Timeframe,
+} from "@/lib/market-data/provider";
 import type { MarketSummary } from "@/types/market";
 
 import { useCandles } from "../hooks/useCandles";
@@ -210,6 +215,19 @@ export function MarketWorkspace() {
                   >
                     Retry
                   </button>
+                </AlertDescription>
+              </Alert>
+            )}
+
+            {isNoisyTimeframe(timeframe) && (
+              <Alert variant="warning" className="mb-3">
+                <AlertTriangle />
+                <AlertDescription>
+                  On {TIMEFRAME_LABELS[timeframe]} candles most swing highs and lows are noise
+                  rather than levels anyone defended, and the indicators warm up on barely a few
+                  hours of history. The analysis is computed exactly the same way — it is the input
+                  that is thin. Treat anything here as a timing detail on top of a read you took
+                  from a higher timeframe.
                 </AlertDescription>
               </Alert>
             )}

@@ -1,10 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 
+import { timeframeSchema } from "@/lib/market-data/schema";
+
 import { analyzeMultiTimeframe, isValidTimeframePair, runAnalysis } from "@/lib/analysis";
 import { apiError, handleRouteError } from "@/lib/api/response";
 import { RATE_LIMITS, enforceRateLimit } from "@/lib/rate-limit";
 import { currentUserId } from "@/lib/auth";
+import { isLastCandleForming } from "@/lib/market-data/provider";
 import { getCandles } from "@/services/candles";
 import { findMarketByPairId } from "@/services/markets";
 import { saveAnalysisSnapshot } from "@/services/snapshots";
@@ -14,7 +17,7 @@ export const dynamic = "force-dynamic";
 
 const CANDLE_LIMIT = 500;
 
-const timeframe = z.enum(["M15", "H1", "H4", "D1", "W1"]);
+const timeframe = timeframeSchema;
 
 const bodySchema = z.object({
   tradingPairId: z.string().uuid(),
@@ -73,7 +76,10 @@ export async function POST(req: NextRequest) {
       higherTimeframe: body.higherTimeframe,
     });
 
-    const result = runAnalysis(lower.candles, { mtf });
+    const result = runAnalysis(lower.candles, {
+      mtf,
+      lastCandleIsForming: isLastCandleForming(lower.candles),
+    });
 
     const snapshotId = userId
       ? await saveAnalysisSnapshot({
