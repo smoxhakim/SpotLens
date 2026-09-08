@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 
+import { timeframeSchema } from "@/lib/market-data/schema";
+
 import { isDenied, requireUser } from "@/lib/api/auth-guard";
 import { apiError, handleRouteError } from "@/lib/api/response";
 import { prisma } from "@/lib/db/prisma";
@@ -12,7 +14,7 @@ const bodySchema = z
     // Capped at 10%: beyond that a short losing streak takes the account with
     // it, and a tool about risk management should not help you set it.
     defaultRiskPercent: z.number().positive().max(10).optional(),
-    defaultTimeframe: z.enum(["M15", "H1", "H4", "D1", "W1"]).optional(),
+    defaultTimeframe: timeframeSchema.optional(),
   })
   .refine((v) => v.defaultRiskPercent !== undefined || v.defaultTimeframe !== undefined, {
     message: "Provide at least one setting to update.",

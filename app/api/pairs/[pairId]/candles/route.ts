@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 
+import { timeframeSchema } from "@/lib/market-data/schema";
+
 import { apiError, handleRouteError } from "@/lib/api/response";
 import { RATE_LIMITS, enforceRateLimit } from "@/lib/rate-limit";
 import { getCandles } from "@/services/candles";
@@ -12,7 +14,7 @@ export const dynamic = "force-dynamic";
 const paramsSchema = z.object({ pairId: z.string().uuid() });
 
 const querySchema = z.object({
-  timeframe: z.enum(["M15", "H1", "H4", "D1", "W1"]),
+  timeframe: timeframeSchema,
   from: z.coerce.number().int().positive().optional(),
   to: z.coerce.number().int().positive().optional(),
   limit: z.coerce.number().int().min(1).max(1000).default(300),

@@ -1,10 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 
+import { timeframeSchema } from "@/lib/market-data/schema";
+
 import { apiError, handleRouteError } from "@/lib/api/response";
 import { RATE_LIMITS, enforceRateLimit } from "@/lib/rate-limit";
 import { runAnalysis } from "@/lib/analysis";
 import { currentUserId } from "@/lib/auth";
+import { isLastCandleForming } from "@/lib/market-data/provider";
 import { getCandles } from "@/services/candles";
 import { findMarketByPairId } from "@/services/markets";
 import { saveAnalysisSnapshot } from "@/services/snapshots";
@@ -20,7 +23,7 @@ const CANDLE_LIMIT = 500;
 
 const bodySchema = z.object({
   tradingPairId: z.string().uuid(),
-  timeframe: z.enum(["M15", "H1", "H4", "D1", "W1"]),
+  timeframe: timeframeSchema,
 });
 
 /**
@@ -52,7 +55,9 @@ export async function POST(req: NextRequest) {
       limit: CANDLE_LIMIT,
     });
 
-    const result = runAnalysis(candles);
+    const result = runAnalysis(candles, {
+      lastCandleIsForming: isLastCandleForming(candles),
+    });
 
     const snapshotId = userId
       ? await saveAnalysisSnapshot({

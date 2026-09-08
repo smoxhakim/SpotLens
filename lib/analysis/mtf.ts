@@ -1,5 +1,5 @@
 import type { Candle, Timeframe } from "@/lib/market-data/provider";
-import { TIMEFRAME_LABELS } from "@/lib/market-data/provider";
+import { TIMEFRAMES, TIMEFRAME_LABELS } from "@/lib/market-data/provider";
 
 import { explainTrend } from "./explain/trend";
 import { DEFAULT_SWING_LOOKBACK } from "./structure";
@@ -41,6 +41,8 @@ export interface MtfSummary {
  * is too coarse to inform an entry, and the same step is no context at all.
  */
 export const HIGHER_TIMEFRAME: Record<Timeframe, Timeframe | null> = {
+  M1: "M5",
+  M5: "M15",
   M15: "H1",
   H1: "H4",
   H4: "D1",
@@ -54,8 +56,9 @@ export function defaultHigherTimeframe(lower: Timeframe): Timeframe | null {
 
 /** True when the pair is a sensible bias/entry combination. */
 export function isValidTimeframePair(lower: Timeframe, higher: Timeframe): boolean {
-  const order: Timeframe[] = ["M15", "H1", "H4", "D1", "W1"];
-  return order.indexOf(higher) > order.indexOf(lower);
+  // Derived from TIMEFRAMES, which is ordered shortest to longest, so adding a
+  // timeframe cannot leave a stale copy of the ordering behind.
+  return TIMEFRAMES.indexOf(higher) > TIMEFRAMES.indexOf(lower);
 }
 
 export function analyzeMultiTimeframe(input: {
