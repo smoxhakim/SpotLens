@@ -16,7 +16,8 @@ import { WatchlistToggle } from "@/features/watchlist/components/WatchlistToggle
 import { ema } from "@/lib/indicators";
 import { closes } from "@/lib/indicators";
 import { ANALYSIS_DISCLAIMER, SPOT_ONLY_NOTE } from "@/lib/constants/disclaimers";
-import { isTimeframe, type Timeframe } from "@/lib/market-data/provider";
+import { defaultHigherTimeframe } from "@/lib/analysis";
+import { TIMEFRAME_LABELS, isTimeframe, type Timeframe } from "@/lib/market-data/provider";
 import type { MarketSummary } from "@/types/market";
 
 import { useCandles } from "../hooks/useCandles";
@@ -101,6 +102,12 @@ export function MarketWorkspace() {
   // zones are meant to explain; the panel still lists them all.
   const analysis = useAnalysis();
 
+  // Checking the higher timeframe is on by default: it is the guard against
+  // buying a bounce inside a downtrend, which is the most expensive mistake
+  // this tool exists to prevent, and defaults are what most runs use.
+  const [useMtf, setUseMtf] = useState(true);
+  const higherTimeframe = defaultHigherTimeframe(timeframe);
+
   // The result belongs to the pair and timeframe it was run for; showing it
   // beside a different chart would be actively misleading.
   const analysisMatches =
@@ -140,10 +147,28 @@ export function MarketWorkspace() {
           <div className="w-full xl:ml-auto xl:w-auto">
             <OverlayToggles value={overlays} onChange={setOverlays} />
           </div>
+          {higherTimeframe && (
+            <label className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+              <input
+                type="checkbox"
+                checked={useMtf}
+                onChange={(e) => setUseMtf(e.target.checked)}
+                className="h-3.5 w-3.5 accent-primary"
+              />
+              Check {TIMEFRAME_LABELS[higherTimeframe]} trend
+            </label>
+          )}
           <Button
             size="sm"
             disabled={!market || analysis.isPending || candles.length === 0}
-            onClick={() => market && analysis.mutate({ pairId: market.pairId, timeframe })}
+            onClick={() =>
+              market &&
+              analysis.mutate({
+                pairId: market.pairId,
+                timeframe,
+                higherTimeframe: useMtf ? higherTimeframe : null,
+              })
+            }
           >
             <Sparkles className="h-4 w-4" />
             {analysis.isPending ? "Analyzing…" : "Analyze Market"}

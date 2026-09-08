@@ -1,4 +1,5 @@
 import type { MarketRead } from "../market-read";
+import type { MtfSummary } from "../mtf";
 import type { EntryZone, RiskReward } from "./types";
 import { GOOD_RR, MIN_ACCEPTABLE_RR } from "./types";
 
@@ -40,9 +41,14 @@ export const SCORE_WEIGHTS = {
  * measures how much of the evidence lines up, so a 78 means "most conditions
  * agree", never "78% chance of working".
  */
-export function scoreSetup(read: MarketRead, entry: EntryZone, riskReward: RiskReward): SetupScore {
+export function scoreSetup(
+  read: MarketRead,
+  entry: EntryZone,
+  riskReward: RiskReward,
+  mtf?: MtfSummary,
+): SetupScore {
   const breakdown = {
-    trend: scoreTrend(read),
+    trend: scoreTrend(read, mtf),
     supportResistance: scoreZones(read, entry),
     volume: scoreVolume(read),
     rsi: scoreRsi(read),
@@ -57,7 +63,55 @@ export function scoreSetup(read: MarketRead, entry: EntryZone, riskReward: RiskR
   return { total, grade: gradeFor(total), breakdown };
 }
 
-function scoreTrend(read: MarketRead): ScoreCategory {
+/**
+ * Higher-timeframe context adjusts the trend category rather than adding a
+ * seventh one. The PRD fixes six categories summing to 100, and multi-timeframe
+ * agreement is trend information — putting it anywhere else would either break
+ * that breakdown or imply it measures something separate.
+ */
+function applyMtf(base: ScoreCategory, mtf: MtfSummary | undefined, max: number): ScoreCategory {
+  if (!mtf) return base;
+
+  switch (mtf.agreement) {
+    case "ALIGNED_BULLISH":
+      return {
+        score: Math.min(max, base.score * 1.15),
+        max,
+        reason: `${base.reason} The ${mtf.higherTimeframe} trend is bullish too, so the entry trades with the higher timeframe.`,
+      };
+    case "PULLBACK_IN_UPTREND":
+      return {
+        score: Math.min(max, base.score * 1.1),
+        max,
+        reason: `${base.reason} The ${mtf.higherTimeframe} trend is bullish while the entry timeframe has pulled back — a dip inside a rising market.`,
+      };
+    case "COUNTER_TREND_BOUNCE":
+      // The single most expensive mistake this tool can prevent.
+      return {
+        score: base.score * 0.25,
+        max,
+        reason: `${base.reason} The ${mtf.higherTimeframe} trend is bearish, so this is a bounce inside a downtrend rather than a trend continuation.`,
+      };
+    case "ALIGNED_BEARISH":
+      return {
+        score: 0,
+        max,
+        reason: `${base.reason} The ${mtf.higherTimeframe} trend is bearish as well.`,
+      };
+    default:
+      return {
+        score: base.score * 0.85,
+        max,
+        reason: `${base.reason} The ${mtf.higherTimeframe} trend gives no clear direction to lean on.`,
+      };
+  }
+}
+
+function scoreTrend(read: MarketRead, mtf?: MtfSummary): ScoreCategory {
+  return applyMtf(scoreTrendBase(read), mtf, SCORE_WEIGHTS.trend);
+}
+
+function scoreTrendBase(read: MarketRead): ScoreCategory {
   const max = SCORE_WEIGHTS.trend;
 
   if (read.trend.conflict) {

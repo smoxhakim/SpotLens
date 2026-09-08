@@ -31,6 +31,14 @@ export type { PriceZone, ZoneKind, ZoneRead, ZoneOptions } from "./zones";
 
 export * from "./setup";
 
+export {
+  analyzeMultiTimeframe,
+  defaultHigherTimeframe,
+  isValidTimeframePair,
+  HIGHER_TIMEFRAME,
+} from "./mtf";
+export type { MtfSummary, MtfAgreement } from "./mtf";
+
 export { explainTrend, explainStructure, explainEmaAlignment } from "./explain/trend";
 export { explainZone, explainZones, explainZoneWidth } from "./explain/zones";
 export { explainVolume } from "./explain/volume";

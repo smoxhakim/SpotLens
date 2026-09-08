@@ -57,6 +57,7 @@ export async function saveAnalysisSnapshot(input: SaveSnapshotInput): Promise<st
         status: result.status,
         statusReason: result.statusReason,
         indicatorsSnapshot: toJson(result.read.indicators),
+        mtfSummary: result.mtf ? toJson(result.mtf) : undefined,
         disclaimerVersion: result.disclaimerVersion,
       },
       select: { id: true },
