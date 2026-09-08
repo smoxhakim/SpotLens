@@ -8,6 +8,7 @@ import type { MtfAgreement, MtfSummary } from "@/lib/analysis";
 import { TIMEFRAME_LABELS } from "@/lib/market-data/provider";
 import { cn } from "@/lib/utils";
 
+import { LearnLink } from "./LearnLink";
 import { WhyDisclosure } from "./WhyDisclosure";
 
 const TREND_META = {
@@ -69,6 +70,8 @@ export function MtfPanel({ mtf }: { mtf: MtfSummary }) {
           {mtf.lowerReason}
         </p>
       </WhyDisclosure>
+
+      <LearnLink concept="multi-timeframe" label="Bias and entry timeframes" />
     </section>
   );
 }

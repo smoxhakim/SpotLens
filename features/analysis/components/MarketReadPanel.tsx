@@ -10,6 +10,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { explainZone, type MarketRead, type PriceZone } from "@/lib/analysis";
 import { formatPrice } from "@/lib/format";
 
+import { LearnLink } from "./LearnLink";
 import { WhyDisclosure } from "./WhyDisclosure";
 
 const TREND_META = {
@@ -77,6 +78,7 @@ export function MarketReadPanel({
             </p>
           )}
           <WhyDisclosure>{read.trend.reason}</WhyDisclosure>
+          <LearnLink concept="trend" label="How trend is decided" />
         </section>
 
         <Separator />
@@ -88,6 +90,7 @@ export function MarketReadPanel({
             price={read.price}
             emptyNote="No support zone has formed below price on this timeframe."
           />
+          <LearnLink concept="support" label="What is support?" />
         </section>
 
         <section>
@@ -98,6 +101,7 @@ export function MarketReadPanel({
             emptyNote="No resistance zone has formed above price on this timeframe."
           />
           <WhyDisclosure label="How are these zones built?">{read.zoneWidthNote}</WhyDisclosure>
+          <LearnLink concept="resistance" label="What is resistance?" />
         </section>
 
         <Separator />
@@ -110,6 +114,7 @@ export function MarketReadPanel({
               : "Not enough history"}
           </p>
           <WhyDisclosure>{read.volume.reason}</WhyDisclosure>
+          <LearnLink concept="volume" label="What volume confirms" />
         </section>
 
         <section>
@@ -118,6 +123,7 @@ export function MarketReadPanel({
             {read.rsi.value === null ? "Not enough history" : read.rsi.value.toFixed(1)}
           </p>
           <WhyDisclosure>{read.rsi.reason}</WhyDisclosure>
+          <LearnLink concept="rsi" label="Why RSI is never a signal alone" />
         </section>
 
         <Separator />
@@ -129,6 +135,7 @@ export function MarketReadPanel({
             <Stat label="EMA 50" value={read.indicators.ema50} />
             <Stat label="EMA 200" value={read.indicators.ema200} />
           </dl>
+          <LearnLink concept="ema" label="How moving averages are used" />
         </section>
 
         <Alert variant="muted">

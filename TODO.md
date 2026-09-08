@@ -54,11 +54,14 @@ Deferred to Phase 8 (tracked, not forgotten):
 
 ## Phase 6 — Learning Mode & Asset Research
 
-- [ ] LearnArticle model + seed content
-- [ ] Learn section UI + contextual links
-- [ ] Per-asset research page
-- [ ] EthicalChecklist model + UI + non-fatwa disclaimer
-- [ ] Admin interface + AdminAuditLog
+- [x] LearnArticle model + 14 seeded articles
+- [x] Learn section UI (index + article view)
+- [x] Contextual "Learn more" links from every analysis field
+- [x] Per-asset research page
+- [x] EthicalChecklist for all 45 assets + UI + non-fatwa disclaimer
+- [ ] Admin interface + AdminAuditLog — pending a decision on whether a
+      single-user app needs one (editing lib/market-data/curated-assets.ts and
+      lib/ethics/checklist.ts, then re-seeding, already works)
 
 ## Phase 7 — Backtesting
 
