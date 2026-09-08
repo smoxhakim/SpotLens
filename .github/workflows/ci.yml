@@ -4,6 +4,8 @@ on:
   push:
     branches: [main]
   pull_request:
+  # E2E is opt-in — see the note on the e2e job below.
+  workflow_dispatch:
 
 jobs:
   verify:
@@ -21,7 +23,17 @@ jobs:
       - run: npm run typecheck
       - run: npm run test
 
+  # Playwright drives the app against the live exchange API. GitHub-hosted
+  # runners have US IPs, which Binance answers with HTTP 451, so this job would
+  # fail on every push for reasons unrelated to the code — and a CI job that
+  # cries wolf trains you to ignore it.
+  #
+  # It is therefore manual: run it from the Actions tab, or locally with
+  # `npm run e2e`, where the provider is reachable. When Phase 2 introduces
+  # candle fixtures for the indicator tests, wire those in through the
+  # `setMarketDataProvider` seam and this can go back to running on every push.
   e2e:
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     needs: verify
     steps:

@@ -66,6 +66,10 @@ npm run lint
 npm run typecheck
 ```
 
+CI runs lint, typecheck, and the unit tests on every push. E2E is manual — it
+drives the live exchange API, which is unreachable from GitHub's US-based
+runners, so run it locally or trigger it from the Actions tab.
+
 ## Status
 
 **Phase 1 (Chart Foundation) — shipped.** Curated market directory, pair /
