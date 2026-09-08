@@ -59,9 +59,11 @@ Deferred to Phase 8 (tracked, not forgotten):
 - [x] Contextual "Learn more" links from every analysis field
 - [x] Per-asset research page
 - [x] EthicalChecklist for all 45 assets + UI + non-fatwa disclaimer
-- [ ] Admin interface + AdminAuditLog — pending a decision on whether a
-      single-user app needs one (editing lib/market-data/curated-assets.ts and
-      lib/ethics/checklist.ts, then re-seeding, already works)
+- [~] Admin interface + AdminAuditLog — deliberately skipped for a single-user
+  app. Editing lib/market-data/curated-assets.ts or lib/ethics/checklist.ts
+  and running `npm run prisma:seed` already covers it, and the seed is
+  idempotent. AdminAuditLog and the ADMIN role stay in the schema so this
+  can be added later without a migration.
 
 ## Phase 7 — Backtesting
 
