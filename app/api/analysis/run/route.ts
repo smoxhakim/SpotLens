@@ -1,15 +1,60 @@
-import { apiError } from "@/lib/api/response";
+import { NextRequest, NextResponse } from "next/server";
+import { z } from "zod";
+
+import { apiError, handleRouteError } from "@/lib/api/response";
+import { runAnalysis } from "@/lib/analysis";
+import { getCandles } from "@/services/candles";
+import { findMarketByPairId } from "@/services/markets";
+import type { AnalysisRunResponse } from "@/types/analysis";
+
+export const dynamic = "force-dynamic";
 
 /**
- * POST /api/analysis/run — the deterministic trade setup engine (Phase 3).
- *
- * Deliberately returns 501 until the engine exists. SpotLens must never emit a
- * trade setup that was not calculated, so there is no placeholder result here.
+ * Enough history for the EMA 200 to be defined with room to spare, and for the
+ * swing series to have something to say.
  */
-export function POST() {
-  return apiError(
-    "NOT_IMPLEMENTED",
-    "The analysis engine is not available yet. SpotLens does not return trade setups it has not calculated.",
-    501,
-  );
+const CANDLE_LIMIT = 500;
+
+const bodySchema = z.object({
+  tradingPairId: z.string().uuid(),
+  timeframe: z.enum(["M15", "H1", "H4", "D1", "W1"]),
+});
+
+/**
+ * POST /api/analysis/run — runs the deterministic engine for one pair and
+ * timeframe.
+ *
+ * Persisting an AnalysisSnapshot needs user accounts, which arrive in Phase 4;
+ * until then every run is returned and nothing is stored.
+ */
+export async function POST(req: NextRequest) {
+  try {
+    const json = await req.json().catch(() => null);
+    if (json === null) return apiError("INVALID_REQUEST", "A JSON body is required.", 400);
+
+    const body = bodySchema.parse(json);
+
+    const market = await findMarketByPairId(body.tradingPairId);
+    if (!market) return apiError("PAIR_NOT_FOUND", "Unknown trading pair.", 404);
+
+    const { candles } = await getCandles({
+      pairId: market.pairId,
+      exchangeSymbol: market.exchangeSymbol,
+      timeframe: body.timeframe,
+      limit: CANDLE_LIMIT,
+    });
+
+    const result = runAnalysis(candles);
+
+    return NextResponse.json<AnalysisRunResponse>({
+      pairId: market.pairId,
+      symbol: market.exchangeSymbol,
+      label: market.label,
+      timeframe: body.timeframe,
+      asOf: candles.at(-1)?.openTime ?? 0,
+      result,
+    });
+  } catch (err) {
+    return handleRouteError(err, "POST /api/analysis/run");
+  }
 }

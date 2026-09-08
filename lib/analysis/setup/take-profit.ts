@@ -11,6 +11,16 @@ const LABELS: TakeProfitTarget["label"][] = ["TP1", "TP2", "TP3"];
 const FALLBACK_R_MULTIPLES = [1.5, 2.5, 4];
 
 /**
+ * Structural targets beyond this many R are dropped.
+ *
+ * A level 13R away is real, but it is not a target for a trade whose stop is a
+ * few percent wide — it is a cycle high months out. Listing it as TP3 makes the
+ * ladder look absurd and buries the targets that matter. The level is still
+ * mentioned in the replacement target's reasoning.
+ */
+const MAX_TARGET_R = 8;
+
+/**
  * Take-profit targets drawn from structure, not round numbers.
  *
  * Each target is a place sellers have actually shown up before: a resistance
@@ -49,14 +59,27 @@ export function calculateTakeProfits(
     .sort((a, b) => b - a);
 
   const priorHigh = swingHighs[0];
-  if (priorHigh !== undefined && priorHigh > entry.mid) {
+  const priorHighR = priorHigh === undefined ? 0 : (priorHigh - entry.mid) / risk;
+  const priorHighUsable =
+    priorHigh !== undefined && priorHigh > entry.mid && priorHighR <= MAX_TARGET_R;
+
+  if (priorHighUsable) {
     candidates.push({
       level: priorHigh,
       reason: `The highest prior swing high on this timeframe, at ${formatPrice(priorHigh)}. Beyond it there is no historical reference left to target.`,
     });
   }
 
-  const targets = dedupe(candidates, risk);
+  const targets = dedupe(
+    candidates.filter((c) => (c.level - entry.mid) / risk <= MAX_TARGET_R),
+    risk,
+  );
+
+  // Mention a distant historical high rather than silently dropping it.
+  const distantHighNote =
+    priorHigh !== undefined && !priorHighUsable && priorHighR > MAX_TARGET_R
+      ? ` The next historical reference above is far higher at ${formatPrice(priorHigh)} (${priorHighR.toFixed(0)}× the risk), too distant to manage as a target for this trade.`
+      : "";
 
   // Fill any remaining slots with R-multiples, clearly labelled as such.
   while (targets.length < 3) {
@@ -65,7 +88,7 @@ export function calculateTakeProfits(
     if (targets.some((t) => Math.abs(t.level - level) / level < 0.001)) break;
     targets.push({
       level,
-      reason: `No further resistance is visible on this timeframe, so this target is set at ${multiple}× the risk taken rather than at a level price has reacted to before. Treat it as a target of convenience, not of structure.`,
+      reason: `No further resistance is visible on this timeframe, so this target is set at ${multiple}× the risk taken rather than at a level price has reacted to before. Treat it as a target of convenience, not of structure.${distantHighNote}`,
     });
   }
 

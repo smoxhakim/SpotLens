@@ -85,3 +85,34 @@ test("chart overlays can be toggled", async ({ page }) => {
   await toggle.click();
   await expect(toggle).toHaveAttribute("aria-pressed", "false");
 });
+
+test("Analyze Market returns a full setup with reasoning", async ({ page }) => {
+  await page.goto("/market-analysis?pair=BTCUSDT&tf=H4");
+
+  const analyze = page.getByRole("button", { name: /Analyze Market/ });
+  await expect(analyze).toBeEnabled({ timeout: 30_000 });
+  await analyze.click();
+
+  // Every run ends on one of the four statuses — never a bare "buy".
+  await expect(
+    page.getByText(/Potential setup|Wait for confirmation|High risk|Avoid for now/).first(),
+  ).toBeVisible({ timeout: 30_000 });
+
+  // The disclaimer travels with the result.
+  await expect(
+    page.getByText(/This analysis is educational and informational only/).first(),
+  ).toBeVisible();
+
+  // No page in this product may tell the user to buy.
+  await expect(page.getByText(/^BUY NOW$/i)).toHaveCount(0);
+});
+
+test("the analysis API validates its input", async ({ request }) => {
+  const bad = await request.post("/api/analysis/run", { data: { tradingPairId: "nope" } });
+  expect(bad.status()).toBe(400);
+
+  const missing = await request.post("/api/analysis/run", {
+    data: { tradingPairId: "00000000-0000-4000-8000-000000000000", timeframe: "H1" },
+  });
+  expect(missing.status()).toBe(404);
+});
