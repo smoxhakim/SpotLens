@@ -11,7 +11,15 @@ export interface SwingPoint {
   type: SwingType;
 }
 
-export type StructureLabel = "HH" | "HL" | "LH" | "LL";
+/**
+ * Swing comparison labels. "EH"/"EL" mean the two swings are level within
+ * tolerance — without them, a market ranging between the same two prices reads
+ * as lower highs and lower lows, i.e. a downtrend, which is exactly wrong.
+ */
+export type StructureLabel = "HH" | "HL" | "LH" | "LL" | "EH" | "EL";
+
+/** Relative band within which two swing prices count as the same level. */
+export const STRUCTURE_LEVEL_TOLERANCE = 0.002; // 0.2%
 
 export type MarketStructure = "UPTREND" | "DOWNTREND" | "RANGING" | "UNDETERMINED";
 
@@ -88,6 +96,19 @@ export function findSwingPoints(
   return alternate(swings);
 }
 
+/** Higher / lower / level, with a relative deadband. */
+function label(
+  current: number,
+  previous: number,
+  [higher, lower, equal]: [StructureLabel, StructureLabel, StructureLabel],
+): StructureLabel {
+  const scale = Math.abs(previous);
+  if (scale === 0) return current === 0 ? equal : current > 0 ? higher : lower;
+  const diff = (current - previous) / scale;
+  if (Math.abs(diff) <= STRUCTURE_LEVEL_TOLERANCE) return equal;
+  return diff > 0 ? higher : lower;
+}
+
 /**
  * Collapses consecutive same-type swings into their extreme, so the series
  * alternates high/low/high/low. Without this, a cluster of three swing highs
@@ -131,12 +152,14 @@ export function readStructure(
   const previousLow = lows.at(-2) ?? null;
 
   const highLabel: StructureLabel | null =
-    lastHigh && previousHigh ? (lastHigh.price > previousHigh.price ? "HH" : "LH") : null;
+    lastHigh && previousHigh ? label(lastHigh.price, previousHigh.price, ["HH", "LH", "EH"]) : null;
   const lowLabel: StructureLabel | null =
-    lastLow && previousLow ? (lastLow.price > previousLow.price ? "HL" : "LL") : null;
+    lastLow && previousLow ? label(lastLow.price, previousLow.price, ["HL", "LL", "EL"]) : null;
 
   let structure: MarketStructure = "UNDETERMINED";
   if (highLabel && lowLabel) {
+    // Only an unambiguous pair counts as a trend; anything level or mixed is
+    // a range. Equality is not a direction.
     if (highLabel === "HH" && lowLabel === "HL") structure = "UPTREND";
     else if (highLabel === "LH" && lowLabel === "LL") structure = "DOWNTREND";
     else structure = "RANGING";

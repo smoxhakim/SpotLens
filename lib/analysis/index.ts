@@ -12,7 +12,12 @@ export type { MarketRead, MarketReadIndicators, MarketReadOptions } from "./mark
 export { detectTrend, readEmas, EMA_PERIODS, EMA_LEVEL_TOLERANCE } from "./trend";
 export type { Trend, TrendRead, EmaRead, EmaAlignment, EmaCheck } from "./trend";
 
-export { findSwingPoints, readStructure, DEFAULT_SWING_LOOKBACK } from "./structure";
+export {
+  findSwingPoints,
+  readStructure,
+  DEFAULT_SWING_LOOKBACK,
+  STRUCTURE_LEVEL_TOLERANCE,
+} from "./structure";
 export type {
   SwingPoint,
   SwingType,
@@ -23,6 +28,8 @@ export type {
 
 export { detectZones, isInZone, distanceToZone } from "./zones";
 export type { PriceZone, ZoneKind, ZoneRead, ZoneOptions } from "./zones";
+
+export * from "./setup";
 
 export { explainTrend, explainStructure, explainEmaAlignment } from "./explain/trend";
 export { explainZone, explainZones, explainZoneWidth } from "./explain/zones";
