@@ -1,13 +1,17 @@
 "use client";
 
-import { AlertTriangle, LineChart, RefreshCw } from "lucide-react";
+import { AlertTriangle, RefreshCw } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useCallback, useMemo } from "react";
+import { useCallback, useMemo, useState } from "react";
 
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
+import { MarketReadPanel } from "@/features/analysis/components/MarketReadPanel";
+import { useMarketRead } from "@/features/analysis/hooks/useMarketRead";
+import { ema } from "@/lib/indicators";
+import { closes } from "@/lib/indicators";
 import { ANALYSIS_DISCLAIMER, SPOT_ONLY_NOTE } from "@/lib/constants/disclaimers";
 import { isTimeframe, type Timeframe } from "@/lib/market-data/provider";
 import type { MarketSummary } from "@/types/market";
@@ -16,13 +20,16 @@ import { useCandles } from "../hooks/useCandles";
 import { useLivePrice } from "../hooks/useLivePrice";
 import { useMarkets } from "../hooks/useMarkets";
 import { useTicker } from "../hooks/useTicker";
-import { CandlestickChart } from "./CandlestickChart";
+import { CandlestickChart, type EmaOverlay } from "./CandlestickChart";
 import { MarketHeader } from "./MarketHeader";
+import { OverlayToggles, type OverlayState } from "./OverlayToggles";
 import { PairSelector } from "./PairSelector";
 import { TimeframeSelector } from "./TimeframeSelector";
 
 const DEFAULT_SYMBOL = "BTCUSDT";
 const DEFAULT_TIMEFRAME: Timeframe = "H1";
+
+const EMA_COLORS: Record<number, string> = { 20: "#38bdf8", 50: "#f59e0b", 200: "#a78bfa" };
 
 /**
  * The chart workspace: pair + timeframe selection, live header, candlestick
@@ -61,7 +68,39 @@ export function MarketWorkspace() {
   const candlesQuery = useCandles({ pairId: market?.pairId, timeframe });
   const { price: live, connected } = useLivePrice(market?.exchangeSymbol);
 
-  const candles = candlesQuery.data?.candles ?? [];
+  const candles = useMemo(() => candlesQuery.data?.candles ?? [], [candlesQuery.data]);
+  const read = useMarketRead(candles);
+
+  const [overlays, setOverlays] = useState<OverlayState>({
+    ema20: true,
+    ema50: true,
+    ema200: true,
+    zones: true,
+  });
+
+  const emaOverlays = useMemo<EmaOverlay[]>(() => {
+    if (candles.length === 0) return [];
+    const series = closes(candles);
+    const wanted: number[] = [];
+    if (overlays.ema20) wanted.push(20);
+    if (overlays.ema50) wanted.push(50);
+    if (overlays.ema200) wanted.push(200);
+
+    return wanted.map((period) => ({
+      period,
+      color: EMA_COLORS[period],
+      values: ema(series, period),
+    }));
+  }, [candles, overlays]);
+
+  // Only the nearest zone each side is drawn. Every zone at once turns the
+  // chart into a ladder of dashed lines that obscures the price action the
+  // zones are meant to explain; the panel still lists them all.
+  const zoneOverlays = useMemo(
+    () =>
+      overlays.zones && read ? [...read.support.slice(0, 1), ...read.resistance.slice(0, 1)] : [],
+    [overlays.zones, read],
+  );
 
   return (
     <div className="grid min-w-0 gap-4 xl:grid-cols-[minmax(0,1fr)_340px]">
@@ -87,6 +126,9 @@ export function MarketWorkspace() {
             <RefreshCw className={candlesQuery.isFetching ? "h-4 w-4 animate-spin" : "h-4 w-4"} />
             Refresh
           </Button>
+          <div className="w-full xl:ml-auto xl:w-auto">
+            <OverlayToggles value={overlays} onChange={setOverlays} />
+          </div>
         </div>
 
         <Card>
@@ -144,30 +186,28 @@ export function MarketWorkspace() {
                 No candle data available for this market yet.
               </div>
             ) : (
-              <CandlestickChart candles={candles} livePrice={live?.price ?? null} />
+              <CandlestickChart
+                candles={candles}
+                livePrice={live?.price ?? null}
+                emas={emaOverlays}
+                zones={zoneOverlays}
+              />
             )}
           </CardContent>
         </Card>
       </section>
 
       <aside className="min-w-0 space-y-4">
+        <MarketReadPanel read={read} isLoading={candlesQuery.isPending || marketsQuery.isLoading} />
+
         <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <LineChart className="h-4 w-4" />
-              Market Analysis
-            </CardTitle>
+          <CardHeader className="pb-2">
+            <CardTitle>Trade setup</CardTitle>
           </CardHeader>
-          <CardContent className="space-y-3 text-xs text-muted-foreground">
-            <p>
-              The deterministic analysis engine lands next: trend and market structure, support and
-              resistance zones, entry zone, stop loss, take-profit targets, risk/reward, a setup
-              score, and a clear status — each with the reasoning behind it.
-            </p>
-            <p>
-              Until then this workspace is a chart viewer. SpotLens will not show a trade setup
-              before the numbers behind it are calculated and tested.
-            </p>
+          <CardContent className="text-xs text-muted-foreground">
+            Entry zone, stop loss, take-profit targets, risk/reward, and a setup score arrive next.
+            SpotLens will not show a trade setup before the numbers behind it are calculated and
+            tested.
           </CardContent>
         </Card>
 

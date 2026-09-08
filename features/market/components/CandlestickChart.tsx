@@ -3,20 +3,32 @@
 import {
   ColorType,
   CrosshairMode,
+  LineStyle,
   createChart,
   type IChartApi,
+  type IPriceLine,
   type ISeriesApi,
   type UTCTimestamp,
 } from "lightweight-charts";
 import { useEffect, useRef } from "react";
 
+import type { PriceZone } from "@/lib/analysis";
 import type { Candle } from "@/lib/market-data/provider";
+
+export interface EmaOverlay {
+  period: number;
+  color: string;
+  /** Aligned to `candles`; null where the EMA is not yet defined. */
+  values: (number | null)[];
+}
 
 interface CandlestickChartProps {
   candles: Candle[];
   /** Live last price, folded into the forming candle between REST refreshes. */
   livePrice?: number | null;
   height?: number;
+  emas?: EmaOverlay[];
+  zones?: PriceZone[];
 }
 
 const COLORS = {
@@ -33,11 +45,19 @@ const COLORS = {
  * Deliberately presentational: it takes candles in and draws them. Phase 2 adds
  * EMA line series and support/resistance shading through the same props path.
  */
-export function CandlestickChart({ candles, livePrice, height = 480 }: CandlestickChartProps) {
+export function CandlestickChart({
+  candles,
+  livePrice,
+  height = 480,
+  emas,
+  zones,
+}: CandlestickChartProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const candleSeriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
   const volumeSeriesRef = useRef<ISeriesApi<"Histogram"> | null>(null);
+  const emaSeriesRef = useRef<Map<number, ISeriesApi<"Line">>>(new Map());
+  const priceLinesRef = useRef<IPriceLine[]>([]);
   const hasFittedRef = useRef(false);
 
   // Create the chart once; data updates are handled separately so switching
@@ -84,6 +104,8 @@ export function CandlestickChart({ candles, livePrice, height = 480 }: Candlesti
       chartRef.current = null;
       candleSeriesRef.current = null;
       volumeSeriesRef.current = null;
+      emaSeriesRef.current.clear();
+      priceLinesRef.current = [];
     };
   }, []);
 
@@ -122,6 +144,84 @@ export function CandlestickChart({ candles, livePrice, height = 480 }: Candlesti
     hasFittedRef.current = false;
   }, [firstOpenTime]);
 
+  // EMA overlays. Series are created and removed as the caller toggles them,
+  // rather than rebuilding the whole chart.
+  useEffect(() => {
+    const chart = chartRef.current;
+    if (!chart || candles.length === 0) return;
+
+    const wanted = new Map((emas ?? []).map((o) => [o.period, o]));
+
+    for (const [period, series] of emaSeriesRef.current) {
+      if (!wanted.has(period)) {
+        chart.removeSeries(series);
+        emaSeriesRef.current.delete(period);
+      }
+    }
+
+    for (const [period, overlay] of wanted) {
+      let series = emaSeriesRef.current.get(period);
+      if (!series) {
+        series = chart.addLineSeries({
+          color: overlay.color,
+          lineWidth: 2,
+          priceLineVisible: false,
+          lastValueVisible: false,
+          crosshairMarkerVisible: false,
+          title: `EMA ${period}`,
+        });
+        emaSeriesRef.current.set(period, series);
+      }
+
+      series.setData(
+        overlay.values
+          .map((value, i) =>
+            value === null || !candles[i]
+              ? null
+              : { time: (candles[i].openTime / 1000) as UTCTimestamp, value },
+          )
+          .filter((p): p is { time: UTCTimestamp; value: number } => p !== null),
+      );
+    }
+  }, [emas, candles]);
+
+  // Support/resistance zones, drawn as the two boundaries of each area. The
+  // product treats them as zones, never single lines, so both edges are shown.
+  useEffect(() => {
+    const series = candleSeriesRef.current;
+    if (!series) return;
+
+    for (const line of priceLinesRef.current) series.removePriceLine(line);
+    priceLinesRef.current = [];
+
+    for (const zone of zones ?? []) {
+      const color = zone.kind === "SUPPORT" ? "#22c55e" : "#ef4444";
+      const label = zone.kind === "SUPPORT" ? "Support" : "Resistance";
+
+      // Axis labels are off deliberately: several zones means a dozen
+      // boundaries, and their price-scale badges pile up into an unreadable
+      // stack that hides the prices themselves. The panel lists exact levels.
+      priceLinesRef.current.push(
+        series.createPriceLine({
+          price: zone.high,
+          color,
+          lineWidth: 1,
+          lineStyle: LineStyle.Dashed,
+          axisLabelVisible: false,
+          title: `${label} ${formatZonePrice(zone.low)}-${formatZonePrice(zone.high)}`,
+        }),
+        series.createPriceLine({
+          price: zone.low,
+          color,
+          lineWidth: 1,
+          lineStyle: LineStyle.Dashed,
+          axisLabelVisible: false,
+          title: "",
+        }),
+      );
+    }
+  }, [zones]);
+
   // Fold the streamed price into the forming candle so the chart tracks the
   // market between REST refreshes.
   useEffect(() => {
@@ -141,4 +241,11 @@ export function CandlestickChart({ candles, livePrice, height = 480 }: Candlesti
   return (
     <div ref={containerRef} style={{ height }} className="w-full" data-testid="candlestick-chart" />
   );
+}
+
+/** Compact price label for a zone band drawn on the chart. */
+function formatZonePrice(value: number): string {
+  const abs = Math.abs(value);
+  const decimals = abs >= 1000 ? 0 : abs >= 1 ? 2 : 4;
+  return value.toFixed(decimals);
 }
