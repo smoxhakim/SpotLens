@@ -32,15 +32,21 @@ export function explainStructure(read: StructureRead): string {
     return "There are not enough confirmed swing highs and lows on this timeframe to read market structure yet.";
   }
 
+  const move = (from?: number, to?: number) => `(${formatPrice(from)} → ${formatPrice(to)})`;
+
   const highPhrase =
     labels.high === "HH"
-      ? `a higher high (${formatPrice(previousHigh?.price)} → ${formatPrice(lastHigh?.price)})`
-      : `a lower high (${formatPrice(previousHigh?.price)} → ${formatPrice(lastHigh?.price)})`;
+      ? `a higher high ${move(previousHigh?.price, lastHigh?.price)}`
+      : labels.high === "LH"
+        ? `a lower high ${move(previousHigh?.price, lastHigh?.price)}`
+        : `a high level with the previous one ${move(previousHigh?.price, lastHigh?.price)}`;
 
   const lowPhrase =
     labels.low === "HL"
-      ? `a higher low (${formatPrice(previousLow?.price)} → ${formatPrice(lastLow?.price)})`
-      : `a lower low (${formatPrice(previousLow?.price)} → ${formatPrice(lastLow?.price)})`;
+      ? `a higher low ${move(previousLow?.price, lastLow?.price)}`
+      : labels.low === "LL"
+        ? `a lower low ${move(previousLow?.price, lastLow?.price)}`
+        : `a low level with the previous one ${move(previousLow?.price, lastLow?.price)}`;
 
   switch (read.structure) {
     case "UPTREND":

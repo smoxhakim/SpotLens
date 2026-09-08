@@ -1,6 +1,6 @@
 "use client";
 
-import { AlertTriangle, RefreshCw } from "lucide-react";
+import { AlertTriangle, RefreshCw, Sparkles } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useMemo, useState } from "react";
 
@@ -9,6 +9,8 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { MarketReadPanel } from "@/features/analysis/components/MarketReadPanel";
+import { TradeSetupPanel } from "@/features/analysis/components/TradeSetupPanel";
+import { useAnalysis } from "@/features/analysis/hooks/useAnalysis";
 import { useMarketRead } from "@/features/analysis/hooks/useMarketRead";
 import { ema } from "@/lib/indicators";
 import { closes } from "@/lib/indicators";
@@ -96,6 +98,13 @@ export function MarketWorkspace() {
   // Only the nearest zone each side is drawn. Every zone at once turns the
   // chart into a ladder of dashed lines that obscures the price action the
   // zones are meant to explain; the panel still lists them all.
+  const analysis = useAnalysis();
+
+  // The result belongs to the pair and timeframe it was run for; showing it
+  // beside a different chart would be actively misleading.
+  const analysisMatches =
+    analysis.data?.pairId === market?.pairId && analysis.data?.timeframe === timeframe;
+
   const zoneOverlays = useMemo(
     () =>
       overlays.zones && read ? [...read.support.slice(0, 1), ...read.resistance.slice(0, 1)] : [],
@@ -129,6 +138,14 @@ export function MarketWorkspace() {
           <div className="w-full xl:ml-auto xl:w-auto">
             <OverlayToggles value={overlays} onChange={setOverlays} />
           </div>
+          <Button
+            size="sm"
+            disabled={!market || analysis.isPending || candles.length === 0}
+            onClick={() => market && analysis.mutate({ pairId: market.pairId, timeframe })}
+          >
+            <Sparkles className="h-4 w-4" />
+            {analysis.isPending ? "Analyzing…" : "Analyze Market"}
+          </Button>
         </div>
 
         <Card>
@@ -200,16 +217,12 @@ export function MarketWorkspace() {
       <aside className="min-w-0 space-y-4">
         <MarketReadPanel read={read} isLoading={candlesQuery.isPending || marketsQuery.isLoading} />
 
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle>Trade setup</CardTitle>
-          </CardHeader>
-          <CardContent className="text-xs text-muted-foreground">
-            Entry zone, stop loss, take-profit targets, risk/reward, and a setup score arrive next.
-            SpotLens will not show a trade setup before the numbers behind it are calculated and
-            tested.
-          </CardContent>
-        </Card>
+        <TradeSetupPanel
+          result={analysisMatches ? (analysis.data?.result ?? null) : null}
+          isPending={analysis.isPending}
+          error={analysis.error}
+          asOf={analysisMatches ? analysis.data?.asOf : undefined}
+        />
 
         {market && (
           <Card>
