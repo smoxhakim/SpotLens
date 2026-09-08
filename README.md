@@ -75,6 +75,24 @@ CI runs lint, typecheck, and the unit tests on every push. E2E is manual — it
 drives the live exchange API, which is unreachable from GitHub's US-based
 runners, so run it locally or trigger it from the Actions tab.
 
+## Troubleshooting
+
+### `npm ci` fails with `EUSAGE ... Missing: @emnapi/core from lock file`
+
+`eslint-config-next` pulls in `@unrs/resolver-binding-wasm32-wasi`, whose own
+dependencies npm does not record in the lockfile when it skips that package on
+the current platform. The tree is then complete for the machine that ran
+`npm install` and incomplete for CI.
+
+The `@emnapi/*` packages are therefore listed as explicit devDependencies. They
+are not imported anywhere — they exist so npm always writes them to the
+lockfile. Do not remove them without checking that `npm ci` still passes on
+Linux.
+
+Note that `npm ci --dry-run --os=linux --cpu=x64` does **not** reliably catch
+this: it reuses the existing tree rather than fully re-resolving. The only real
+check is CI itself.
+
 ## Status
 
 **Phases 1–4 shipped.** Curated market directory and live candlestick chart;
