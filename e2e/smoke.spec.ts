@@ -293,3 +293,38 @@ test("the backtest API rejects anonymous callers and bad ranges", async ({ reque
 
   expect((await request.get("/api/backtest")).status()).toBe(401);
 });
+
+test("every error response uses the same envelope", async ({ request }) => {
+  // A consistent shape is what lets the client render any failure without
+  // special-casing each route.
+  const cases = [
+    { res: await request.get("/api/assets/NOTACOIN"), status: 404 },
+    { res: await request.get("/api/learn/articles/nope"), status: 404 },
+    { res: await request.get("/api/watchlist"), status: 401 },
+    { res: await request.post("/api/analysis/run", { data: { tradingPairId: "x" } }), status: 400 },
+    {
+      res: await request.post("/api/risk/position-size", { data: { balance: -1 } }),
+      status: 400,
+    },
+  ];
+
+  for (const { res, status } of cases) {
+    expect(res.status(), res.url()).toBe(status);
+    const body = await res.json();
+    expect(body.error, res.url()).toBeDefined();
+    expect(typeof body.error.code, res.url()).toBe("string");
+    expect(typeof body.error.message, res.url()).toBe("string");
+  }
+});
+
+test("responses carry the security headers", async ({ request }) => {
+  const res = await request.get("/");
+  const headers = res.headers();
+
+  expect(headers["x-content-type-options"]).toBe("nosniff");
+  expect(headers["x-frame-options"]).toBe("DENY");
+  expect(headers["content-security-policy"]).toContain("frame-ancestors 'none'");
+  expect(headers["referrer-policy"]).toBe("strict-origin-when-cross-origin");
+  // The framework banner is switched off.
+  expect(headers["x-powered-by"]).toBeUndefined();
+});

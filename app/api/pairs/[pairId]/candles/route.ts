@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 
 import { apiError, handleRouteError } from "@/lib/api/response";
+import { RATE_LIMITS, enforceRateLimit } from "@/lib/rate-limit";
 import { getCandles } from "@/services/candles";
 import { findMarketByPairId } from "@/services/markets";
 import type { CandlesResponse } from "@/types/market";
@@ -23,6 +24,9 @@ const querySchema = z.object({
  */
 export async function GET(req: NextRequest, { params }: { params: { pairId: string } }) {
   try {
+    const limited = await enforceRateLimit(req, RATE_LIMITS.marketData);
+    if (limited) return limited;
+
     const { pairId } = paramsSchema.parse(params);
     const query = querySchema.parse(Object.fromEntries(req.nextUrl.searchParams));
 

@@ -86,12 +86,23 @@ Notes:
   so few setups trigger. Lower timeframes give the replay more bars to work
   with.
 
-## Phase 8 — Hardening & Launch
+## Phase 8 — Hardening & Launch ✅
 
-- [ ] Full test coverage (unit/integration/E2E)
-- [ ] Security pass (rate limiting, zod audit, secrets)
-- [ ] Performance pass (caching, indexing, chart rendering)
-- [ ] Realtime reconnect/backoff hardening
-- [ ] Stripe billing + plan gating
-- [ ] Docker packaging + CI/CD
-- [ ] Sentry + uptime + usage dashboards
+- [x] Test pass: 219 unit tests, 25 E2E including the full signed-in journey
+- [x] Security pass: rate limiting, Zod audit, security headers, boot-time env
+      validation, dependency scan — see SECURITY.md
+- [x] Performance pass: market list memoised off the hot path; DB indexes
+      reviewed (already covered by the schema)
+- [x] Realtime reconnect/backoff — shipped in Phase 1, verified here
+- [~] Stripe billing + plan gating — skipped, single-user app
+- [x] Docker packaging (image not built: Docker is not installed on this
+      machine) + CI already in place
+- [~] Sentry + uptime + usage dashboards — skipped, single-user app
+
+Outstanding, needs a decision:
+
+- [ ] 21 high-severity Next.js advisories, fixable only by upgrading Next 14 →
+      16 (two majors, and ARCHITECTURE.md pins 14). Most do not apply to this
+      app. See the "Outstanding" section of SECURITY.md.
+- [ ] CSP still allows `unsafe-inline`/`unsafe-eval`; tightening needs
+      nonce-based CSP via middleware.

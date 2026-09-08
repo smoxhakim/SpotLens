@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 
 import { apiError, handleRouteError } from "@/lib/api/response";
+import { RATE_LIMITS, enforceRateLimit } from "@/lib/rate-limit";
 import { runAnalysis } from "@/lib/analysis";
 import { currentUserId } from "@/lib/auth";
 import { getCandles } from "@/services/candles";
@@ -31,6 +32,11 @@ const bodySchema = z.object({
  */
 export async function POST(req: NextRequest) {
   try {
+    const userId = await currentUserId();
+
+    const limited = await enforceRateLimit(req, RATE_LIMITS.analysis, userId);
+    if (limited) return limited;
+
     const json = await req.json().catch(() => null);
     if (json === null) return apiError("INVALID_REQUEST", "A JSON body is required.", 400);
 
@@ -48,7 +54,6 @@ export async function POST(req: NextRequest) {
 
     const result = runAnalysis(candles);
 
-    const userId = await currentUserId();
     const snapshotId = userId
       ? await saveAnalysisSnapshot({
           userId,

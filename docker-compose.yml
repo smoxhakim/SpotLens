@@ -24,5 +24,23 @@ services:
     ports:
       - "6379:6379"
 
+  # The app itself. Build with `docker compose --profile app up --build`.
+  # Left behind a profile so `docker compose up -d` still starts only the
+  # services needed for local development against `npm run dev`.
+  app:
+    profiles: ["app"]
+    build: .
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      DATABASE_URL: postgresql://spotlens:spotlens@postgres:5432/spotlens?schema=public
+      DIRECT_URL: postgresql://spotlens:spotlens@postgres:5432/spotlens?schema=public
+      AUTH_SECRET: ${AUTH_SECRET:?set AUTH_SECRET before starting the app}
+      NEXTAUTH_URL: http://localhost:3000
+    depends_on:
+      postgres:
+        condition: service_healthy
+
 volumes:
   spotlens_pgdata:

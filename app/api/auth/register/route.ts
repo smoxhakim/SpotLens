@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 
 import { apiError, handleRouteError } from "@/lib/api/response";
+import { RATE_LIMITS, enforceRateLimit } from "@/lib/rate-limit";
 import { MIN_PASSWORD_LENGTH, hashPassword } from "@/lib/auth";
 import { prisma } from "@/lib/db/prisma";
 
@@ -19,6 +20,9 @@ const bodySchema = z.object({
 /** POST /api/auth/register — email/password signup. */
 export async function POST(req: NextRequest) {
   try {
+    const limited = await enforceRateLimit(req, RATE_LIMITS.register);
+    if (limited) return limited;
+
     const json = await req.json().catch(() => null);
     if (json === null) return apiError("INVALID_REQUEST", "A JSON body is required.", 400);
 
