@@ -46,13 +46,18 @@ npm run dev
 The app runs without a database: the curated asset list is read from
 `lib/market-data/curated-assets.ts` and candles come straight from the provider.
 
-To run with Postgres (enables the candle cache, and everything from Phase 4 on):
+To run with Postgres (enables the candle cache, accounts, watchlist, settings
+and analysis history):
 
 ```bash
-docker compose up -d
+docker compose up -d        # or point DATABASE_URL at a hosted Postgres
 npm run prisma:migrate
 npm run prisma:seed
 ```
+
+On Neon, set both `DATABASE_URL` (pooled) and `DIRECT_URL` (unpooled) — Prisma
+migrations take advisory locks that a transaction-mode pooler cannot hold — and
+apply the schema with `npx prisma migrate deploy`.
 
 If `DATABASE_URL` is set but Postgres is not running, the app logs one warning
 and falls back to the file-based list rather than failing.
@@ -72,9 +77,17 @@ runners, so run it locally or trigger it from the Actions tab.
 
 ## Status
 
-**Phase 1 (Chart Foundation) — shipped.** Curated market directory, pair /
-timeframe selection, live candlestick chart with streamed prices, DB-backed
-candle cache, typed provider abstraction with retry/backoff.
+**Phases 1–4 shipped.** Curated market directory and live candlestick chart;
+a deterministic analysis engine (trend, S/R zones, volume, RSI) with a reason
+behind every field; the full trade setup engine (entry, stop, targets,
+risk/reward, 0–100 score, and a Potential/Wait/High-risk/Avoid status); and
+accounts with a watchlist, saved analysis history, settings and a position
+size calculator.
+
+Auth is email/password only. Sessions are JWT rather than database sessions,
+because Auth.js v5's Credentials provider does not support the database
+strategy; the Prisma adapter is wired up so adding OAuth later would allow
+switching without a data-model change.
 
 Later phases land on their own branches. See `TODO.md` for the roadmap and
 `ARCHITECTURE.md` for the design that governs it.

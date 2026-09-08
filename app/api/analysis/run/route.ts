@@ -3,8 +3,10 @@ import { z } from "zod";
 
 import { apiError, handleRouteError } from "@/lib/api/response";
 import { runAnalysis } from "@/lib/analysis";
+import { currentUserId } from "@/lib/auth";
 import { getCandles } from "@/services/candles";
 import { findMarketByPairId } from "@/services/markets";
+import { saveAnalysisSnapshot } from "@/services/snapshots";
 import type { AnalysisRunResponse } from "@/types/analysis";
 
 export const dynamic = "force-dynamic";
@@ -24,8 +26,8 @@ const bodySchema = z.object({
  * POST /api/analysis/run — runs the deterministic engine for one pair and
  * timeframe.
  *
- * Persisting an AnalysisSnapshot needs user accounts, which arrive in Phase 4;
- * until then every run is returned and nothing is stored.
+ * Auth is optional: anonymous runs work and are simply not recorded. Saving
+ * history must never be a precondition for getting an answer.
  */
 export async function POST(req: NextRequest) {
   try {
@@ -46,7 +48,18 @@ export async function POST(req: NextRequest) {
 
     const result = runAnalysis(candles);
 
+    const userId = await currentUserId();
+    const snapshotId = userId
+      ? await saveAnalysisSnapshot({
+          userId,
+          tradingPairId: market.pairId,
+          timeframe: body.timeframe,
+          result,
+        })
+      : null;
+
     return NextResponse.json<AnalysisRunResponse>({
+      snapshotId,
       pairId: market.pairId,
       symbol: market.exchangeSymbol,
       label: market.label,

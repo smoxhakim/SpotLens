@@ -12,6 +12,7 @@ import {
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
+import { AuthStatus } from "@/features/auth/components/AuthStatus";
 import { cn } from "@/lib/utils";
 
 interface NavItem {
@@ -25,10 +26,10 @@ interface NavItem {
 const NAV: NavItem[] = [
   { href: "/", label: "Dashboard", icon: LayoutDashboard },
   { href: "/market-analysis", label: "Market Analysis", icon: LineChart },
-  { href: "/watchlist", label: "Watchlist", icon: Eye, comingSoon: true },
+  { href: "/watchlist", label: "Watchlist", icon: Eye },
   { href: "/learn", label: "Learn", icon: BookOpen, comingSoon: true },
-  { href: "/risk-calculator", label: "Risk Calculator", icon: Calculator, comingSoon: true },
-  { href: "/settings", label: "Settings", icon: Settings, comingSoon: true },
+  { href: "/risk-calculator", label: "Risk Calculator", icon: Calculator },
+  { href: "/settings", label: "Settings", icon: Settings },
 ];
 
 export function Sidebar() {
@@ -76,7 +77,8 @@ export function Sidebar() {
         })}
       </nav>
 
-      <div className="mt-auto hidden px-4 py-4 md:block">
+      <div className="mt-auto hidden space-y-3 px-4 py-4 md:block">
+        <AuthStatus />
         <p className="text-[10px] leading-relaxed text-muted-foreground">
           Spot trading only. No futures, margin, or leverage. SpotLens never places trades.
         </p>

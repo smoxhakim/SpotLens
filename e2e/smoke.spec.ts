@@ -116,3 +116,57 @@ test("the analysis API validates its input", async ({ request }) => {
   });
   expect(missing.status()).toBe(404);
 });
+
+test("the risk calculator sizes a position from the stop distance", async ({ page }) => {
+  await page.goto("/risk-calculator");
+
+  await page.getByLabel("Portfolio balance").fill("10000");
+  await page.getByLabel("Risk per trade (%)").fill("1");
+  await page.getByLabel("Entry price").fill("100");
+  await page.getByLabel("Stop loss price").fill("90");
+
+  // Risking 1% of 10,000 = 100, with a 10-wide stop, is exactly 10 units.
+  await expect(page.getByTestId("position-size")).toContainText("10");
+  await expect(page.getByTestId("risk-amount")).toContainText("100");
+  await expect(page.getByTestId("position-value")).toContainText("1,000");
+  await expect(page.getByText(/never risk money that you cannot afford to lose/i)).toBeVisible();
+});
+
+test("the risk calculator refuses a stop above the entry", async ({ page }) => {
+  await page.goto("/risk-calculator");
+
+  await page.getByLabel("Portfolio balance").fill("10000");
+  await page.getByLabel("Risk per trade (%)").fill("1");
+  await page.getByLabel("Entry price").fill("100");
+  await page.getByLabel("Stop loss price").fill("110");
+
+  await expect(page.getByText(/stop loss must be below the entry price/i)).toBeVisible();
+});
+
+test("user-scoped pages ask for sign-in rather than failing", async ({ page }) => {
+  for (const path of ["/watchlist", "/settings"]) {
+    await page.goto(path);
+    await expect(page.getByRole("link", { name: "Sign in" }).first()).toBeVisible({
+      timeout: 15_000,
+    });
+  }
+});
+
+test("user-scoped API routes reject anonymous callers", async ({ request }) => {
+  expect((await request.get("/api/watchlist")).status()).toBe(401);
+  expect((await request.get("/api/user/me")).status()).toBe(401);
+  expect((await request.get("/api/analysis/history")).status()).toBe(401);
+});
+
+test("position size API validates and computes", async ({ request }) => {
+  const ok = await request.post("/api/risk/position-size", {
+    data: { balance: 10000, riskPercent: 1, entry: 100, stopLoss: 90 },
+  });
+  expect(ok.ok()).toBeTruthy();
+  expect((await ok.json()).positionSize).toBe(10);
+
+  const bad = await request.post("/api/risk/position-size", {
+    data: { balance: 10000, riskPercent: 1, entry: 100, stopLoss: 110 },
+  });
+  expect(bad.status()).toBe(400);
+});

@@ -8,5 +8,7 @@ export interface AnalysisRunResponse {
   timeframe: Timeframe;
   /** Epoch ms of the last candle the analysis saw. */
   asOf: number;
+  /** Set when the run was recorded to the signed-in user's history. */
+  snapshotId: string | null;
   result: AnalysisResult;
 }
