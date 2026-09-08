@@ -1,20 +1,21 @@
 import { Settings } from "lucide-react";
 
-import { PhaseStub } from "@/components/layout/PhaseStub";
+import { SettingsForm } from "@/features/settings/components/SettingsForm";
 
 export const metadata = { title: "Settings — SpotLens" };
 
 export default function SettingsPage() {
   return (
-    <PhaseStub
-      title="Settings"
-      icon={Settings}
-      summary="Defaults that follow you across sessions."
-      planned={[
-        "Default risk percentage per trade",
-        "Default timeframe",
-        "Requires accounts, which arrive with authentication",
-      ]}
-    />
+    <div className="mx-auto max-w-2xl space-y-4">
+      <header className="space-y-1">
+        <h1 className="flex items-center gap-2 text-xl font-semibold">
+          <Settings className="h-5 w-5" />
+          Settings
+        </h1>
+        <p className="text-sm text-muted-foreground">Defaults that follow you across sessions.</p>
+      </header>
+
+      <SettingsForm />
+    </div>
   );
 }

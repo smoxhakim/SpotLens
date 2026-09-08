@@ -12,6 +12,7 @@ import { MarketReadPanel } from "@/features/analysis/components/MarketReadPanel"
 import { TradeSetupPanel } from "@/features/analysis/components/TradeSetupPanel";
 import { useAnalysis } from "@/features/analysis/hooks/useAnalysis";
 import { useMarketRead } from "@/features/analysis/hooks/useMarketRead";
+import { WatchlistToggle } from "@/features/watchlist/components/WatchlistToggle";
 import { ema } from "@/lib/indicators";
 import { closes } from "@/lib/indicators";
 import { ANALYSIS_DISCLAIMER, SPOT_ONLY_NOTE } from "@/lib/constants/disclaimers";
@@ -135,6 +136,7 @@ export function MarketWorkspace() {
             <RefreshCw className={candlesQuery.isFetching ? "h-4 w-4 animate-spin" : "h-4 w-4"} />
             Refresh
           </Button>
+          <WatchlistToggle pairId={market?.pairId} />
           <div className="w-full xl:ml-auto xl:w-auto">
             <OverlayToggles value={overlays} onChange={setOverlays} />
           </div>
