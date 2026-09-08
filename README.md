@@ -93,9 +93,23 @@ Note that `npm ci --dry-run --os=linux --cpu=x64` does **not** reliably catch
 this: it reuses the existing tree rather than fully re-resolving. The only real
 check is CI itself.
 
+## Deployment
+
+```bash
+docker compose --profile app up --build   # app + Postgres
+```
+
+The image builds from the Next.js standalone output and runs as a non-root
+user. Apply migrations against the target database with
+`npx prisma migrate deploy`, then seed with `npm run prisma:seed`.
+
+Production will refuse to start without `AUTH_SECRET` and a non-localhost
+`DATABASE_URL` — see `lib/env.ts`. Security posture is documented in
+[SECURITY.md](SECURITY.md).
+
 ## Status
 
-**Phases 1–4 shipped.** Curated market directory and live candlestick chart;
+**All eight phases shipped.** Curated market directory and live candlestick chart;
 a deterministic analysis engine (trend, S/R zones, volume, RSI) with a reason
 behind every field; the full trade setup engine (entry, stop, targets,
 risk/reward, 0–100 score, and a Potential/Wait/High-risk/Avoid status); and
