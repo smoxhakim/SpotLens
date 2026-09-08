@@ -57,3 +57,31 @@ test("health endpoint responds", async ({ request }) => {
   expect(res.ok()).toBeTruthy();
   expect((await res.json()).status).toBe("ok");
 });
+
+test("the market read panel explains its verdict", async ({ page }) => {
+  await page.goto("/market-analysis?pair=BTCUSDT&tf=H4");
+
+  const panel = page.getByText("Market Read");
+  await expect(panel).toBeVisible({ timeout: 30_000 });
+
+  // A trend verdict is shown, and the reasoning is one click away.
+  await expect(page.getByText(/^(Bullish|Bearish|Sideways)$/).first()).toBeVisible({
+    timeout: 30_000,
+  });
+
+  const why = page.getByRole("button", { name: "Why?" }).first();
+  await expect(why).toBeVisible();
+  await why.click();
+  await expect(page.getByText(/moving averages|swing|structure/i).first()).toBeVisible();
+});
+
+test("chart overlays can be toggled", async ({ page }) => {
+  await page.goto("/market-analysis?pair=BTCUSDT&tf=H4");
+
+  const toggle = page.getByRole("button", { name: "EMA 200" });
+  await expect(toggle).toBeVisible({ timeout: 30_000 });
+  await expect(toggle).toHaveAttribute("aria-pressed", "true");
+
+  await toggle.click();
+  await expect(toggle).toHaveAttribute("aria-pressed", "false");
+});

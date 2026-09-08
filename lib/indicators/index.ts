@@ -3,6 +3,7 @@
  * This layer is the foundation the analysis engine reasons over, so it is the
  * most heavily unit-tested code in the project.
  */
+export { atr, latestAtr, trueRange } from "./atr";
 export { ema, latestEma } from "./ema";
 export { rsi, latestRsi } from "./rsi";
 export { analyzeVolume, averageVolume } from "./volume";
