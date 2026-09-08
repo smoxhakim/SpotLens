@@ -2,6 +2,7 @@ import { ANALYSIS_DISCLAIMER, DISCLAIMER_VERSION } from "@/lib/constants/disclai
 import type { Candle } from "@/lib/market-data/provider";
 
 import { runMarketRead, type MarketRead, type MarketReadOptions } from "../market-read";
+import type { MtfSummary } from "../mtf";
 import { calculateEntryZone } from "./entry";
 import { calculateRiskReward } from "./risk-reward";
 import { scoreSetup, type SetupScore } from "./score";
@@ -12,6 +13,8 @@ import type { TradeSetup, TradeStatus } from "./types";
 
 export interface AnalysisResult {
   read: MarketRead;
+  /** Higher-timeframe context, when the run was given a second timeframe. */
+  mtf: MtfSummary | null;
   /** Null when no responsible long setup exists — the status explains why. */
   setup: TradeSetup | null;
   score: SetupScore | null;
@@ -32,11 +35,18 @@ export interface AnalysisResult {
  * the status carries the reason. Handing over entry and target numbers for a
  * trade the tool has just called AVOID would undo the point of saying it.
  */
-export function runAnalysis(candles: Candle[], options: MarketReadOptions = {}): AnalysisResult {
+export interface RunAnalysisOptions extends MarketReadOptions {
+  /** Higher-timeframe read, folded into the score and the status. */
+  mtf?: MtfSummary;
+}
+
+export function runAnalysis(candles: Candle[], options: RunAnalysisOptions = {}): AnalysisResult {
   const read = runMarketRead(candles, options);
+  const mtf = options.mtf ?? null;
 
   const base = {
     read,
+    mtf,
     disclaimer: ANALYSIS_DISCLAIMER,
     disclaimerVersion: DISCLAIMER_VERSION,
   };
@@ -51,6 +61,14 @@ export function runAnalysis(candles: Candle[], options: MarketReadOptions = {}):
 
   if (candles.length === 0) {
     return noSetup("AVOID", "No market data is available for this pair and timeframe.");
+  }
+
+  if (mtf?.agreement === "COUNTER_TREND_BOUNCE" || mtf?.agreement === "ALIGNED_BEARISH") {
+    return noSetup(
+      "AVOID",
+      mtf.conflictNote ??
+        "The higher timeframe is bearish, so no long setup is offered on the lower one.",
+    );
   }
 
   if (read.trend.trend === "BEARISH") {
@@ -85,8 +103,8 @@ export function runAnalysis(candles: Candle[], options: MarketReadOptions = {}):
     );
   }
 
-  const score = scoreSetup(read, entry, riskReward);
-  const verdict = determineStatus(read, entry, riskReward, score);
+  const score = scoreSetup(read, entry, riskReward, mtf ?? undefined);
+  const verdict = determineStatus(read, entry, riskReward, score, mtf ?? undefined);
 
   return {
     ...base,

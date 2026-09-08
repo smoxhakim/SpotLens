@@ -11,6 +11,7 @@ import type { AnalysisResult, SetupScore, TradeStatus } from "@/lib/analysis";
 import { formatPrice } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
+import { MtfPanel } from "./MtfPanel";
 import { WhyDisclosure } from "./WhyDisclosure";
 
 const STATUS_META: Record<
@@ -126,6 +127,8 @@ export function TradeSetupPanel({ result, isPending, error, asOf }: TradeSetupPa
           </div>
           <p className="mt-1.5 text-[11px] leading-relaxed opacity-90">{result.statusReason}</p>
         </div>
+
+        {result.mtf && <MtfPanel mtf={result.mtf} />}
 
         {!setup && (
           <p className="text-[11px] leading-relaxed text-muted-foreground">

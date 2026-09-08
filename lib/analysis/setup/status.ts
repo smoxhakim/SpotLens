@@ -1,6 +1,7 @@
 import { formatPrice } from "@/lib/format";
 
 import type { MarketRead } from "../market-read";
+import type { MtfSummary } from "../mtf";
 import { EXTENDED_ATR_MULTIPLE } from "./entry";
 import type { SetupScore } from "./score";
 import type { EntryZone, RiskReward, TradeStatus } from "./types";
@@ -24,8 +25,26 @@ export function determineStatus(
   entry: EntryZone,
   riskReward: RiskReward,
   score: SetupScore,
+  mtf?: MtfSummary,
 ): StatusVerdict {
   // --- Disqualifying conditions ------------------------------------------
+
+  // Checked before the entry timeframe's own trend: a lower timeframe that has
+  // turned up inside a falling higher timeframe looks like a clean setup on its
+  // own chart, which is exactly why it needs to be ruled out first.
+  if (mtf?.agreement === "COUNTER_TREND_BOUNCE") {
+    return {
+      status: "AVOID",
+      reason: `${mtf.conflictNote} The higher timeframe sets direction, and buying against it is the most common way a setup that looks good on one chart loses money.`,
+    };
+  }
+
+  if (mtf?.agreement === "ALIGNED_BEARISH") {
+    return {
+      status: "AVOID",
+      reason: mtf.conflictNote ?? "Both timeframes are bearish, so there is no long setup here.",
+    };
+  }
 
   if (read.trend.trend === "BEARISH") {
     return {
@@ -108,6 +127,13 @@ export function determineStatus(
       reason: `Price has not reached the entry zone at ${formatPrice(entry.low)} – ${formatPrice(
         entry.high,
       )} yet. Set an alert rather than entering early.`,
+    };
+  }
+
+  if (mtf?.agreement === "MIXED") {
+    return {
+      status: "WAIT_FOR_CONFIRMATION",
+      reason: `${mtf.note} Without a clear higher-timeframe direction, wait for one to establish itself before committing.`,
     };
   }
 

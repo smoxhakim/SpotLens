@@ -170,3 +170,37 @@ test("position size API validates and computes", async ({ request }) => {
   });
   expect(bad.status()).toBe(400);
 });
+
+test("multi-timeframe analysis reports both timeframes", async ({ page }) => {
+  await page.goto("/market-analysis?pair=BTCUSDT&tf=H1");
+
+  // The higher-timeframe check is on by default.
+  const mtfToggle = page.getByRole("checkbox", { name: /Check 4h trend/ });
+  await expect(mtfToggle).toBeChecked();
+
+  const analyze = page.getByRole("button", { name: /Analyze Market/ });
+  await expect(analyze).toBeEnabled({ timeout: 30_000 });
+  await analyze.click();
+
+  await expect(page.getByText("Multi-timeframe")).toBeVisible({ timeout: 30_000 });
+  // The two timeframes are labelled by the job each one does.
+  await expect(page.getByText("bias", { exact: true })).toBeVisible();
+  await expect(page.getByText("entry", { exact: true })).toBeVisible();
+});
+
+test("the MTF API rejects an inverted timeframe pair", async ({ request }) => {
+  const markets = await (await request.get("/api/markets")).json();
+  const pairId = markets.markets.find(
+    (m: { exchangeSymbol: string }) => m.exchangeSymbol === "BTCUSDT",
+  ).pairId;
+
+  const inverted = await request.post("/api/analysis/mtf", {
+    data: { tradingPairId: pairId, lowerTimeframe: "D1", higherTimeframe: "H1" },
+  });
+  expect(inverted.status()).toBe(400);
+
+  const same = await request.post("/api/analysis/mtf", {
+    data: { tradingPairId: pairId, lowerTimeframe: "H1", higherTimeframe: "H1" },
+  });
+  expect(same.status()).toBe(400);
+});

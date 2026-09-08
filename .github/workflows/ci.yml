@@ -16,6 +16,9 @@ jobs:
         with:
           node-version: 20
           cache: npm
+      # If this fails with EUSAGE about missing @emnapi packages, see the
+      # troubleshooting note in README.md — the fix is a lockfile problem, not
+      # a code one.
       - run: npm ci
       - run: npm run prisma:generate
       - run: npm run format:check
