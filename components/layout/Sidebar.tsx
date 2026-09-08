@@ -4,6 +4,7 @@ import {
   BookOpen,
   Calculator,
   Eye,
+  FlaskConical,
   LayoutDashboard,
   LineChart,
   Settings,
@@ -27,6 +28,10 @@ const NAV: NavItem[] = [
   { href: "/", label: "Dashboard", icon: LayoutDashboard },
   { href: "/market-analysis", label: "Market Analysis", icon: LineChart },
   { href: "/watchlist", label: "Watchlist", icon: Eye },
+  // Not in the PRD's six-item sidebar: backtesting arrived later, and it is a
+  // full workflow with its own page rather than a panel that could live inside
+  // another destination. Burying it would be worse than the extra entry.
+  { href: "/backtest", label: "Backtest", icon: FlaskConical },
   { href: "/learn", label: "Learn", icon: BookOpen },
   { href: "/risk-calculator", label: "Risk Calculator", icon: Calculator },
   { href: "/settings", label: "Settings", icon: Settings },

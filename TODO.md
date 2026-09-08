@@ -65,13 +65,26 @@ Deferred to Phase 8 (tracked, not forgotten):
   idempotent. AdminAuditLog and the ADMIN role stay in the schema so this
   can be added later without a migration.
 
-## Phase 7 — Backtesting
+## Phase 7 — Backtesting ✅
 
-- [ ] BacktestRun/BacktestSetup schema + historical storage
-- [ ] Bar-by-bar replay runner (no look-ahead bias, tested)
-- [ ] Async job wiring (QStash + cron)
-- [ ] Metrics computation
-- [ ] Backtest report UI + disclaimer
+- [x] BacktestRun/BacktestSetup schema + historical storage (reuses the candle cache)
+- [x] Bar-by-bar replay runner, with look-ahead bias proven by test
+- [~] Async job wiring (QStash + cron) — deliberately skipped. Runs execute
+  synchronously with a 1000-candle ceiling, which is what keeps that safe.
+  The QUEUED/RUNNING/COMPLETED/FAILED status field stays in the schema, so
+  the async path can be added later without a migration. Raising the cap is
+  the point at which it becomes necessary.
+- [x] Metrics: win rate, avg realised R, total R, max drawdown, best/worst
+- [x] Backtest report UI + disclaimer above the tool, not only on the report
+
+Notes:
+
+- "Backtest" is a seventh sidebar entry, beyond the PRD's six. It is a full
+  workflow with its own page rather than a panel, and burying it would be worse
+  than the extra entry.
+- On a daily timeframe the 260-candle warmup consumes most of a year's range,
+  so few setups trigger. Lower timeframes give the replay more bars to work
+  with.
 
 ## Phase 8 — Hardening & Launch
 
