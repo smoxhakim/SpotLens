@@ -1,0 +1,59 @@
+import { expect, test } from "@playwright/test";
+
+/**
+ * Phase 1 smoke test: load the app, pick a pair, see a chart.
+ * Hits the real provider through the app's own API routes.
+ */
+test("dashboard lists curated markets", async ({ page }) => {
+  await page.goto("/");
+
+  await expect(page.getByRole("heading", { name: "Dashboard" })).toBeVisible();
+  await expect(page.getByRole("link", { name: /BTC\/USDT/ }).first()).toBeVisible();
+
+  // The curated promise is visible on the surface, not buried in a policy page.
+  await expect(page.getByText(/no futures, margin, or leverage/i).first()).toBeVisible();
+});
+
+test("opening a market renders a live candlestick chart", async ({ page }) => {
+  await page.goto("/market-analysis?pair=BTCUSDT&tf=H1");
+
+  await expect(page.getByRole("heading", { name: "BTC/USDT" })).toBeVisible();
+
+  const chart = page.getByTestId("candlestick-chart");
+  await expect(chart).toBeVisible({ timeout: 30_000 });
+  // Lightweight Charts renders into canvases; their presence means data drew.
+  await expect(chart.locator("canvas").first()).toBeVisible();
+
+  // A real price replaced the placeholder.
+  await expect(page.getByTestId("last-price")).toHaveText(/\d/, { timeout: 30_000 });
+});
+
+test("switching pair and timeframe updates the workspace", async ({ page }) => {
+  await page.goto("/market-analysis?pair=BTCUSDT&tf=H1");
+  await expect(page.getByRole("heading", { name: "BTC/USDT" })).toBeVisible();
+
+  await page.getByRole("button", { name: "Select trading pair" }).click();
+  await page.getByRole("textbox", { name: "Search assets" }).fill("ethereum");
+  await page.getByRole("option", { name: /ETH\/USDT/ }).click();
+
+  await expect(page.getByRole("heading", { name: "ETH/USDT" })).toBeVisible();
+  await expect(page).toHaveURL(/pair=ETHUSDT/);
+
+  await page.getByRole("button", { name: "4h", exact: true }).click();
+  await expect(page).toHaveURL(/tf=H4/);
+});
+
+test("the analysis disclaimer is present on every page", async ({ page }) => {
+  for (const path of ["/", "/market-analysis", "/learn"]) {
+    await page.goto(path);
+    await expect(
+      page.getByText(/This analysis is educational and informational only/).first(),
+    ).toBeVisible();
+  }
+});
+
+test("health endpoint responds", async ({ request }) => {
+  const res = await request.get("/api/health");
+  expect(res.ok()).toBeTruthy();
+  expect((await res.json()).status).toBe("ok");
+});

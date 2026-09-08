@@ -1,0 +1,28 @@
+# Local dev parity: Postgres for Prisma, Redis standing in for Upstash.
+# `docker compose up -d` then `npm run prisma:migrate && npm run prisma:seed`.
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: spotlens
+      POSTGRES_PASSWORD: spotlens
+      POSTGRES_DB: spotlens
+    ports:
+      - "5432:5432"
+    volumes:
+      - spotlens_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U spotlens"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+
+volumes:
+  spotlens_pgdata:

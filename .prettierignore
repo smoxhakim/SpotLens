@@ -1,0 +1,10 @@
+.next
+node_modules
+coverage
+playwright-report
+test-results
+package-lock.json
+
+# Spec documents — owned by the author, not the formatter
+PRD.md
+ARCHITECTURE.md

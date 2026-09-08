@@ -1,0 +1,351 @@
+// SpotLens data model — see ARCHITECTURE.md for field-level docs.
+// Phases 1-8 are all modelled up front so migrations stay additive; only the
+// Phase 1 tables (Asset, TradingPair, Candle) are written to today.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  USER
+  ADMIN
+}
+
+enum Plan {
+  FREE
+  PRO
+}
+
+enum Timeframe {
+  M15
+  H1
+  H4
+  D1
+  W1
+}
+
+enum AssetCategory {
+  LAYER1
+  LAYER2
+  INFRASTRUCTURE
+  ORACLE
+  DEFI_INFRASTRUCTURE
+  PAYMENTS
+  OTHER
+}
+
+enum RiskLevel {
+  LOW
+  MEDIUM
+  HIGH
+}
+
+enum Trend {
+  BULLISH
+  BEARISH
+  SIDEWAYS
+}
+
+enum SetupStatus {
+  POTENTIAL_SETUP
+  WAIT_FOR_CONFIRMATION
+  HIGH_RISK
+  AVOID
+}
+
+enum YesNoUnclear {
+  YES
+  NO
+  UNCLEAR
+}
+
+enum BacktestStatus {
+  QUEUED
+  RUNNING
+  COMPLETED
+  FAILED
+}
+
+enum SetupOutcome {
+  TP1_HIT
+  TP2_HIT
+  TP3_HIT
+  SL_HIT
+  NO_HIT
+  STILL_OPEN
+}
+
+model User {
+  id                 String    @id @default(uuid())
+  email              String    @unique
+  emailVerified      DateTime?
+  passwordHash       String?
+  name               String?
+  image              String?
+  role               Role      @default(USER)
+  plan               Plan      @default(FREE)
+  defaultRiskPercent Decimal   @default(1.0) @db.Decimal(5, 2)
+  defaultTimeframe   Timeframe @default(H1)
+  acceptedTermsAt    DateTime?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  accounts          Account[]
+  sessions          Session[]
+  watchlist         Watchlist[]
+  snapshots         AnalysisSnapshot[]
+  backtestRuns      BacktestRun[]
+  subscription      Subscription?
+  auditLogs         AdminAuditLog[]
+  checklistsUpdated EthicalChecklist[] @relation("ChecklistUpdatedBy")
+}
+
+// --- NextAuth Prisma adapter tables (standard shape) -----------------------
+
+model Account {
+  id                String  @id @default(uuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String?
+  access_token      String?
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String?
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+  @@index([userId])
+}
+
+model Session {
+  id           String   @id @default(uuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+}
+
+// --- Curated market universe ------------------------------------------------
+
+model Asset {
+  id                 String        @id @default(uuid())
+  symbol             String        @unique
+  name               String
+  category           AssetCategory
+  officialWebsite    String
+  description        String
+  utilityExplanation String
+  riskLevel          RiskLevel
+  isActive           Boolean       @default(true)
+  createdAt          DateTime      @default(now())
+  updatedAt          DateTime      @updatedAt
+
+  pairs            TradingPair[]
+  ethicalChecklist EthicalChecklist?
+}
+
+model TradingPair {
+  id             String  @id @default(uuid())
+  assetId        String
+  quoteCurrency  String
+  exchangeSymbol String  @unique
+  isActive       Boolean @default(true)
+
+  asset        Asset              @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  candles      Candle[]
+  watchlist    Watchlist[]
+  snapshots    AnalysisSnapshot[]
+  backtestRuns BacktestRun[]
+
+  @@unique([assetId, quoteCurrency])
+}
+
+model EthicalChecklist {
+  id                           String       @id @default(uuid())
+  assetId                      String       @unique
+  whatProjectDoes              String
+  tokenUtility                 String
+  involvesInterestLending      YesNoUnclear
+  involvesInterestLendingNote  String?
+  supportsGambling             YesNoUnclear
+  supportsGamblingNote         String?
+  supportsProhibitedIndustries YesNoUnclear
+  supportsProhibitedNote       String?
+  hasClearUtility              YesNoUnclear
+  hasClearUtilityNote          String?
+  updatedAt                    DateTime     @updatedAt
+  updatedByUserId              String?
+
+  asset         Asset @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  updatedByUser User? @relation("ChecklistUpdatedBy", fields: [updatedByUserId], references: [id], onDelete: SetNull)
+}
+
+// --- Market data cache ------------------------------------------------------
+
+model Candle {
+  id            String    @id @default(uuid())
+  tradingPairId String
+  timeframe     Timeframe
+  openTime      DateTime
+  open          Decimal   @db.Decimal(24, 8)
+  high          Decimal   @db.Decimal(24, 8)
+  low           Decimal   @db.Decimal(24, 8)
+  close         Decimal   @db.Decimal(24, 8)
+  volume        Decimal   @db.Decimal(30, 8)
+  closeTime     DateTime
+
+  tradingPair TradingPair @relation(fields: [tradingPairId], references: [id], onDelete: Cascade)
+
+  @@unique([tradingPairId, timeframe, openTime])
+  @@index([tradingPairId, timeframe, openTime])
+}
+
+// --- User-scoped data -------------------------------------------------------
+
+model Watchlist {
+  id            String   @id @default(uuid())
+  userId        String
+  tradingPairId String
+  createdAt     DateTime @default(now())
+
+  user        User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tradingPair TradingPair @relation(fields: [tradingPairId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, tradingPairId])
+}
+
+model AnalysisSnapshot {
+  id                    String      @id @default(uuid())
+  userId                String?
+  tradingPairId         String
+  timeframe             Timeframe
+  trend                 Trend
+  trendReason           String
+  supportZones          Json
+  resistanceZones       Json
+  entryLow              Decimal     @db.Decimal(24, 8)
+  entryHigh             Decimal     @db.Decimal(24, 8)
+  entryReason           String
+  confirmationChecklist Json
+  stopLoss              Decimal     @db.Decimal(24, 8)
+  stopLossReason        String
+  takeProfits           Json
+  riskRewardRatio       Decimal     @db.Decimal(10, 2)
+  setupScore            Int
+  setupScoreBreakdown   Json
+  status                SetupStatus
+  statusReason          String
+  indicatorsSnapshot    Json
+  mtfSummary            Json?
+  disclaimerVersion     String
+  createdAt             DateTime    @default(now())
+
+  user        User?       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tradingPair TradingPair @relation(fields: [tradingPairId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+}
+
+model BacktestRun {
+  id             String         @id @default(uuid())
+  userId         String
+  tradingPairId  String
+  timeframe      Timeframe
+  startDate      DateTime
+  endDate        DateTime
+  status         BacktestStatus @default(QUEUED)
+  numSetups      Int?
+  winRate        Decimal?       @db.Decimal(5, 2)
+  avgRealizedRR  Decimal?       @db.Decimal(10, 2)
+  maxDrawdownPct Decimal?       @db.Decimal(6, 2)
+  bestSetupId    String?
+  worstSetupId   String?
+  errorMessage   String?
+  createdAt      DateTime       @default(now())
+  completedAt    DateTime?
+
+  user        User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tradingPair TradingPair     @relation(fields: [tradingPairId], references: [id], onDelete: Cascade)
+  setups      BacktestSetup[]
+
+  @@index([userId, createdAt])
+}
+
+model BacktestSetup {
+  id            String       @id @default(uuid())
+  backtestRunId String
+  triggeredAt   DateTime
+  entry         Decimal      @db.Decimal(24, 8)
+  stopLoss      Decimal      @db.Decimal(24, 8)
+  takeProfits   Json
+  outcome       SetupOutcome
+  realizedRR    Decimal?     @db.Decimal(10, 2)
+  exitTime      DateTime?
+  exitPrice     Decimal?     @db.Decimal(24, 8)
+
+  backtestRun BacktestRun @relation(fields: [backtestRunId], references: [id], onDelete: Cascade)
+
+  @@index([backtestRunId, triggeredAt])
+}
+
+// --- Content & ops ----------------------------------------------------------
+
+model LearnArticle {
+  id                 String   @id @default(uuid())
+  slug               String   @unique
+  title              String
+  category           String
+  bodyMarkdown       String
+  relatedConceptTags String[]
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+}
+
+model AdminAuditLog {
+  id          String   @id @default(uuid())
+  adminUserId String
+  action      String
+  entityType  String
+  entityId    String
+  diff        Json
+  createdAt   DateTime @default(now())
+
+  adminUser User @relation(fields: [adminUserId], references: [id], onDelete: Cascade)
+
+  @@index([adminUserId, createdAt])
+}
+
+model Subscription {
+  id                   String   @id @default(uuid())
+  userId               String   @unique
+  stripeCustomerId     String
+  stripeSubscriptionId String
+  plan                 Plan
+  status               String
+  currentPeriodEnd     DateTime
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}

@@ -1,0 +1,79 @@
+# SpotLens Development Roadmap
+
+## Phase 1 — Chart Foundation ✅
+
+- [x] Repo scaffold, lint/test/CI
+- [x] Prisma schema + seed 45 curated assets
+- [x] MarketDataProvider interface + BinanceProvider (retry/backoff, typed errors)
+- [x] Candle cache service + candles/ticker/markets API routes
+- [x] Asset/pair/timeframe selector + candlestick chart + live header (WS + polling fallback)
+- [x] Dashboard shell with sidebar nav + stub pages
+- [x] Loading/error states + smoke E2E
+
+Deferred to Phase 8 (tracked, not forgotten):
+
+- [ ] `npm audit`: remaining advisories need Next 15+/glob 11 majors — revisit in the hardening pass
+
+## Phase 2 — Technical Analysis Engine v1
+
+- [ ] Indicator library (EMA20/50/200, RSI14, avg volume) + fixture tests
+- [ ] Swing-point detection + trend classifier
+- [ ] Support/resistance zone clustering
+- [ ] Volume analysis (breakout strength)
+- [ ] Chart overlay toggles (EMA, S/R)
+- [ ] Market Read panel with reasons
+- [ ] Unit test suite for indicators/structure
+
+## Phase 3 — Trade Setup Engine
+
+- [ ] Entry zone calculator + confirmation checklist
+- [ ] Structure-based stop-loss calculator
+- [ ] Multi-target take-profit calculator
+- [ ] Risk/reward calculator + poor-R:R flagging
+- [ ] Setup Score (0-100) + breakdown
+- [ ] Trade status engine (Potential/Wait/HighRisk/Avoid)
+- [ ] /api/analysis/run end-to-end + result panel UI
+- [ ] Unit tests incl. deliberately poor setups
+
+## Phase 4 — Accounts, Risk Management & Watchlist
+
+- [ ] NextAuth (Credentials + Google)
+- [ ] Watchlist CRUD + sidebar
+- [ ] Position size calculator
+- [ ] Persisted AnalysisSnapshot + history view
+- [ ] Settings page
+- [ ] plan/Subscription scaffolding
+
+## Phase 5 — Multi-Timeframe Analysis
+
+- [ ] MTF trend/structure detection
+- [ ] MTF summary panel
+- [ ] Conflict warning banner
+- [ ] Fold MTF agreement into score/status
+- [ ] Timeframe-pair selector + /api/analysis/mtf
+
+## Phase 6 — Learning Mode & Asset Research
+
+- [ ] LearnArticle model + seed content
+- [ ] Learn section UI + contextual links
+- [ ] Per-asset research page
+- [ ] EthicalChecklist model + UI + non-fatwa disclaimer
+- [ ] Admin interface + AdminAuditLog
+
+## Phase 7 — Backtesting
+
+- [ ] BacktestRun/BacktestSetup schema + historical storage
+- [ ] Bar-by-bar replay runner (no look-ahead bias, tested)
+- [ ] Async job wiring (QStash + cron)
+- [ ] Metrics computation
+- [ ] Backtest report UI + disclaimer
+
+## Phase 8 — Hardening & Launch
+
+- [ ] Full test coverage (unit/integration/E2E)
+- [ ] Security pass (rate limiting, zod audit, secrets)
+- [ ] Performance pass (caching, indexing, chart rendering)
+- [ ] Realtime reconnect/backoff hardening
+- [ ] Stripe billing + plan gating
+- [ ] Docker packaging + CI/CD
+- [ ] Sentry + uptime + usage dashboards
