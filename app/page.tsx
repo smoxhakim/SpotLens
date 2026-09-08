@@ -3,6 +3,7 @@ import Link from "next/link";
 
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { AnalysisHistory } from "@/features/analysis/components/AnalysisHistory";
 import { MarketDirectory } from "@/features/market/components/MarketDirectory";
 import { ANALYSIS_DISCLAIMER, SPOT_ONLY_NOTE } from "@/lib/constants/disclaimers";
 import { listMarkets } from "@/services/markets";
@@ -48,6 +49,8 @@ export default async function DashboardPage() {
           </CardContent>
         </Card>
       </div>
+
+      <AnalysisHistory />
 
       <MarketDirectory markets={markets} />
 
