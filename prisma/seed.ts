@@ -6,6 +6,8 @@
  */
 import { PrismaClient } from "@prisma/client";
 
+import { ETHICAL_CHECKLISTS } from "../lib/ethics/checklist";
+import { LEARN_ARTICLES } from "../lib/learn/articles";
 import { CURATED_ASSETS, toExchangeSymbol } from "../lib/market-data/curated-assets";
 
 const prisma = new PrismaClient();
@@ -53,7 +55,51 @@ async function main() {
     }
   }
 
-  console.log(`Seeded ${assetCount} assets and ${pairCount} trading pairs.`);
+  const bySymbol = new Map(
+    (await prisma.asset.findMany({ select: { id: true, symbol: true } })).map((a) => [
+      a.symbol,
+      a.id,
+    ]),
+  );
+
+  let checklistCount = 0;
+  for (const entry of ETHICAL_CHECKLISTS) {
+    const assetId = bySymbol.get(entry.symbol);
+    if (!assetId) continue;
+
+    const { symbol: _symbol, ...fields } = entry;
+    await prisma.ethicalChecklist.upsert({
+      where: { assetId },
+      create: { assetId, ...fields },
+      update: fields,
+    });
+    checklistCount += 1;
+  }
+
+  let articleCount = 0;
+  for (const article of LEARN_ARTICLES) {
+    await prisma.learnArticle.upsert({
+      where: { slug: article.slug },
+      create: {
+        slug: article.slug,
+        title: article.title,
+        category: article.category,
+        bodyMarkdown: article.bodyMarkdown,
+        relatedConceptTags: article.conceptTags,
+      },
+      update: {
+        title: article.title,
+        category: article.category,
+        bodyMarkdown: article.bodyMarkdown,
+        relatedConceptTags: article.conceptTags,
+      },
+    });
+    articleCount += 1;
+  }
+
+  console.log(
+    `Seeded ${assetCount} assets, ${pairCount} trading pairs, ${checklistCount} ethical checklists and ${articleCount} learn articles.`,
+  );
 }
 
 main()

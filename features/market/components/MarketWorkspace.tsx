@@ -1,6 +1,7 @@
 "use client";
 
 import { AlertTriangle, RefreshCw, Sparkles } from "lucide-react";
+import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useMemo, useState } from "react";
 
@@ -262,14 +263,22 @@ export function MarketWorkspace() {
                 <div className="mb-1 font-medium">What the token is used for</div>
                 <p className="text-muted-foreground">{market.asset.utilityExplanation}</p>
               </div>
-              <a
-                href={market.asset.officialWebsite}
-                target="_blank"
-                rel="noreferrer noopener"
-                className="inline-block text-primary underline underline-offset-2"
-              >
-                Official website
-              </a>
+              <div className="flex flex-wrap gap-3">
+                <Link
+                  href={`/assets/${market.asset.symbol}`}
+                  className="text-primary underline underline-offset-2"
+                >
+                  Research &amp; ethical checklist
+                </Link>
+                <a
+                  href={market.asset.officialWebsite}
+                  target="_blank"
+                  rel="noreferrer noopener"
+                  className="text-primary underline underline-offset-2"
+                >
+                  Official website
+                </a>
+              </div>
             </CardContent>
           </Card>
         )}

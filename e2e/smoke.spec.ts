@@ -204,3 +204,69 @@ test("the MTF API rejects an inverted timeframe pair", async ({ request }) => {
   });
   expect(same.status()).toBe(400);
 });
+
+test("the learn section lists and renders articles", async ({ page }) => {
+  await page.goto("/learn");
+
+  await expect(page.getByRole("heading", { name: "Learn" })).toBeVisible();
+  await page.getByRole("link", { name: /What is support\?/ }).click();
+
+  await expect(page.getByRole("heading", { name: /What is support\?/ })).toBeVisible();
+  await expect(page.getByText(/area where buyers/i).first()).toBeVisible();
+});
+
+test("analysis fields link into the relevant article", async ({ page }) => {
+  await page.goto("/market-analysis?pair=BTCUSDT&tf=H4");
+
+  const link = page.getByRole("link", { name: /How trend is decided/ });
+  await expect(link).toBeVisible({ timeout: 30_000 });
+  await link.click();
+
+  await expect(page).toHaveURL(/\/learn\/trend/);
+});
+
+test("the asset research page shows the ethical checklist with its disclaimer", async ({
+  page,
+}) => {
+  await page.goto("/assets/AAVE");
+
+  await expect(page.getByRole("heading", { name: /Aave/ })).toBeVisible();
+  await expect(page.getByText("Ethical / Shariah research checklist")).toBeVisible();
+
+  // The non-fatwa disclaimer is required wherever the checklist appears.
+  await expect(page.getByText(/is not a religious ruling \(fatwa\)/i)).toBeVisible();
+
+  // Aave's core business is interest-bearing lending, and the page says so.
+  await expect(page.getByText(/Does the project involve lending with interest\?/)).toBeVisible();
+  await expect(page.getByText(/core business/i).first()).toBeVisible();
+});
+
+test("an unknown asset or article 404s rather than erroring", async ({ page }) => {
+  // A root-level loading.tsx would stream every page and send 200 before
+  // notFound() could run, so this guards the placement of loading boundaries
+  // as much as the pages themselves.
+  const asset = await page.goto("/assets/NOTACOIN");
+  expect(asset?.status()).toBe(404);
+  await expect(page.getByText(/Page not found/i)).toBeVisible();
+
+  const article = await page.goto("/learn/not-an-article");
+  expect(article?.status()).toBe(404);
+
+  // Real pages are unaffected.
+  expect((await page.goto("/assets/BTC"))?.status()).toBe(200);
+  expect((await page.goto("/learn/support"))?.status()).toBe(200);
+});
+
+test("learn and asset APIs are public and typed", async ({ request }) => {
+  const articles = await request.get("/api/learn/articles");
+  expect(articles.ok()).toBeTruthy();
+  expect((await articles.json()).articles.length).toBeGreaterThan(5);
+
+  const asset = await request.get("/api/assets/BTC");
+  expect(asset.ok()).toBeTruthy();
+  const body = await asset.json();
+  expect(body.asset.symbol).toBe("BTC");
+  expect(body.checklist.involvesInterestLending).toBe("NO");
+
+  expect((await request.get("/api/assets/NOTACOIN")).status()).toBe(404);
+});

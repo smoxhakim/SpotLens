@@ -27,7 +27,7 @@ const NAV: NavItem[] = [
   { href: "/", label: "Dashboard", icon: LayoutDashboard },
   { href: "/market-analysis", label: "Market Analysis", icon: LineChart },
   { href: "/watchlist", label: "Watchlist", icon: Eye },
-  { href: "/learn", label: "Learn", icon: BookOpen, comingSoon: true },
+  { href: "/learn", label: "Learn", icon: BookOpen },
   { href: "/risk-calculator", label: "Risk Calculator", icon: Calculator },
   { href: "/settings", label: "Settings", icon: Settings },
 ];

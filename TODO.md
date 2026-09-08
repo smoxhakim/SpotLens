@@ -54,11 +54,16 @@ Deferred to Phase 8 (tracked, not forgotten):
 
 ## Phase 6 — Learning Mode & Asset Research
 
-- [ ] LearnArticle model + seed content
-- [ ] Learn section UI + contextual links
-- [ ] Per-asset research page
-- [ ] EthicalChecklist model + UI + non-fatwa disclaimer
-- [ ] Admin interface + AdminAuditLog
+- [x] LearnArticle model + 14 seeded articles
+- [x] Learn section UI (index + article view)
+- [x] Contextual "Learn more" links from every analysis field
+- [x] Per-asset research page
+- [x] EthicalChecklist for all 45 assets + UI + non-fatwa disclaimer
+- [~] Admin interface + AdminAuditLog — deliberately skipped for a single-user
+  app. Editing lib/market-data/curated-assets.ts or lib/ethics/checklist.ts
+  and running `npm run prisma:seed` already covers it, and the seed is
+  idempotent. AdminAuditLog and the ADMIN role stay in the schema so this
+  can be added later without a migration.
 
 ## Phase 7 — Backtesting
 

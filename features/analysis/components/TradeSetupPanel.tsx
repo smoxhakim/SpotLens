@@ -11,6 +11,7 @@ import type { AnalysisResult, SetupScore, TradeStatus } from "@/lib/analysis";
 import { formatPrice } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
+import { LearnLink } from "./LearnLink";
 import { MtfPanel } from "./MtfPanel";
 import { WhyDisclosure } from "./WhyDisclosure";
 
@@ -128,6 +129,8 @@ export function TradeSetupPanel({ result, isPending, error, asOf }: TradeSetupPa
           <p className="mt-1.5 text-[11px] leading-relaxed opacity-90">{result.statusReason}</p>
         </div>
 
+        <LearnLink concept="status" label="What these four statuses mean" />
+
         {result.mtf && <MtfPanel mtf={result.mtf} />}
 
         {!setup && (
@@ -145,6 +148,7 @@ export function TradeSetupPanel({ result, isPending, error, asOf }: TradeSetupPa
                 {formatPrice(setup.entry.low)} – {formatPrice(setup.entry.high)}
               </Value>
               <WhyDisclosure>{setup.entry.reason}</WhyDisclosure>
+              <LearnLink concept="support" label="Why the entry is a zone, not a price" />
 
               <div className="mt-2 rounded-md border border-dashed p-2">
                 <div className="mb-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
@@ -167,6 +171,7 @@ export function TradeSetupPanel({ result, isPending, error, asOf }: TradeSetupPa
                 {(setup.stopLoss.riskPct * 100).toFixed(2)}% below the entry
               </p>
               <WhyDisclosure>{setup.stopLoss.reason}</WhyDisclosure>
+              <LearnLink concept="stop-loss" label="Where a stop belongs" />
             </section>
 
             <section>
@@ -209,6 +214,7 @@ export function TradeSetupPanel({ result, isPending, error, asOf }: TradeSetupPa
                 )}
               </div>
               <WhyDisclosure>{setup.riskReward.reason}</WhyDisclosure>
+              <LearnLink concept="risk-reward" label="Why 1:1 is a losing game" />
             </section>
 
             {result.score && <ScoreBreakdown score={result.score} />}
@@ -264,6 +270,7 @@ function ScoreBreakdown({ score }: { score: SetupScore }) {
         The score measures how much of the evidence agrees, not the chance of the trade working. It
         is not a prediction.
       </p>
+      <LearnLink concept="setup-score" label="How the score is built" />
     </section>
   );
 }

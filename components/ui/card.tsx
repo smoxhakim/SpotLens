@@ -20,9 +20,22 @@ const CardHeader = React.forwardRef<HTMLDivElement, React.HTMLAttributes<HTMLDiv
 );
 CardHeader.displayName = "CardHeader";
 
-const CardTitle = React.forwardRef<HTMLDivElement, React.HTMLAttributes<HTMLDivElement>>(
-  ({ className, ...props }, ref) => (
-    <div
+/**
+ * `as` lets a card title be a real heading where it is one.
+ *
+ * The default stays a div because most cards are panels inside a page that
+ * already has an h1, and promoting every one of them would produce a document
+ * outline full of same-level headings. But a card that *is* the page's subject
+ * needs a real heading, or the page has no structure for a screen reader to
+ * navigate at all.
+ */
+type CardTitleProps = React.HTMLAttributes<HTMLHeadingElement> & {
+  as?: "div" | "h1" | "h2" | "h3";
+};
+
+const CardTitle = React.forwardRef<HTMLHeadingElement, CardTitleProps>(
+  ({ className, as: Tag = "div", ...props }, ref) => (
+    <Tag
       ref={ref}
       className={cn("text-sm font-semibold leading-none tracking-tight", className)}
       {...props}
