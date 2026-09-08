@@ -4,9 +4,12 @@ Educational crypto **spot trading** analysis app. A deterministic engine reads
 market structure and produces entry / stop / targets / score / status, with a
 plain-language reason attached to every number.
 
-Full spec in `PRD.md`, design in `ARCHITECTURE.md`, roadmap in `TODO.md`,
-security posture in `SECURITY.md`. Read those only when the task needs them —
-this file is meant to make that unnecessary most of the time.
+All eight phases are shipped and merged to `main`. **Open items and where work
+stopped are at the top of `TODO.md`** — start there.
+
+Full spec in `PRD.md`, design in `ARCHITECTURE.md`, security posture in
+`SECURITY.md`. Read those only when the task needs them — this file is meant to
+make that unnecessary most of the time.
 
 ## Product rules that are not negotiable
 

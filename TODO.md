@@ -1,5 +1,20 @@
 # SpotLens Development Roadmap
 
+**All eight phases are shipped and merged to `main`.** What follows is the
+original roadmap with its outcomes; open items are collected here.
+
+## Where we left off
+
+- [ ] Finish the manual walkthrough — the restraint test (find markets it
+      refuses) and a 4h backtest are the two worth doing.
+- [ ] Add a "Getting started" article to `/learn`. Offered, not built: how to
+      actually use the app from zero, which is the one thing the Learn section
+      is missing.
+- [ ] Decide on Next 14 → 16 (21 advisories — see SECURITY.md).
+- [ ] Deploy. Nothing has been deployed anywhere yet; the Docker image has
+      never been built, because Docker is not installed on the dev machine.
+- [ ] Optional: tighten CSP off `unsafe-inline`/`unsafe-eval` via nonces.
+
 ## Phase 1 — Chart Foundation ✅
 
 - [x] Repo scaffold, lint/test/CI
@@ -10,47 +25,49 @@
 - [x] Dashboard shell with sidebar nav + stub pages
 - [x] Loading/error states + smoke E2E
 
-Deferred to Phase 8 (tracked, not forgotten):
+## Phase 2 — Technical Analysis Engine v1 ✅
 
-- [ ] `npm audit`: remaining advisories need Next 15+/glob 11 majors — revisit in the hardening pass
+- [x] Indicator library (EMA 20/50/200, RSI 14, ATR 14, avg volume) + fixture tests
+- [x] Swing-point detection (HH/HL/LH/LL) + trend classifier
+- [x] Support/resistance zone clustering — ATR-scaled zones, never single lines
+- [x] Volume analysis (breakout strength, increasing/decreasing)
+- [x] Chart overlay toggles (EMA, S/R)
+- [x] Market Read panel with a reason behind every field
+- [x] Unit test suite for indicators/structure
 
-## Phase 2 — Technical Analysis Engine v1
+## Phase 3 — Trade Setup Engine ✅
 
-- [ ] Indicator library (EMA20/50/200, RSI14, avg volume) + fixture tests
-- [ ] Swing-point detection + trend classifier
-- [ ] Support/resistance zone clustering
-- [ ] Volume analysis (breakout strength)
-- [ ] Chart overlay toggles (EMA, S/R)
-- [ ] Market Read panel with reasons
-- [ ] Unit test suite for indicators/structure
+- [x] Entry zone calculator + confirmation checklist
+- [x] Structure-based stop-loss calculator
+- [x] Multi-target take-profit calculator (structural, capped at 8R)
+- [x] Risk/reward calculator + poor-R:R flagging
+- [x] Setup Score (0-100) + the PRD's category breakdown
+- [x] Trade status engine (Potential/Wait/HighRisk/Avoid)
+- [x] /api/analysis/run end-to-end + result panel with "Why?" on every field
+- [x] Unit tests incl. deliberately poor setups
 
-## Phase 3 — Trade Setup Engine
+## Phase 4 — Accounts, Risk Management & Watchlist ✅
 
-- [ ] Entry zone calculator + confirmation checklist
-- [ ] Structure-based stop-loss calculator
-- [ ] Multi-target take-profit calculator
-- [ ] Risk/reward calculator + poor-R:R flagging
-- [ ] Setup Score (0-100) + breakdown
-- [ ] Trade status engine (Potential/Wait/HighRisk/Avoid)
-- [ ] /api/analysis/run end-to-end + result panel UI
-- [ ] Unit tests incl. deliberately poor setups
+- [x] Auth.js (Credentials only — Google OAuth skipped, single-user app)
+- [x] Watchlist CRUD + sidebar + chart toggle
+- [x] Position size calculator (page + API)
+- [x] Persisted AnalysisSnapshot + history on the dashboard
+- [x] Settings page (default risk %, default timeframe)
+- [x] plan/Subscription in the schema; billing intentionally not wired
 
-## Phase 4 — Accounts, Risk Management & Watchlist
+Notes:
 
-- [ ] NextAuth (Credentials + Google)
-- [ ] Watchlist CRUD + sidebar
-- [ ] Position size calculator
-- [ ] Persisted AnalysisSnapshot + history view
-- [ ] Settings page
-- [ ] plan/Subscription scaffolding
+- Sessions are JWT, not database sessions: Auth.js v5's Credentials provider
+  does not support the database strategy.
+- Password reset needs a transactional email service. Skipped.
 
-## Phase 5 — Multi-Timeframe Analysis
+## Phase 5 — Multi-Timeframe Analysis ✅
 
-- [ ] MTF trend/structure detection
-- [ ] MTF summary panel
-- [ ] Conflict warning banner
-- [ ] Fold MTF agreement into score/status
-- [ ] Timeframe-pair selector + /api/analysis/mtf
+- [x] MTF trend/structure detection
+- [x] MTF summary panel showing both timeframes
+- [x] Conflict warning — a counter-trend bounce returns AVOID with no levels
+- [x] MTF agreement folded into the trend score category, not just displayed
+- [x] "Check higher trend" toggle + /api/analysis/mtf
 
 ## Phase 6 — Learning Mode & Asset Research
 
