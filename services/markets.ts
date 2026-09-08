@@ -1,3 +1,4 @@
+import { memoizeAsync } from "@/lib/cache";
 import { isDatabaseConfigured, prisma } from "@/lib/db/prisma";
 import { warnOnce } from "@/lib/log";
 import { CURATED_ASSETS, toExchangeSymbol } from "@/lib/market-data/curated-assets";
@@ -11,7 +12,14 @@ import type { MarketSummary } from "@/types/market";
  * no database it falls back to the same curated file the seed script uses, so
  * the app is usable before any infrastructure exists.
  */
-export async function listMarkets(): Promise<MarketSummary[]> {
+/**
+ * The list changes only when the seed is re-run, but sits on the hot path of
+ * every candle, ticker and analysis request — each of which was querying all
+ * 45 pairs to resolve a single id.
+ */
+const MARKETS_TTL_MS = 60_000;
+
+const loadMarkets = memoizeAsync(async (): Promise<MarketSummary[]> => {
   if (isDatabaseConfigured) {
     try {
       return await listMarketsFromDb();
@@ -24,6 +32,15 @@ export async function listMarkets(): Promise<MarketSummary[]> {
     }
   }
   return listMarketsFromFile();
+}, MARKETS_TTL_MS);
+
+export async function listMarkets(): Promise<MarketSummary[]> {
+  return loadMarkets();
+}
+
+/** Test seam, and the hook a future admin edit would call. */
+export function invalidateMarketsCache() {
+  loadMarkets.invalidate();
 }
 
 export async function findMarketByPairId(pairId: string): Promise<MarketSummary | undefined> {

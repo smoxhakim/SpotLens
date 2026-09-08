@@ -3,6 +3,7 @@ import { z } from "zod";
 
 import { isDenied, requireUser } from "@/lib/api/auth-guard";
 import { apiError, handleRouteError } from "@/lib/api/response";
+import { RATE_LIMITS, enforceRateLimit } from "@/lib/rate-limit";
 import { BACKTEST_DISCLAIMER } from "@/lib/constants/disclaimers";
 import { isDatabaseConfigured } from "@/lib/db/prisma";
 import { MAX_BACKTEST_CANDLES, estimateCandles, executeBacktest } from "@/services/backtests";
@@ -32,6 +33,9 @@ export async function POST(req: NextRequest) {
 
     const guard = await requireUser();
     if (isDenied(guard)) return guard.response;
+
+    const limited = await enforceRateLimit(req, RATE_LIMITS.backtest, guard.userId);
+    if (limited) return limited;
 
     const json = await req.json().catch(() => null);
     if (json === null) return apiError("INVALID_REQUEST", "A JSON body is required.", 400);
