@@ -184,6 +184,7 @@ lib/
   constants/         disclaimer text, version-stamped
   api/  auth/  db/  test-utils/
 services/            DB-backed services (markets, candles, snapshots, backtests, learn)
+types/               shared API/response types
 prisma/              schema + migrations + seed
 e2e/                 Playwright specs
 ```
