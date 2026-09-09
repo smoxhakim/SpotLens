@@ -216,10 +216,15 @@ export function TradeSetupPanel({ result, isPending, error, asOf }: TradeSetupPa
               <WhyDisclosure>{setup.riskReward.reason}</WhyDisclosure>
               <LearnLink concept="risk-reward" label="Why 1:1 is a losing game" />
             </section>
-
-            {result.score && <ScoreBreakdown score={result.score} />}
           </>
         )}
+
+        {/*
+          Outside the block above on purpose. An AVOID withholds the levels but
+          keeps the score, because the score is the evidence for the refusal —
+          without it the status reason cites a number with nothing behind it.
+        */}
+        {result.score && <ScoreBreakdown score={result.score} />}
 
         <Alert variant="muted">
           <AlertDescription>{result.disclaimer}</AlertDescription>

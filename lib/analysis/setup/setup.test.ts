@@ -4,10 +4,12 @@ import { makeCandles } from "@/lib/test-utils/candles";
 import {
   downtrend,
   extendedAboveSupport,
+  poorRiskReward,
   pullbackIntoSupport,
   pullbackOnThinVolume,
   rangeBound,
   thinHistory,
+  weakEvidence,
 } from "@/lib/test-utils/scenarios";
 
 import { runAnalysis } from "./index";
@@ -80,6 +82,45 @@ describe("runAnalysis — restraint", () => {
 
     expect(result.status).toBe("AVOID");
     expect(result.setup).toBeNull();
+  });
+
+  // The two rules below only fire once the setup has been built, so they are
+  // the paths where levels could leak out under an AVOID verdict.
+  it("withholds levels when risk/reward comes out below 1:1", () => {
+    const result = runAnalysis(poorRiskReward());
+
+    expect(result.status).toBe("AVOID");
+    expect(result.setup).toBeNull();
+    expect(result.statusReason).toMatch(/risks more than it stands to make/i);
+  });
+
+  it("withholds levels when the setup scores below the AVOID grade", () => {
+    const result = runAnalysis(weakEvidence());
+
+    expect(result.status).toBe("AVOID");
+    expect(result.setup).toBeNull();
+    // Above 1:1, so this is the score rule rather than the risk/reward rule.
+    expect(result.score!.grade).toBe("AVOID");
+    expect(result.statusReason).toMatch(/too little of the evidence/i);
+  });
+
+  it("keeps the score on an AVOID, because it is the reason for the refusal", () => {
+    for (const candles of [poorRiskReward(), weakEvidence()]) {
+      const result = runAnalysis(candles);
+
+      expect(result.setup).toBeNull();
+      expect(result.score).not.toBeNull();
+      // Every category still carries its reasoning, so the refusal is explained.
+      for (const category of Object.values(result.score!.breakdown)) {
+        expect(category.reason).not.toHaveLength(0);
+      }
+    }
+  });
+
+  it("still nulls the score when the run stops before a setup exists", () => {
+    // The structural exits have no evidence to show, so there is nothing to keep.
+    expect(runAnalysis(downtrend()).score).toBeNull();
+    expect(runAnalysis([]).score).toBeNull();
   });
 });
 
