@@ -17,6 +17,11 @@ export interface AnalysisResult {
   mtf: MtfSummary | null;
   /** Null when no responsible long setup exists — the status explains why. */
   setup: TradeSetup | null;
+  /**
+   * Null only when the run stopped before a setup could be built. An AVOID
+   * verdict withholds `setup` but keeps the score, since the score is the
+   * reasoning behind the refusal rather than a number to trade on.
+   */
   score: SetupScore | null;
   status: TradeStatus;
   statusReason: string;
@@ -105,6 +110,25 @@ export function runAnalysis(candles: Candle[], options: RunAnalysisOptions = {})
 
   const score = scoreSetup(read, entry, riskReward, mtf ?? undefined);
   const verdict = determineStatus(read, entry, riskReward, score, mtf ?? undefined);
+
+  // The status engine can reach AVOID on evidence that only exists once the
+  // setup has been built — a risk/reward below 1, or a score under the AVOID
+  // grade. The levels are withheld here for the same reason they are on the
+  // structural exits above: handing over an entry and a stop for a trade the
+  // tool has just advised against undoes the point of saying it.
+  //
+  // The score survives, because it is the evidence *for* the refusal rather
+  // than a level to act on. Nulling it would leave "scores 43/100" in the
+  // status reason with nothing behind it.
+  if (verdict.status === "AVOID") {
+    return {
+      ...base,
+      setup: null,
+      score,
+      status: verdict.status,
+      statusReason: verdict.reason,
+    };
+  }
 
   return {
     ...base,

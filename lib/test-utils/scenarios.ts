@@ -111,3 +111,77 @@ export function repeatedPullbacks(cycles = 90): Candle[] {
 export function thinHistory(): Candle[] {
   return makeCandles(legs(4, 100, 4, 12));
 }
+
+/**
+ * Sideways market whose risk/reward comes out below 1:1.
+ *
+ * Two resistance shelves sit close overhead while a late flush leaves the most
+ * recent swing low far below, so the stop is wide and both structural targets
+ * land inside 1R. Risk/reward is measured to TP2, and the fallback R-multiples
+ * can never produce a ratio under 1 — it takes two real resistance zones, both
+ * within 1R and far enough apart to survive de-duplication.
+ */
+export function poorRiskReward(): Candle[] {
+  const specs: CandleSpec[] = [];
+  const shelf = (top: number, mid: number) => {
+    specs.push(
+      { close: 100 },
+      { close: mid },
+      { close: top, high: top + 0.5 },
+      { close: mid },
+      { close: 100.5 },
+    );
+  };
+
+  for (let i = 0; i < 8; i += 1) shelf(106, 103);
+  for (let i = 0; i < 6; i += 1) shelf(122, 110);
+  for (let i = 0; i < 6; i += 1) shelf(106, 103);
+
+  // A closing flush — swing points are read from closes, not wicks, so only a
+  // close this low pushes the invalidation level away from the entry zone.
+  specs.push({ close: 75, low: 74 });
+  for (let i = 1; i <= 6; i += 1) specs.push({ close: 75 + 27 * (i / 6) });
+
+  return makeCandles(specs);
+}
+
+/**
+ * A setup that scores below the AVOID grade while risk/reward still clears 1:1.
+ *
+ * Nothing here is individually disqualifying: the market is ranging, the entry
+ * zone has been tested only twice, the moving averages are stacked bearishly,
+ * volume is thin and the payoff is barely above break-even. Together they leave
+ * too little evidence to act on. Keeping the ratio above 1 matters — otherwise
+ * the risk/reward rule would return AVOID first and this path would never run.
+ */
+export function weakEvidence(): Candle[] {
+  const specs: CandleSpec[] = [];
+  const shelf = (base: number, top: number) => {
+    specs.push(
+      { close: base },
+      { close: (base + top) / 2 },
+      { close: top, high: top + 0.5 },
+      { close: (base + top) / 2 },
+      { close: base + 0.5 },
+    );
+  };
+
+  for (let i = 0; i < 10; i += 1) shelf(108, 136);
+  for (let i = 0; i < 10; i += 1) shelf(106, 118);
+
+  // Only two visits to the level that becomes the entry zone, so it stays
+  // lightly tested, and on thin volume throughout.
+  for (let i = 0; i < 2; i += 1) {
+    specs.push(
+      { close: 100, volume: 25 },
+      { close: 104, volume: 25 },
+      { close: 100.5, volume: 25 },
+      { close: 105, volume: 25 },
+    );
+  }
+
+  specs.push({ close: 74, volume: 25 });
+  for (let i = 1; i <= 6; i += 1) specs.push({ close: 74 + 28 * (i / 6), volume: 25 });
+
+  return makeCandles(specs);
+}
