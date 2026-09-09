@@ -5,16 +5,25 @@ original roadmap with its outcomes; open items are collected here.
 
 ## Where we left off
 
-- [ ] Finish the manual walkthrough — the restraint test (find markets it
-      refuses) and a 4h backtest are the two worth doing.
+- [x] Finish the manual walkthrough — done against live Binance data. Restraint
+      census over all 45 markets: POTENTIAL_SETUP on 0% of 1h runs and 2% of 4h
+      runs, which is the design working rather than failing. The
+      risk/reward-below-1 AVOID rule fired on 4 real markets (APTUSDT 1h: bullish
+      trend, 77/100, correctly refused with no levels), so that fix was load
+      bearing and not theoretical. 1m/5m verified live — forming candle detected
+      every time, volume read intact. 4h backtests run end to end on five
+      markets. No level leaks anywhere.
 - [x] Add a "Getting started" article to `/learn` — shipped as the 15th seeded
       article, under a new "Getting started" category that sorts first on the
       index. Covers the whole loop: settings, watchlist, running an analysis,
       reading the status before the numbers, sizing, and placing the order
       yourself.
 - [ ] Decide on Next 14 → 16 (21 advisories — see SECURITY.md).
-- [ ] Deploy. Nothing has been deployed anywhere yet; the Docker image has
-      never been built, because Docker is not installed on the dev machine.
+- [ ] Deploy. Nothing has been deployed anywhere yet. Note that Docker is not
+      the blocker it was written up as: ARCHITECTURE.md names Vercel as the
+      host and the Dockerfile as a self-host escape hatch, so the deploy needs
+      a Vercel project and a Neon database, not a local Docker install. The
+      image has still never been built.
 - [ ] Optional: tighten CSP off `unsafe-inline`/`unsafe-eval` via nonces.
 
 ## Phase 1 — Chart Foundation ✅
