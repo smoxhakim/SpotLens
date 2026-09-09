@@ -12,7 +12,7 @@
 export interface LearnArticleSeed {
   slug: string;
   title: string;
-  category: "Market structure" | "Indicators" | "Risk" | "Using SpotLens";
+  category: "Getting started" | "Market structure" | "Indicators" | "Risk" | "Using SpotLens";
   /** One-line summary shown in the index. */
   summary: string;
   conceptTags: string[];
@@ -20,6 +20,72 @@ export interface LearnArticleSeed {
 }
 
 export const LEARN_ARTICLES: LearnArticleSeed[] = [
+  {
+    slug: "getting-started",
+    title: "Getting started: your first analysis",
+    category: "Getting started",
+    summary: "The whole loop, from opening the app to sizing a position.",
+    conceptTags: ["getting-started", "workflow", "onboarding"],
+    bodyMarkdown: `SpotLens reads a chart and tells you what it sees: where a trade would make sense, where it would be wrong, and — most often — that there is nothing worth doing yet. It does not place orders, and it has no way to. See [why spot only](/learn/spot-only).
+
+This article is the whole loop, start to finish.
+
+## Set it up once
+
+- **Settings** — choose your default risk per trade and default timeframe. If you have no strong view, 1% risk is the usual starting point; [position sizing](/learn/position-sizing) explains what that number does.
+- **Watchlist** — add five to ten markets from the dashboard, not forty-five. The point is a list you can actually work through in one sitting.
+
+## Run an analysis
+
+Open **Market Analysis**, pick a pair from the selector, choose a timeframe, and press **Analyze Market**. Leave **Check 4h trend** on: it brings the higher timeframe into the verdict, and a setup that looks clean on its own chart can be a bounce inside a falling market. That is the single most expensive mistake this tool exists to prevent — see [multi-timeframe](/learn/multi-timeframe).
+
+The left side draws the chart, with toggles for the moving averages and the support and resistance zones. The right side is the read and the verdict.
+
+## Read the status before you read any number
+
+The verdict comes first, and it decides whether the numbers below it matter at all.
+
+| Status | What it is asking you to do |
+| --- | --- |
+| **Avoid for now** | Nothing. There are no levels shown, on purpose. Move to the next market. |
+| **High risk** | Skip it unless you can name something the engine cannot see. The setup is not broken, but the payoff does not justify the capital, or price is already in resistance. |
+| **Wait for confirmation** | Set a price alert at the entry zone and leave it alone. This is the most common answer, and usually the most useful one. |
+| **Potential setup** | A candidate worth working on. Not an instruction to buy. |
+
+[Potential, Wait, High risk, Avoid](/learn/trade-status) goes through the reasoning behind each one.
+
+## Work the confirmation checklist yourself
+
+Under the entry zone is a short list: a bullish rejection candle from the zone, a strong close back above it, [volume](/learn/volume) rising on the bounce rather than on the drop, a higher low forming after the touch.
+
+**SpotLens does not check these for you.** It is naming what to look at on the chart. If those things are not there, the honest reading is that you are early — which is the same thing the status was telling you.
+
+## Size the position before you act
+
+Take the entry and the [stop](/learn/stop-loss) into the **Risk Calculator**, along with your balance and risk percentage. It returns a position size: the quantity at which being wrong costs what you decided it would, rather than whatever the market feels like charging.
+
+This is the step that decides whether a run of losses is a bad month or a finished account. It matters more than the entry.
+
+## Then place the order yourself
+
+On your exchange, by hand. SpotLens never touches an order book. The analysis is saved to your history so you can go back later and see what the tool said, when it said it, and what happened next.
+
+## Expect to wait
+
+The status rules rule out every disqualifying condition before **Potential setup** can be returned at all. Most runs, on most markets, on most days, come back as **Wait for confirmation** — and that is the tool working, not failing.
+
+If nearly everything you analyse comes back as a potential setup, something is wrong with the engine rather than right with the market.
+
+## Before you risk real money
+
+Run a **Backtest** on two or three of your markets, on the 4h timeframe or lower. On the daily timeframe the warmup period consumes most of a year of history, so very few setups trigger and the result says little.
+
+Look at the win rate, the average realised R, and the maximum drawdown. That is how you find out whether you trust the thing, using history instead of money — though a backtest describes what already happened and is not a promise about what comes next.
+
+## When a word stops you
+
+Every field in an analysis links to the article that explains it, and the [setup score](/learn/setup-score) breaks down which evidence agreed and which did not. The goal is that you eventually stop needing the tool to tell you what the chart says.`,
+  },
   {
     slug: "support",
     title: "What is support?",
