@@ -7,9 +7,11 @@ original roadmap with its outcomes; open items are collected here.
 
 - [ ] Finish the manual walkthrough — the restraint test (find markets it
       refuses) and a 4h backtest are the two worth doing.
-- [ ] Add a "Getting started" article to `/learn`. Offered, not built: how to
-      actually use the app from zero, which is the one thing the Learn section
-      is missing.
+- [x] Add a "Getting started" article to `/learn` — shipped as the 15th seeded
+      article, under a new "Getting started" category that sorts first on the
+      index. Covers the whole loop: settings, watchlist, running an analysis,
+      reading the status before the numbers, sizing, and placing the order
+      yourself.
 - [ ] Decide on Next 14 → 16 (21 advisories — see SECURITY.md).
 - [ ] Deploy. Nothing has been deployed anywhere yet; the Docker image has
       never been built, because Docker is not installed on the dev machine.

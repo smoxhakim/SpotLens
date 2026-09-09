@@ -63,7 +63,10 @@ export function Markdown({ source }: { source: string }) {
 function Table({ block }: { block: string }) {
   const rows = block
     .split("\n")
-    .filter((line) => !/^\|[\s:-]+\|$/.test(line.replace(/\s/g, "")))
+    // Drop the `| --- | --- |` alignment row. It is made only of pipes, dashes,
+    // colons and spaces, and carries at least one dash — a real row always has
+    // something else in it.
+    .filter((line) => !/^[\s|:-]*-[\s|:-]*$/.test(line))
     .map((line) =>
       line
         .replace(/^\||\|$/g, "")

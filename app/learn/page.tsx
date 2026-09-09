@@ -7,7 +7,13 @@ import { listArticles } from "@/services/learn";
 export const metadata = { title: "Learn — SpotLens" };
 export const dynamic = "force-dynamic";
 
-const CATEGORY_ORDER = ["Market structure", "Indicators", "Risk", "Using SpotLens"];
+const CATEGORY_ORDER = [
+  "Getting started",
+  "Market structure",
+  "Indicators",
+  "Risk",
+  "Using SpotLens",
+];
 
 export default async function LearnPage() {
   const articles = await listArticles();
