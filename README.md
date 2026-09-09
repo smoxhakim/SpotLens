@@ -8,8 +8,8 @@ every single number.
 It is built around one idea: **most of the time, the honest answer is "not
 this, not now."** A tool that hunts for reasons to say yes will always find
 them. This one is ordered so that every disqualifying condition has to be ruled
-out before it can call anything a setup, which is why it says *wait* far more
-often than it says *go and look*.
+out before it can call anything a setup, which is why it says _wait_ far more
+often than it says _go and look_.
 
 > This analysis is educational and informational only. Market conditions can
 > change, and no trade outcome is guaranteed.
@@ -58,7 +58,7 @@ history and get identical results.
 ### 1. Market read
 
 Swing highs and lows are detected and classified into a trend (bullish,
-bearish, sideways) using a deadband, so a flat market reads as *sideways*
+bearish, sideways) using a deadband, so a flat market reads as _sideways_
 rather than being forced into a direction. Support and resistance are clustered
 into **ATR-scaled zones, never single lines**, and scored on how often they have
 been touched, how recently, and whether the level has flipped between support
@@ -86,14 +86,14 @@ a level, and reading a half-finished bar makes every live analysis wrong.
 
 0–100 across six weighted categories, each with its own written reasoning:
 
-| Category | Weight |
-| --- | --- |
-| Trend | 25 |
-| Support / resistance | 25 |
-| Volume | 15 |
-| Risk / reward | 15 |
-| RSI | 10 |
-| EMA alignment | 10 |
+| Category             | Weight |
+| -------------------- | ------ |
+| Trend                | 25     |
+| Support / resistance | 25     |
+| Volume               | 15     |
+| Risk / reward        | 15     |
+| RSI                  | 10     |
+| EMA alignment        | 10     |
 
 Grades: **strong** 75+, **moderate** 60–74, **weak** 45–59, **avoid** below 45.
 
@@ -105,12 +105,12 @@ probability — a setup scoring 78 does not have a 78% chance of working.
 The rules are evaluated in a fixed order, and every disqualifying condition is
 checked before `POTENTIAL_SETUP` becomes reachable at all.
 
-| Status | Meaning | Levels shown |
-| --- | --- | --- |
-| **Avoid for now** | Bearish trend, bearish higher timeframe, risk/reward below 1:1, or a score under 45 | **No** |
-| **High risk** | Risk/reward below the 1:1.5 minimum, thin history, or price already inside resistance | Yes |
-| **Wait for confirmation** | The level is valid but price has not arrived, the market is ranging, or the bounce is on thin volume | Yes |
-| **Potential setup** | Nothing disqualifying found — a candidate to watch, not an instruction | Yes |
+| Status                    | Meaning                                                                                              | Levels shown |
+| ------------------------- | ---------------------------------------------------------------------------------------------------- | ------------ |
+| **Avoid for now**         | Bearish trend, bearish higher timeframe, risk/reward below 1:1, or a score under 45                  | **No**       |
+| **High risk**             | Risk/reward below the 1:1.5 minimum, thin history, or price already inside resistance                | Yes          |
+| **Wait for confirmation** | The level is valid but price has not arrived, the market is ranging, or the bounce is on thin volume | Yes          |
+| **Potential setup**       | Nothing disqualifying found — a candidate to watch, not an instruction                               | Yes          |
 
 Measured against all 45 live markets, `POTENTIAL_SETUP` came back on **0% of 1h
 runs and 2% of 4h runs**. That distribution is the design working. If most
@@ -128,16 +128,16 @@ prevent — and returns AVOID with no levels.
 
 ## What's in the app
 
-| Section | What it does |
-| --- | --- |
-| **Dashboard** | The 45 curated markets with risk tags, and your saved analysis history |
-| **Market analysis** | Candlestick chart with EMA and S/R overlays, the market read, and the full trade setup |
-| **Watchlist** | Your own shortlist, toggleable on the chart |
-| **Backtest** | Bar-by-bar replay of the same engine over history, with win rate, average realised R, total R and max drawdown |
-| **Learn** | 15 articles covering every concept the engine uses, linked contextually from each analysis field |
-| **Risk calculator** | Position size from balance, risk percentage, entry and stop |
-| **Asset research** | Per-asset detail plus an ethical checklist for all 45 assets (informational, not a fatwa) |
-| **Settings** | Default risk percentage and default timeframe |
+| Section             | What it does                                                                                                   |
+| ------------------- | -------------------------------------------------------------------------------------------------------------- |
+| **Dashboard**       | The 45 curated markets with risk tags, and your saved analysis history                                         |
+| **Market analysis** | Candlestick chart with EMA and S/R overlays, the market read, and the full trade setup                         |
+| **Watchlist**       | Your own shortlist, toggleable on the chart                                                                    |
+| **Backtest**        | Bar-by-bar replay of the same engine over history, with win rate, average realised R, total R and max drawdown |
+| **Learn**           | 15 articles covering every concept the engine uses, linked contextually from each analysis field               |
+| **Risk calculator** | Position size from balance, risk percentage, entry and stop                                                    |
+| **Asset research**  | Per-asset detail plus an ethical checklist for all 45 assets (informational, not a fatwa)                      |
+| **Settings**        | Default risk percentage and default timeframe                                                                  |
 
 Timeframes: 1m, 5m, 15m, 1h, 4h, 1D, 1W — all derived from `TIMEFRAMES` and one
 Zod schema in `lib/market-data/schema.ts`.
@@ -226,15 +226,15 @@ schema with `npx prisma migrate deploy`.
 
 ### Environment
 
-| Variable | Required | Purpose |
-| --- | --- | --- |
-| `DATABASE_URL` | for DB mode | Pooled Postgres connection |
-| `DIRECT_URL` | for migrations | Unpooled connection |
-| `AUTH_SECRET` | in production | Session signing |
-| `NEXTAUTH_URL` | yes | Callback base URL |
-| `BINANCE_API_BASE_URL` | no | Defaults to the public REST endpoint |
-| `NEXT_PUBLIC_BINANCE_WS_BASE_URL` | no | Realtime price stream |
-| `UPSTASH_REDIS_REST_URL` / `_TOKEN` | no | Shared rate limiting; falls back to in-process |
+| Variable                            | Required       | Purpose                                        |
+| ----------------------------------- | -------------- | ---------------------------------------------- |
+| `DATABASE_URL`                      | for DB mode    | Pooled Postgres connection                     |
+| `DIRECT_URL`                        | for migrations | Unpooled connection                            |
+| `AUTH_SECRET`                       | in production  | Session signing                                |
+| `NEXTAUTH_URL`                      | yes            | Callback base URL                              |
+| `BINANCE_API_BASE_URL`              | no             | Defaults to the public REST endpoint           |
+| `NEXT_PUBLIC_BINANCE_WS_BASE_URL`   | no             | Realtime price stream                          |
+| `UPSTASH_REDIS_REST_URL` / `_TOKEN` | no             | Shared rate limiting; falls back to in-process |
 
 Production refuses to start without `AUTH_SECRET` and a non-localhost
 `DATABASE_URL` — see `lib/env.ts`.
@@ -266,15 +266,15 @@ against live data — verify changes against the running app, not only the suite
 
 ## Tuning constants
 
-| Constant | Value |
-| --- | --- |
-| Warmup before the engine will read a chart | ~260 candles |
-| Absolute minimum candles for a read | 60 |
-| Backtest ceiling per run | 1000 candles |
-| Minimum acceptable risk/reward | 1:1.5 |
-| Stop buffer below the invalidation level | 0.5 ATR |
-| Maximum target distance | 8R |
-| Rate limits | analysis 30/min · backtest 5/min · market data 120/min · signup 5/hr |
+| Constant                                   | Value                                                                |
+| ------------------------------------------ | -------------------------------------------------------------------- |
+| Warmup before the engine will read a chart | ~260 candles                                                         |
+| Absolute minimum candles for a read        | 60                                                                   |
+| Backtest ceiling per run                   | 1000 candles                                                         |
+| Minimum acceptable risk/reward             | 1:1.5                                                                |
+| Stop buffer below the invalidation level   | 0.5 ATR                                                              |
+| Maximum target distance                    | 8R                                                                   |
+| Rate limits                                | analysis 30/min · backtest 5/min · market data 120/min · signup 5/hr |
 
 Backtests run **synchronously**, which the 1000-candle ceiling is what makes
 safe. Raising the cap is the point at which async job processing becomes
