@@ -3,7 +3,7 @@ import type { Candle } from "@/lib/market-data/provider";
 
 import type { MarketRead } from "../market-read";
 import { findSwingPoints } from "../structure";
-import type { EntryZone, StopLoss, TakeProfitTarget } from "./types";
+import type { EntryZone, StopLoss, TakeProfitTarget, TargetKind } from "./types";
 
 const LABELS: TakeProfitTarget["label"][] = ["TP1", "TP2", "TP3"];
 
@@ -38,11 +38,12 @@ export function calculateTakeProfits(
   const risk = entry.mid - stopLoss.price;
   if (risk <= 0) return [];
 
-  const candidates: { level: number; reason: string }[] = [];
+  const candidates: { level: number; reason: string; kind: TargetKind }[] = [];
 
   for (const zone of read.resistance) {
     if (zone.low <= entry.mid) continue;
     candidates.push({
+      kind: "STRUCTURAL",
       level: zone.low,
       reason: `The near edge of a resistance zone at ${formatPrice(zone.low)} – ${formatPrice(
         zone.high,
@@ -65,6 +66,7 @@ export function calculateTakeProfits(
 
   if (priorHighUsable) {
     candidates.push({
+      kind: "STRUCTURAL",
       level: priorHigh,
       reason: `The highest prior swing high on this timeframe, at ${formatPrice(priorHigh)}. Beyond it there is no historical reference left to target.`,
     });
@@ -87,6 +89,7 @@ export function calculateTakeProfits(
     const level = entry.mid + risk * multiple;
     if (targets.some((t) => Math.abs(t.level - level) / level < 0.001)) break;
     targets.push({
+      kind: "R_MULTIPLE",
       level,
       reason: `No further resistance is visible on this timeframe, so this target is set at ${multiple}× the risk taken rather than at a level price has reacted to before. Treat it as a target of convenience, not of structure.${distantHighNote}`,
     });
@@ -97,16 +100,17 @@ export function calculateTakeProfits(
     level: target.level,
     reason: target.reason,
     rr: (target.level - entry.mid) / risk,
+    kind: target.kind,
   }));
 }
 
 /** Sorts ascending and drops targets too close together to be distinct. */
 function dedupe(
-  candidates: { level: number; reason: string }[],
+  candidates: { level: number; reason: string; kind: TargetKind }[],
   risk: number,
-): { level: number; reason: string }[] {
+): { level: number; reason: string; kind: TargetKind }[] {
   const sorted = [...candidates].sort((a, b) => a.level - b.level);
-  const out: { level: number; reason: string }[] = [];
+  const out: { level: number; reason: string; kind: TargetKind }[] = [];
 
   for (const candidate of sorted) {
     const last = out[out.length - 1];

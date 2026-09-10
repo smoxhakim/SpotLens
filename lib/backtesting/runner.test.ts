@@ -41,8 +41,8 @@ describe("look-ahead bias", () => {
       i < 320 ? c : { ...c, close: c.close * 3, high: c.high * 3.2, low: c.low * 2.5 },
     );
 
-    const original = runBacktest(candles, { warmupBars: 260 });
-    const changed = runBacktest(altered, { warmupBars: 260 });
+    const original = runBacktest(candles, { warmupBars: 260 }).setups;
+    const changed = runBacktest(altered, { warmupBars: 260 }).setups;
 
     const before = (r: { triggeredAt: number }) => r.triggeredAt <= candles[319].openTime;
 
@@ -56,7 +56,7 @@ describe("look-ahead bias", () => {
 
   it("never simulates a trade using the candle it entered on", () => {
     const candles = repeatedPullbacks(80);
-    const results = runBacktest(candles, { warmupBars: 260 });
+    const results = runBacktest(candles, { warmupBars: 260 }).setups;
 
     for (const setup of results) {
       if (setup.exitTime === null) continue;
@@ -68,12 +68,12 @@ describe("look-ahead bias", () => {
 
 describe("runBacktest", () => {
   it("returns nothing when there is not enough history to warm up", () => {
-    expect(runBacktest(repeatedPullbacks(5), { warmupBars: 260 })).toEqual([]);
-    expect(runBacktest([], {})).toEqual([]);
+    expect(runBacktest(repeatedPullbacks(5), { warmupBars: 260 }).setups).toEqual([]);
+    expect(runBacktest([], {}).setups).toEqual([]);
   });
 
   it("records entry, stop and targets for every setup it takes", () => {
-    const results = runBacktest(repeatedPullbacks(80), { warmupBars: 260 });
+    const results = runBacktest(repeatedPullbacks(80), { warmupBars: 260 }).setups;
 
     expect(results.length).toBeGreaterThan(0);
     for (const setup of results) {
@@ -84,7 +84,7 @@ describe("runBacktest", () => {
   });
 
   it("never holds two positions at once", () => {
-    const results = runBacktest(repeatedPullbacks(80), { warmupBars: 260 });
+    const results = runBacktest(repeatedPullbacks(80), { warmupBars: 260 }).setups;
 
     for (let i = 1; i < results.length; i += 1) {
       const previousExit = results[i - 1].exitTime;
@@ -105,7 +105,7 @@ describe("runBacktest", () => {
       ]),
     ];
 
-    const results = runBacktest(candles, { warmupBars: 260, maxHoldBars: 5 });
+    const results = runBacktest(candles, { warmupBars: 260, maxHoldBars: 5 }).setups;
     const straddling = results.find(
       (r) => r.exitPrice !== null && r.exitPrice <= r.stopLoss + 1e-9,
     );
@@ -120,7 +120,7 @@ describe("runBacktest", () => {
     );
     const candles = [...repeatedPullbacks(70), ...flatTail];
 
-    const results = runBacktest(candles, { warmupBars: 260, maxHoldBars: 20 });
+    const results = runBacktest(candles, { warmupBars: 260, maxHoldBars: 20 }).setups;
     const stalled = results.filter((r) => r.outcome === "NO_HIT");
 
     for (const setup of stalled) {
@@ -133,7 +133,7 @@ describe("runBacktest", () => {
     // A trade still open when the data ends must have no exit and no R.
     // Marking it to the last candle would record an unrealised position as a
     // loss, which silently biases every metric that follows.
-    const results = runBacktest(repeatedPullbacks(80), { warmupBars: 260 });
+    const results = runBacktest(repeatedPullbacks(80), { warmupBars: 260 }).setups;
     const open = results.filter((r) => r.outcome === "STILL_OPEN");
 
     for (const setup of open) {

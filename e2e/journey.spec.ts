@@ -72,11 +72,15 @@ test.describe("signed-in journey", () => {
     await page.goto("/backtest");
 
     // A range wider than the candle ceiling is refused with a usable message
-    // rather than a timeout or a truncated result.
+    // rather than a timeout or a truncated result. The ceiling counts the bars
+    // that will be *evaluated* — the engine also reads several hundred candles
+    // of history from before the range, which is charged separately.
     await page.getByLabel("From").fill("2025-01-01");
     await page.getByLabel("To").fill("2025-06-30");
     await page.getByRole("button", { name: /Run backtest/ }).click();
-    await expect(page.getByText(/the limit is 1000 per run/i)).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByText(/needs about \d+ candles to evaluate/i)).toBeVisible({
+      timeout: 30_000,
+    });
 
     // ~120 days of 4h candles sits inside the ceiling.
     await page.getByLabel("To").fill("2025-05-01");

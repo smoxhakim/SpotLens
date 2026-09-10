@@ -11,12 +11,12 @@ export const dynamic = "force-dynamic";
 const paramsSchema = z.object({ id: z.string().uuid() });
 
 /** GET /api/backtest/:id — run summary and its setups. Owner only. */
-export async function GET(_req: Request, { params }: { params: { id: string } }) {
+export async function GET(_req: Request, { params }: { params: Promise<{ id: string }> }) {
   try {
     const guard = await requireUser();
     if (isDenied(guard)) return guard.response;
 
-    const { id } = paramsSchema.parse(params);
+    const { id } = paramsSchema.parse(await params);
 
     const run = await prisma.backtestRun.findUnique({
       where: { id },

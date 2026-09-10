@@ -66,6 +66,10 @@ export function CandlestickChart({
     const container = containerRef.current;
     if (!container) return;
 
+    // Captured for the cleanup below: the ref is created once and never
+    // reassigned, so this is the same Map the teardown needs to clear.
+    const emaSeries = emaSeriesRef.current;
+
     const chart = createChart(container, {
       layout: {
         background: { type: ColorType.Solid, color: "transparent" },
@@ -104,7 +108,7 @@ export function CandlestickChart({
       chartRef.current = null;
       candleSeriesRef.current = null;
       volumeSeriesRef.current = null;
-      emaSeriesRef.current.clear();
+      emaSeries.clear();
       priceLinesRef.current = [];
     };
   }, []);

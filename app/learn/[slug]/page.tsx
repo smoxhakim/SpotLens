@@ -8,13 +8,13 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { ANALYSIS_DISCLAIMER } from "@/lib/constants/disclaimers";
 import { getArticle } from "@/services/learn";
 
-export async function generateMetadata({ params }: { params: { slug: string } }) {
-  const article = await getArticle(params.slug);
+export async function generateMetadata({ params }: { params: Promise<{ slug: string }> }) {
+  const article = await getArticle((await params).slug);
   return { title: article ? `${article.title} — SpotLens` : "Not found — SpotLens" };
 }
 
-export default async function ArticlePage({ params }: { params: { slug: string } }) {
-  const article = await getArticle(params.slug);
+export default async function ArticlePage({ params }: { params: Promise<{ slug: string }> }) {
+  const article = await getArticle((await params).slug);
   if (!article) notFound();
 
   return (

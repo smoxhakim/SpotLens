@@ -63,4 +63,27 @@ describe("validateEnv", () => {
 
     expect(report.ok).toBe(false);
   });
+
+  it("treats a blank optional variable as unset rather than invalid", () => {
+    // `UPSTASH_REDIS_REST_URL=` on its own line is how a placeholder is
+    // usually left behind, and it used to fail the whole boot in production.
+    const report = validateEnv({
+      ...base,
+      DATABASE_URL: "postgresql://u:p@db.example.com/x",
+      UPSTASH_REDIS_REST_URL: "",
+    } as NodeJS.ProcessEnv);
+
+    expect(report.ok).toBe(true);
+    expect(report.warnings.join(" ")).toMatch(/No Upstash configured/);
+  });
+
+  it("still rejects a non-empty malformed url", () => {
+    const report = validateEnv({
+      ...base,
+      DATABASE_URL: "postgresql://u:p@db.example.com/x",
+      UPSTASH_REDIS_REST_URL: "   not-a-url",
+    } as NodeJS.ProcessEnv);
+
+    expect(report.ok).toBe(false);
+  });
 });

@@ -8,7 +8,7 @@ import { apiError, handleRouteError } from "@/lib/api/response";
 import { RATE_LIMITS, enforceRateLimit } from "@/lib/rate-limit";
 import { BACKTEST_DISCLAIMER } from "@/lib/constants/disclaimers";
 import { isDatabaseConfigured } from "@/lib/db/prisma";
-import { MAX_BACKTEST_CANDLES, estimateCandles, executeBacktest } from "@/services/backtests";
+import { MAX_EVALUATED_CANDLES, estimateCandles, executeBacktest } from "@/services/backtests";
 import { findMarketByPairId } from "@/services/markets";
 
 export const dynamic = "force-dynamic";
@@ -49,10 +49,10 @@ export async function POST(req: NextRequest) {
     }
 
     const estimated = estimateCandles(body.startDate, body.endDate, body.timeframe);
-    if (estimated > MAX_BACKTEST_CANDLES) {
+    if (estimated > MAX_EVALUATED_CANDLES) {
       return apiError(
         "RANGE_TOO_LARGE",
-        `That range needs about ${estimated} candles; the limit is ${MAX_BACKTEST_CANDLES} per run. Shorten the range or use a higher timeframe.`,
+        `That range needs about ${estimated} candles to evaluate; the limit is ${MAX_EVALUATED_CANDLES} per run. The engine also reads several hundred candles of history from before the range, which is why the ceiling is lower than the exchange's page size. Shorten the range or use a higher timeframe.`,
         400,
       );
     }
@@ -73,7 +73,14 @@ export async function POST(req: NextRequest) {
       runId: result.runId,
       label: market.label,
       timeframe: body.timeframe,
+      // Reported separately so a run can never look like it covered a period
+      // it only read as warmup.
       candlesUsed: result.candlesUsed,
+      warmupBars: result.warmupBars,
+      evaluatedBars: result.evaluatedBars,
+      evaluatedFrom: result.evaluatedFrom,
+      evaluatedTo: result.evaluatedTo,
+      higherTimeframe: result.higherTimeframe,
       metrics: result.metrics,
       setups: result.setups,
       disclaimer: BACKTEST_DISCLAIMER,

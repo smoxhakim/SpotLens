@@ -9,9 +9,9 @@ export const dynamic = "force-dynamic";
 const paramsSchema = z.object({ slug: z.string().min(1).max(120) });
 
 /** GET /api/learn/articles/:slug — public. */
-export async function GET(_req: Request, { params }: { params: { slug: string } }) {
+export async function GET(_req: Request, { params }: { params: Promise<{ slug: string }> }) {
   try {
-    const { slug } = paramsSchema.parse(params);
+    const { slug } = paramsSchema.parse(await params);
     const article = await getArticle(slug);
     if (!article) return apiError("NOT_FOUND", "That article does not exist.", 404);
 

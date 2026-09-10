@@ -2,7 +2,7 @@
 
 ## Recommended stack
 
-- **Framework:** Next.js 14 (App Router) + TypeScript — one codebase for UI, API routes, and server logic; matches PRD requirement directly.
+- **Framework:** Next.js 16 (App Router) + TypeScript — one codebase for UI, API routes, and server logic; matches PRD requirement directly. Upgraded from 14 to clear the advisories against that line; the App Router structure is unchanged, and dynamic `params` are awaited as Next 15+ requires.
 - **Styling/UI:** Tailwind CSS + shadcn/ui — fast to build a professional dashboard solo, no design system to maintain.
 - **Charts:** TradingView Lightweight Charts — purpose-built for candlesticks/overlays, free, lightweight.
 - **Data fetching/cache (client):** TanStack Query — handles polling, retries, cache invalidation for market data.

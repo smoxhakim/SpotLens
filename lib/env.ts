@@ -32,11 +32,27 @@ export interface EnvReport {
   warnings: string[];
 }
 
+/**
+ * An empty value in a `.env` file means "not configured" — it is how a
+ * commented-out or placeholder line is usually left behind. Zod would instead
+ * see a present-but-invalid string and fail the whole boot, so
+ * `UPSTASH_REDIS_REST_URL=` alone was enough to stop production starting.
+ * Dropping blanks makes every `.optional()` above mean what it says.
+ */
+function withoutBlanks(source: NodeJS.ProcessEnv): Record<string, string | undefined> {
+  const out: Record<string, string | undefined> = {};
+  for (const [key, value] of Object.entries(source)) {
+    if (typeof value === "string" && value.trim() === "") continue;
+    out[key] = value;
+  }
+  return out;
+}
+
 export function validateEnv(source: NodeJS.ProcessEnv = process.env): EnvReport {
   const errors: string[] = [];
   const warnings: string[] = [];
 
-  const parsed = schema.safeParse(source);
+  const parsed = schema.safeParse(withoutBlanks(source));
   if (!parsed.success) {
     for (const issue of parsed.error.issues) {
       errors.push(`${issue.path.join(".")}: ${issue.message}`);

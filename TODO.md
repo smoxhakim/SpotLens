@@ -18,13 +18,44 @@ original roadmap with its outcomes; open items are collected here.
       index. Covers the whole loop: settings, watchlist, running an analysis,
       reading the status before the numbers, sizing, and placing the order
       yourself.
-- [ ] Decide on Next 14 → 16 (21 advisories — see SECURITY.md).
+- [x] Next 14 → 16 — done on `chore/upgrade-next-16`. React 19, ESLint 9 flat
+      config, Vitest 4. `npm audit` now reports zero vulnerabilities in the
+      production tree and across dev dependencies. SECURITY.md updated.
+- [x] Phase A P0 correctness fixes — done on `fix/phase-a-correctness`:
+      backtest warmup pre-roll, backtest/live MTF parity with no lookahead, and
+      the synthetic-target risk/reward correction. See "Phase A" below.
 - [ ] Deploy. Nothing has been deployed anywhere yet. Note that Docker is not
       the blocker it was written up as: ARCHITECTURE.md names Vercel as the
       host and the Dockerfile as a self-host escape hatch, so the deploy needs
       a Vercel project and a Neon database, not a local Docker install. The
       image has still never been built.
 - [ ] Optional: tighten CSP off `unsafe-inline`/`unsafe-eval` via nonces.
+
+## Phase A — correctness (done, awaiting review)
+
+Branch `fix/phase-a-correctness`, on top of `chore/upgrade-next-16`.
+
+- [x] **Backtest warmup.** The runner ate its 260-bar warmup out of the
+      requested range, so a request for 300 H4 bars of BTCUSDT evaluated 39 of
+      them — 13%. Pre-roll is now fetched from before the range and the report
+      states `warmupBars`, `evaluatedBars` and `candlesUsed` separately. The
+      same request now evaluates 299 of 300.
+- [x] **Backtest/live MTF parity.** `runBacktest` never passed `mtf`, so the
+      counter-trend veto that live multi-timeframe analysis applies did not
+      exist in backtests. It now takes higher-timeframe candles and re-slices
+      them per bar to `closeTime <= current closeTime`, so no forming
+      higher-timeframe candle can reach a decision. Across five live markets
+      the veto cut setups from 7/6/4/4/0 to 2/2/2/2/0.
+- [x] **Synthetic-target R:R.** Risk/reward was measured to TP2 whatever it
+      was, so a chart with no resistance above it reported the fallback
+      ladder's own 1:2.5 and outranked setups with real levels. The ratio is
+      now measured to a structural target at least 1R away; when none exists
+      it is flagged `isSynthetic`, scored neutral rather than credited, and
+      cannot reach POTENTIAL_SETUP.
+- [x] Tests: 263 unit (was 237), including deliberate re-introduction of each
+      defect to confirm the new tests catch it. 27 Playwright specs pass.
+
+Next up, once reviewed: **Phase B — structured explanations.**
 
 ## Phase 1 — Chart Foundation ✅
 
@@ -129,8 +160,7 @@ Notes:
 
 Outstanding, needs a decision:
 
-- [ ] 21 high-severity Next.js advisories, fixable only by upgrading Next 14 →
-      16 (two majors, and ARCHITECTURE.md pins 14). Most do not apply to this
-      app. See the "Outstanding" section of SECURITY.md.
+- [x] 21 high-severity Next.js advisories — cleared by the Next 16 upgrade.
+      `npm audit` reports zero across the whole tree. See SECURITY.md.
 - [ ] CSP still allows `unsafe-inline`/`unsafe-eval`; tightening needs
       nonce-based CSP via middleware.

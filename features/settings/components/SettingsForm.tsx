@@ -3,7 +3,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
 import { useSession } from "next-auth/react";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -28,15 +28,14 @@ export function SettingsForm() {
     enabled: status === "authenticated",
   });
 
-  const [riskPercent, setRiskPercent] = useState("1");
-  const [timeframe, setTimeframe] = useState<Timeframe>("H1");
+  // The saved settings are the source of truth; local state holds only what the
+  // user has edited since. Copying the query into state from an effect instead
+  // would write state during a render pass and briefly show the defaults.
+  const [edited, setEdited] = useState<{ riskPercent?: string; timeframe?: Timeframe }>({});
 
-  useEffect(() => {
-    if (me.data?.user) {
-      setRiskPercent(String(me.data.user.defaultRiskPercent));
-      setTimeframe(me.data.user.defaultTimeframe);
-    }
-  }, [me.data]);
+  const riskPercent =
+    edited.riskPercent ?? (me.data?.user ? String(me.data.user.defaultRiskPercent) : "1");
+  const timeframe = edited.timeframe ?? me.data?.user?.defaultTimeframe ?? "H1";
 
   const save = useMutation({
     mutationFn: () =>
@@ -48,7 +47,12 @@ export function SettingsForm() {
           defaultTimeframe: timeframe,
         }),
       }),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["me"] }),
+    onSuccess: () => {
+      // Saved values are now the server's, so drop the local edits and let the
+      // refetched settings drive the form again.
+      setEdited({});
+      return queryClient.invalidateQueries({ queryKey: ["me"] });
+    },
   });
 
   if (status === "loading") return <Skeleton className="h-48 w-full" />;
@@ -83,7 +87,7 @@ export function SettingsForm() {
             max="10"
             step="0.1"
             value={riskPercent}
-            onChange={(e) => setRiskPercent(e.target.value)}
+            onChange={(e) => setEdited((prev) => ({ ...prev, riskPercent: e.target.value }))}
             className="max-w-[140px]"
           />
           <p className="text-[11px] leading-relaxed text-muted-foreground">
@@ -97,7 +101,9 @@ export function SettingsForm() {
           <select
             id="timeframe"
             value={timeframe}
-            onChange={(e) => setTimeframe(e.target.value as Timeframe)}
+            onChange={(e) =>
+              setEdited((prev) => ({ ...prev, timeframe: e.target.value as Timeframe }))
+            }
             className="flex h-9 max-w-[140px] rounded-md border border-input bg-background px-3 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
           >
             {TIMEFRAMES.map((tf) => (

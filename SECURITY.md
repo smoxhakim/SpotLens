@@ -49,21 +49,23 @@ be reset directly in the database.
 
 ## Outstanding
 
-**Next.js advisories.** `npm audit` reports 21 high-severity advisories against
-Next 14, all fixed only by upgrading to Next 16 — two major versions, and
-ARCHITECTURE.md pins Next 14.
+**Dependency advisories: none.** `npm audit` reports zero vulnerabilities, in
+the production tree and across dev dependencies alike. Verified on
+2026-09-10 against Next 16.3.4.
 
-Most do not apply to this application: it uses no image optimization, no
-rewrites, no middleware, no i18n, no custom server and no Server Actions. The
-ones that could matter are the cache-poisoning and denial-of-service issues in
-React Server Component responses.
-
-For a single-user deployment behind no public traffic the practical risk is
-low. If this is ever exposed publicly, upgrade first. Re-check with:
+The 21 advisories previously recorded here were against Next 14 and were
+cleared by the upgrade to Next 16, which also pulled in React 19. The dev-only
+advisories that remained afterwards (an esbuild dev-server issue reached
+through Vite, and a path-traversal issue in `@vitest/mocker`) were cleared by
+moving the test toolchain to Vitest 4. Re-check with:
 
 ```bash
-npm audit --omit=dev
+npm audit --omit=dev   # production tree
+npm audit              # everything, dev included
 ```
+
+Treat that as a number with a date on it rather than a standing fact: it is
+true of the current lockfile and says nothing about advisories published since.
 
 **CSP allows `unsafe-inline` and `unsafe-eval`.** Both are what Next.js
 currently requires for hydration and dev tooling. Tightening this needs
