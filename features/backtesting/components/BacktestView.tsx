@@ -23,7 +23,13 @@ interface BacktestResponse {
   runId: string;
   label: string;
   timeframe: Timeframe;
+  /** Every candle read, warmup and evaluation window together. */
   candlesUsed: number;
+  /** Candles read only as history, before the range under test. */
+  warmupBars: number;
+  /** Candles actually evaluated — the bars the run is a statement about. */
+  evaluatedBars: number;
+  higherTimeframe: Timeframe | null;
   metrics: BacktestMetrics;
   setups: BacktestSetupResult[];
   disclaimer: string;
@@ -170,8 +176,16 @@ function Report({ data }: { data: BacktestResponse }) {
       <Card>
         <CardHeader className="pb-2">
           <CardTitle>
-            {data.label} · {TIMEFRAME_LABELS[data.timeframe]} · {data.candlesUsed} candles
+            {data.label} · {TIMEFRAME_LABELS[data.timeframe]} · {data.evaluatedBars} candles
+            evaluated
           </CardTitle>
+          <p className="text-[11px] leading-relaxed text-muted-foreground">
+            {data.warmupBars} further candles were read from before the range as history, so the
+            indicators were already warm on its first bar — they are not part of what was tested.
+            {data.higherTimeframe
+              ? ` The ${TIMEFRAME_LABELS[data.higherTimeframe]} trend was read alongside it, using only candles that had closed at the time, exactly as a multi-timeframe analysis would.`
+              : ""}
+          </p>
         </CardHeader>
         <CardContent className="space-y-4">
           {metrics.numSetups === 0 ? (

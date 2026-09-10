@@ -1,5 +1,5 @@
-import { runAnalysis } from "@/lib/analysis";
-import type { Candle } from "@/lib/market-data/provider";
+import { analyzeMultiTimeframe, runAnalysis } from "@/lib/analysis";
+import type { Candle, Timeframe } from "@/lib/market-data/provider";
 
 export type SetupOutcome = "TP1_HIT" | "TP2_HIT" | "TP3_HIT" | "SL_HIT" | "NO_HIT" | "STILL_OPEN";
 
@@ -17,6 +17,22 @@ export interface BacktestSetupResult {
   setupScore: number;
 }
 
+/**
+ * Higher-timeframe context for the replay.
+ *
+ * Supplying it is what makes a backtest comparable to a multi-timeframe live
+ * run: the same counter-trend veto, the same score adjustment, the same
+ * PULLBACK_IN_UPTREND classification. Leaving it out reproduces the
+ * single-timeframe endpoint instead. Either is a real configuration; what is
+ * not acceptable is believing you tested one and having tested the other.
+ */
+export interface BacktestMtfInput {
+  /** The higher timeframe's candles, covering the replay with history before it. */
+  candles: Candle[];
+  lowerTimeframe: Timeframe;
+  higherTimeframe: Timeframe;
+}
+
 export interface BacktestOptions {
   /**
    * Candles the engine needs before it can say anything — the EMA 200 alone
@@ -25,6 +41,36 @@ export interface BacktestOptions {
   warmupBars?: number;
   /** Give up on a trade that has neither hit a target nor a stop by then. */
   maxHoldBars?: number;
+  /**
+   * Open time of the first candle the run was actually asked to evaluate.
+   *
+   * Everything before it is pre-roll: real history the engine reads so that its
+   * indicators are warm, but bars no setup is reported from. Without this the
+   * warmup was taken out of the requested range itself, so asking for a year
+   * from January evaluated from roughly March and said nothing about it.
+   */
+  evaluateFrom?: number;
+  /** Higher-timeframe context, folded in exactly as a live MTF run would. */
+  mtf?: BacktestMtfInput;
+}
+
+export interface BacktestReport {
+  setups: BacktestSetupResult[];
+  /** Candles read as history before the first evaluated bar. */
+  warmupBars: number;
+  /**
+   * Candles inside the evaluation window — the bars this run was asked about.
+   * The final candle is excluded, since a trade entered on it has nowhere to
+   * go.
+   */
+  evaluatedBars: number;
+  /** Every candle supplied, warmup and evaluation window together. */
+  candlesUsed: number;
+  /** Open time of the first and last evaluated bar; null when none were. */
+  evaluatedFrom: number | null;
+  evaluatedTo: number | null;
+  /** The higher timeframe folded in, or null for a single-timeframe replay. */
+  higherTimeframe: Timeframe | null;
 }
 
 export const DEFAULT_WARMUP_BARS = 260;
@@ -38,6 +84,23 @@ export const DEFAULT_MAX_HOLD_BARS = 120;
  * the trader would not have had. Trade simulation then reads only candles
  * *after* the trigger bar. There is no code path where a future price reaches
  * the signal.
+ *
+ * ## Warmup is history, not the range you asked about
+ *
+ * The first `warmupBars` candles exist so the EMA 200 and the swing series are
+ * defined; nothing is reported from them. They must therefore come from
+ * *before* the requested range. `evaluateFrom` marks where the requested range
+ * begins, and the report states `warmupBars`, `evaluatedBars` and
+ * `candlesUsed` separately so a run can never again look like it covered a
+ * period it merely used as pre-roll.
+ *
+ * ## The higher timeframe cannot be allowed to see ahead either
+ *
+ * A lower-timeframe bar closing at T may only be judged against higher
+ * timeframe candles that had also closed by T. The higher timeframe's *current*
+ * candle is still forming at that moment, and its eventual shape is exactly the
+ * information a trader did not have. Every bar therefore takes a fresh slice of
+ * the higher timeframe bounded by `closeTime <= T`.
  *
  * ## How a trade is managed
  *
@@ -59,22 +122,42 @@ export const DEFAULT_MAX_HOLD_BARS = 120;
  * stop came first. That makes results pessimistic rather than flattering,
  * which is the only safe direction for a tool people use to decide with money.
  */
-export function runBacktest(
-  candles: Candle[],
-  options: BacktestOptions = {},
-): BacktestSetupResult[] {
+export function runBacktest(candles: Candle[], options: BacktestOptions = {}): BacktestReport {
   const warmup = options.warmupBars ?? DEFAULT_WARMUP_BARS;
   const maxHold = options.maxHoldBars ?? DEFAULT_MAX_HOLD_BARS;
+  const higherTimeframe = options.mtf?.higherTimeframe ?? null;
+
+  // Evaluation starts at the requested range when there is enough pre-roll in
+  // front of it, and otherwise as soon as the engine is warm. Taking the later
+  // of the two is what stops a short pre-roll from quietly reporting setups
+  // built on half-formed indicators.
+  const requestedStart =
+    options.evaluateFrom === undefined ? 0 : firstIndexAtOrAfter(candles, options.evaluateFrom);
+  const start = Math.max(warmup, requestedStart);
+
+  // The last candle can never trigger: a trade entered on it has no candle to
+  // play out in.
+  const lastEvaluable = candles.length - 1;
 
   const results: BacktestSetupResult[] = [];
-  if (candles.length <= warmup + 1) return results;
+  const report = (): BacktestReport => ({
+    setups: results,
+    warmupBars: Math.min(start, candles.length),
+    evaluatedBars: Math.max(0, lastEvaluable - start),
+    candlesUsed: candles.length,
+    evaluatedFrom: start < lastEvaluable ? candles[start].openTime : null,
+    evaluatedTo: start < lastEvaluable ? candles[lastEvaluable - 1].openTime : null,
+    higherTimeframe,
+  });
 
-  let i = warmup;
+  if (start >= lastEvaluable) return report();
 
-  while (i < candles.length - 1) {
+  let i = start;
+
+  while (i < lastEvaluable) {
     // The engine sees history up to and including bar i, and nothing after it.
     const visible = candles.slice(0, i + 1);
-    const analysis = runAnalysis(visible);
+    const analysis = runAnalysis(visible, mtfOptionsFor(options.mtf, visible, candles[i]));
 
     if (analysis.status !== "POTENTIAL_SETUP" || !analysis.setup || !analysis.score) {
       i += 1;
@@ -125,7 +208,68 @@ export function runBacktest(
     i = trade.exitIndex !== null ? trade.exitIndex + 1 : candles.length;
   }
 
-  return results;
+  return report();
+}
+
+/**
+ * Index of the first candle opening at or after `openTime`, or the length of
+ * the series when every candle predates it.
+ */
+function firstIndexAtOrAfter(candles: Candle[], openTime: number): number {
+  let low = 0;
+  let high = candles.length;
+
+  while (low < high) {
+    const mid = (low + high) >> 1;
+    if (candles[mid].openTime < openTime) low = mid + 1;
+    else high = mid;
+  }
+
+  return low;
+}
+
+/**
+ * The higher-timeframe read as it stood when `current` closed.
+ *
+ * Returns nothing when no higher-timeframe candle had closed yet, which leaves
+ * the run single-timeframe for those bars rather than handing the trend
+ * detector a series too short to mean anything.
+ */
+function mtfOptionsFor(
+  input: BacktestMtfInput | undefined,
+  visible: Candle[],
+  current: Candle,
+): { mtf?: ReturnType<typeof analyzeMultiTimeframe> } {
+  if (!input) return {};
+
+  // Only candles that had already closed. A higher-timeframe candle still
+  // forming at this moment closes later, and its final shape is precisely the
+  // information the trader did not have.
+  const closed = input.candles.slice(0, countClosedBy(input.candles, current.closeTime));
+  if (closed.length === 0) return {};
+
+  return {
+    mtf: analyzeMultiTimeframe({
+      lowerCandles: visible,
+      higherCandles: closed,
+      lowerTimeframe: input.lowerTimeframe,
+      higherTimeframe: input.higherTimeframe,
+    }),
+  };
+}
+
+/** How many candles of a series had closed at or before `closeTime`. */
+function countClosedBy(candles: Candle[], closeTime: number): number {
+  let low = 0;
+  let high = candles.length;
+
+  while (low < high) {
+    const mid = (low + high) >> 1;
+    if (candles[mid].closeTime <= closeTime) low = mid + 1;
+    else high = mid;
+  }
+
+  return low;
 }
 
 interface SimulateInput {

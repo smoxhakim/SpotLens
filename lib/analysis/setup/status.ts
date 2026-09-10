@@ -130,6 +130,19 @@ export function determineStatus(
     };
   }
 
+  // Placed after the checks about where price is: "you are chasing" is the more
+  // useful thing to say when both are true. What this catches is a setup that
+  // is otherwise in good order but has no measured reward — the ratio reads
+  // 1:2.5 only because that is the multiple the fallback ladder used, so
+  // reaching POTENTIAL_SETUP on the strength of it would rest on arithmetic
+  // the chart never supplied.
+  if (riskReward.isSynthetic) {
+    return {
+      status: "WAIT_FOR_CONFIRMATION",
+      reason: `There is no resistance zone or prior high far enough above the entry to measure the reward against, so the targets shown are multiples of the risk rather than levels price has reacted to. The entry and the stop are sound; what is missing is evidence the move has somewhere to go. Wait for structure to form above, or check a higher timeframe where a target may already be visible.`,
+    };
+  }
+
   if (mtf?.agreement === "MIXED") {
     return {
       status: "WAIT_FOR_CONFIRMATION",

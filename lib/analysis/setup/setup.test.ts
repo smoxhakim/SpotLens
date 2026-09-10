@@ -243,4 +243,38 @@ describe("runAnalysis — determinism", () => {
     expect(() => runAnalysis(makeCandles([100]))).not.toThrow();
     expect(() => runAnalysis(makeCandles(new Array(80).fill(100)))).not.toThrow();
   });
+
+  describe("a reward that was never measured", () => {
+    it("does not reach POTENTIAL_SETUP on a ratio the fallback ladder invented", () => {
+      // extendedAboveSupport has no resistance zone above the entry, so every
+      // target on it is a multiple of the risk. Before the fix the headline
+      // ratio read 1:2.5 — the fallback multiple, restated — and nothing
+      // downstream knew the difference.
+      const result = runAnalysis(extendedAboveSupport());
+
+      expect(result.setup?.riskReward.isSynthetic).toBe(true);
+      expect(result.status).not.toBe("POTENTIAL_SETUP");
+    });
+
+    it("scores an unmeasured reward neutral rather than crediting it", () => {
+      const score = runAnalysis(extendedAboveSupport()).score!;
+      const category = score.breakdown.riskReward;
+
+      // Neutral is 40% of the category. A 1:2.5 ratio would have earned 80%.
+      expect(category.score).toBeCloseTo(category.max * 0.4);
+      expect(category.reason).toMatch(/cannot be measured|restating itself/i);
+    });
+
+    it("labels every target with where its price came from", () => {
+      const setup = runAnalysis(pullbackIntoSupport()).setup;
+
+      for (const target of setup?.takeProfits ?? []) {
+        expect(["STRUCTURAL", "R_MULTIPLE"]).toContain(target.kind);
+        // A structural target names the level it came from; a fallback says so.
+        if (target.kind === "R_MULTIPLE") {
+          expect(target.reason).toMatch(/target of convenience|multiple/i);
+        }
+      }
+    });
+  });
 });

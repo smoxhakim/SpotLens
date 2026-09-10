@@ -271,6 +271,20 @@ function scoreRiskReward(riskReward: RiskReward): ScoreCategory {
   const max = SCORE_WEIGHTS.riskReward;
   const { ratio } = riskReward;
 
+  // A ratio measured to an R-multiple is that multiple restated, so crediting
+  // it would score the fallback ladder's own constant. It is scored the way
+  // every other missing input is — neutral, and never as though the chart had
+  // shown a reward worth taking.
+  if (riskReward.isSynthetic) {
+    return {
+      score: max * 0.4,
+      max,
+      reason: `There is no structural target above the entry, so risk/reward cannot be measured — the 1:${ratio.toFixed(
+        1,
+      )} figure is the fallback multiple restating itself. Scored neutral rather than credited.`,
+    };
+  }
+
   if (ratio >= 3) {
     return { score: max, max, reason: `Risk/reward of 1:${ratio.toFixed(1)} is excellent.` };
   }

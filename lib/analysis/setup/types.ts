@@ -31,12 +31,25 @@ export interface StopLoss {
   atrMultiple: number;
 }
 
+/**
+ * Where a target's price came from.
+ *
+ * The distinction decides whether the reward is evidence or arithmetic. A
+ * STRUCTURAL target is a level price has actually reacted to, so the distance
+ * to it is a fact about the chart. An R_MULTIPLE target is `entry + risk × n`,
+ * so its reward-to-risk is `n` by construction no matter what the market is
+ * doing — it can fill a slot in the ladder, but it cannot be used as evidence
+ * that a setup is worth taking.
+ */
+export type TargetKind = "STRUCTURAL" | "R_MULTIPLE";
+
 export interface TakeProfitTarget {
   label: "TP1" | "TP2" | "TP3";
   level: number;
   reason: string;
   /** Reward-to-risk achieved at this target. */
   rr: number;
+  kind: TargetKind;
 }
 
 export interface RiskReward {
@@ -46,6 +59,12 @@ export interface RiskReward {
   reward: number;
   /** Which target the headline ratio measures to. */
   measuredTo: TakeProfitTarget["label"];
+  /**
+   * True when no structural target existed above the entry, so the ratio was
+   * measured to an R-multiple and is therefore a restatement of that multiple
+   * rather than a measurement of the chart.
+   */
+  isSynthetic: boolean;
   isPoor: boolean;
   reason: string;
 }
