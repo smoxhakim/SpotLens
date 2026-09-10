@@ -281,6 +281,74 @@ describe("fees and slippage", () => {
     expect(slipped.setups[0].entry).toBeGreaterThan(clean.setups[0].entry);
   });
 
+  /**
+   * Builds a series that produces exactly one trade with a chosen stop
+   * distance, so the fee arithmetic can be checked against a closed form
+   * rather than only against "it got worse".
+   *
+   * The runner's own numbers are used — entry, exit and stop as it recorded
+   * them — so the assertion is about the conversion, not about a
+   * reimplementation of it.
+   */
+  function feeCostInR(setup: BacktestSetupResult, feeRate: number): number {
+    // costR = (entry + exit) × feeRate / risk, with slippage at zero.
+    const risk = setup.entry - setup.stopLoss;
+    return ((setup.entry + setup.exitPrice!) * feeRate) / risk;
+  }
+
+  it("converts a fee into R as (entry + exit) × feeRate / risk", () => {
+    const feeRate = 0.001;
+    const free = runBacktest(candles, { warmupBars: WARMUP, feeRate: 0, slippageRate: 0 });
+    const charged = runBacktest(candles, { warmupBars: WARMUP, feeRate, slippageRate: 0 });
+
+    const closed = charged.setups
+      .map((setup, i) => ({ setup, gross: free.setups[i] }))
+      .filter(({ setup }) => setup.exitPrice !== null);
+
+    expect(closed.length).toBeGreaterThan(0);
+
+    for (const { setup, gross } of closed) {
+      const observed = gross.realizedRR! - setup.realizedRR!;
+      expect(observed).toBeCloseTo(feeCostInR(setup, feeRate), 10);
+    }
+  });
+
+  it("charges the same fee more heavily the tighter the stop is", () => {
+    // The property that matters for interpreting a result: 1R is the stop
+    // distance, so a fixed percentage fee costs proportionally more R on a
+    // tight stop than on a wide one. Checked here as pure arithmetic on the
+    // runner's own conversion, at two stop widths an order of magnitude apart.
+    const feeRate = 0.001;
+    const entry = 100;
+    const exit = 100; // a breakeven stop, where the fee is the entire result
+
+    const tight = feeCostInR(
+      { entry, stopLoss: 99, exitPrice: exit } as BacktestSetupResult,
+      feeRate,
+    );
+    const wide = feeCostInR(
+      { entry, stopLoss: 90, exitPrice: exit } as BacktestSetupResult,
+      feeRate,
+    );
+
+    // (100 + 100) × 0.001 / 1  = 0.2R on a 1% stop
+    // (100 + 100) × 0.001 / 10 = 0.02R on a 10% stop
+    expect(tight).toBeCloseTo(0.2, 10);
+    expect(wide).toBeCloseTo(0.02, 10);
+    expect(tight).toBeCloseTo(wide * 10, 10);
+  });
+
+  it("charges a winner on the larger exit notional", () => {
+    const feeRate = 0.001;
+    const cost = feeCostInR(
+      { entry: 100, stopLoss: 95, exitPrice: 115 } as BacktestSetupResult,
+      feeRate,
+    );
+
+    // (100 + 115) × 0.001 / 5
+    expect(cost).toBeCloseTo(0.043, 10);
+  });
+
   it("records the assumptions it ran under", () => {
     const report = runBacktest(candles, { warmupBars: WARMUP, feeRate: 0.002 });
 

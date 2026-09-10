@@ -11,8 +11,8 @@
 - **Auth:** Auth.js (NextAuth) v5, Prisma adapter, database sessions (revocable), Credentials + Google OAuth.
 - **Validation:** Zod on every API route input/output boundary.
 - **Realtime prices:** Browser connects directly to exchange public WebSocket (Binance) for ticker/candle streaming — no server-side WS relay needed, keeps infra boring.
-- **Rate limiting & queue:** Upstash Redis + `@upstash/ratelimit` for API rate limiting; Upstash QStash for async/long-running jobs (backtests, candle backfills) since Vercel functions are stateless/time-limited.
-- **Background/scheduled work:** Vercel Cron hitting internal `/api/cron/*` routes (candle refresh, queued backtest processing).
+- **Rate limiting:** Upstash Redis + `@upstash/ratelimit` for API rate limiting, falling back to an in-process sliding window when Upstash is not configured. **No job queue**: backtests run synchronously under a candle ceiling and the scanner is a local process, both by explicit decision.
+- **Background/scheduled work:** none hosted. The scanner is a local process (`npm run scanner`) that wakes on candle closes; backtests run inside the request that asks for them.
 - **Testing:** Vitest for unit tests (analysis engine math is the highest-risk code), Playwright for E2E, `@testing-library/react` for components.
 - **Billing (Phase 8):** Stripe Checkout + Billing Portal + webhooks.
 - **Monitoring:** Sentry (errors), UptimeRobot (uptime), Vercel Analytics (basic usage).
@@ -137,12 +137,12 @@ All tables via Prisma. Enums noted inline.
 - **Explanation layer:** two tiers, both templated and deterministic — not LLM-dependent for correctness; an optional LLM rephrasing pass can be layered on top later without changing numbers.
   - `lib/analysis/explain/` writes the individual sentences the engine embeds in its own output (`read.trend.reason`, each target's `reason`, and so on).
   - `lib/analysis/explanations/` assembles a finished `AnalysisResult` into an ordered, categorised, signal-tagged `Explanation[]`. It is a pure function of the result: it computes nothing, stores nothing, and makes no request. Consumers render the reasoning without knowing any trading rules, so the dashboard, a notification and a journal entry cannot end up wording the same verdict three different ways.
-- **Backtest runner** (`/lib/backtesting`): replays the Phase 2/3 engine bar-by-bar over stored candles, strictly using only candles up to the current bar index (guards against look-ahead bias), records BacktestSetup outcomes. Runs as an async job (QStash) since ranges can be long-running.
+- **Backtest runner** (`/lib/backtesting`): replays the engine bar-by-bar, strictly using only candles up to the current bar index (guards against look-ahead bias), and records BacktestSetup outcomes. Runs **synchronously inside the request** — SpotLens is local-only, so there is no queue and no worker; the candle ceiling per run is what keeps that safe.
 - **Realtime price client:** browser-side hook subscribing directly to Binance WebSocket streams; falls back to REST polling via TanStack Query on WS failure.
 - **Admin panel:** protected route group under `/app/admin`, reuses the same API routes with role-gated middleware.
 - **Auth module:** NextAuth config, Prisma adapter, credentials + OAuth providers, session callbacks that attach role/plan to session.
 - **Billing module:** Stripe SDK wrapper, webhook handler that syncs `Subscription` table.
-- **Job/cron routes:** `/api/cron/*` — protected by a shared secret header, triggered by Vercel Cron; also handle QStash callbacks for backtest processing.
+- **Job/cron routes:** none. Scheduled work is the local scanner process; backtests are synchronous.
 
 ## API design
 
@@ -187,10 +187,9 @@ All routes under `/app/api`. "Auth" = required session unless noted.
 
 **Backtesting**
 
-- `POST /api/backtest/run` — body `{tradingPairId, timeframe, startDate, endDate}`; creates `QUEUED` run, enqueues job, returns `{runId}` (auth; plan-gated volume via middleware)
+- `POST /api/backtest/run` — body `{tradingPairIds: string[], timeframes: Timeframe[], startDate, endDate, feeRate?, slippageRate?}`; runs **synchronously** and returns the finished report — metrics, per-dataset coverage, the assumptions it ran under, and the symbol/timeframe/score/target breakdowns (auth). Several markets and timeframes per run, bounded, so breakdowns are a real comparison.
 - `GET /api/backtest` — list caller's runs (auth)
-- `GET /api/backtest/:id` — run status + summary metrics (auth, owner-only)
-- `GET /api/backtest/:id/setups?cursor=` — paginated setup list (auth, owner-only)
+- `GET /api/backtest/:id` — run summary and its setups (auth, owner-only)
 
 **Admin** (auth, role=ADMIN)
 
@@ -210,7 +209,6 @@ All routes under `/app/api`. "Auth" = required session unless noted.
 **Jobs/ops**
 
 - `POST /api/cron/refresh-candles` — cron-secret protected
-- `POST /api/cron/process-backtests` — cron-secret / QStash-signature protected
 - `GET /api/health` — public, for uptime checks
 
 ## External services & integrations
@@ -218,7 +216,7 @@ All routes under `/app/api`. "Auth" = required session unless noted.
 - **Binance public REST + WebSocket API** — sole market data source at launch, accessed only through `MarketDataProvider` so a second provider can be added without touching engine/UI code.
 - **Neon** — managed Postgres, branch-per-environment (dev/staging/prod).
 - **Upstash Redis** — rate limiting counters.
-- **Upstash QStash** — async job dispatch for backtest runs and scheduled candle backfills (works within serverless function limits).
+- **Upstash QStash** — not used. Backtests run synchronously and the scanner is a local process, so no job dispatch is needed.
 - **Vercel Cron** — triggers `/api/cron/*` on schedule (e.g. every 1–5 min for active-pair candle refresh).
 - **NextAuth OAuth provider:** Google (email/password also supported via Credentials).
 - **Resend** — transactional email (verification, password reset, backtest-complete).

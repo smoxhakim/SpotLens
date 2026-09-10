@@ -89,6 +89,37 @@ test.describe("signed-in journey", () => {
     await page.getByLabel("To").fill("2025-05-01");
     await page.getByRole("button", { name: /Run backtest/ }).click();
 
+    // --- the API contract itself ------------------------------------------
+    //
+    // `page.request` carries the session cookie, so unlike the anonymous smoke
+    // test these reach schema validation instead of stopping at the auth guard.
+    // That is what makes them a test of the contract rather than of the ordering.
+
+    // The pre-Phase-G singular shape is gone, and `.strict()` rejects it.
+    const stale = await page.request.post("/api/backtest/run", {
+      data: {
+        tradingPairId: "00000000-0000-4000-8000-000000000000",
+        timeframe: "H4",
+        startDate: "2025-01-01",
+        endDate: "2025-03-01",
+      },
+    });
+    expect(stale.status()).toBe(400);
+    expect(await stale.text()).toMatch(/tradingPairIds/i);
+
+    // The current plural shape parses, and the request then reaches the range
+    // check beyond it — which is only possible if the body validated.
+    const current = await page.request.post("/api/backtest/run", {
+      data: {
+        tradingPairIds: ["00000000-0000-4000-8000-000000000000"],
+        timeframes: ["M1"],
+        startDate: "2025-01-01",
+        endDate: "2025-06-30",
+      },
+    });
+    expect(current.status()).toBe(400);
+    expect(await current.text()).toMatch(/needs about \d+ candles to evaluate/i);
+
     // Either a report or an honest "no setups" — both are valid outcomes, and
     // an engine that passes on most conditions will often produce the latter.
     await expect(
