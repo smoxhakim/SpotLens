@@ -10,12 +10,12 @@ export const dynamic = "force-dynamic";
 const paramsSchema = z.object({ id: z.string().uuid() });
 
 /** DELETE /api/watchlist/:id — owner only. */
-export async function DELETE(_req: Request, { params }: { params: { id: string } }) {
+export async function DELETE(_req: Request, { params }: { params: Promise<{ id: string }> }) {
   try {
     const guard = await requireUser();
     if (isDenied(guard)) return guard.response;
 
-    const { id } = paramsSchema.parse(params);
+    const { id } = paramsSchema.parse(await params);
 
     const existing = await prisma.watchlist.findUnique({ where: { id } });
     // Same 404 whether the row is missing or belongs to someone else, so this

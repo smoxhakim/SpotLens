@@ -12,12 +12,12 @@ export const dynamic = "force-dynamic";
 const paramsSchema = z.object({ pairId: z.string().uuid() });
 
 /** GET /api/pairs/:pairId/ticker — last price and 24h change. */
-export async function GET(req: Request, { params }: { params: { pairId: string } }) {
+export async function GET(req: Request, { params }: { params: Promise<{ pairId: string }> }) {
   try {
     const limited = await enforceRateLimit(req, RATE_LIMITS.marketData);
     if (limited) return limited;
 
-    const { pairId } = paramsSchema.parse(params);
+    const { pairId } = paramsSchema.parse(await params);
 
     const market = await findMarketByPairId(pairId);
     if (!market) return apiError("PAIR_NOT_FOUND", "Unknown trading pair.", 404);

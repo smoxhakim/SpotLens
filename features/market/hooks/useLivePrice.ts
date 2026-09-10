@@ -17,14 +17,16 @@ export interface LivePrice {
  * `useTicker` remains the fallback whenever this is disconnected.
  */
 export function useLivePrice(exchangeSymbol?: string) {
-  const [price, setPrice] = useState<LivePrice | null>(null);
+  // The symbol travels with the price so a tick from the previous symbol can be
+  // discarded on read. Clearing it from the effect instead would write state
+  // during a render pass and show one render of the old symbol's price.
+  const [tick, setTick] = useState<(LivePrice & { symbol: string }) | null>(null);
   const [connected, setConnected] = useState(false);
   const attemptRef = useRef(0);
 
   useEffect(() => {
     if (!exchangeSymbol || typeof window === "undefined") return;
 
-    setPrice(null);
     let socket: WebSocket | null = null;
     let retryTimer: ReturnType<typeof setTimeout> | undefined;
     let closed = false;
@@ -47,7 +49,8 @@ export function useLivePrice(exchangeSymbol?: string) {
           };
           const last = Number(data.c);
           if (!Number.isFinite(last)) return;
-          setPrice({
+          setTick({
+            symbol: exchangeSymbol,
             price: last,
             change24hPct: Number(data.P ?? 0),
             at: data.E ?? Date.now(),
@@ -79,6 +82,12 @@ export function useLivePrice(exchangeSymbol?: string) {
       setConnected(false);
     };
   }, [exchangeSymbol]);
+
+  // A tick belonging to a symbol we are no longer showing is not a price.
+  const price: LivePrice | null =
+    tick && tick.symbol === exchangeSymbol
+      ? { price: tick.price, change24hPct: tick.change24hPct, at: tick.at }
+      : null;
 
   return { price, connected };
 }

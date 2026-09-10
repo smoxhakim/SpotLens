@@ -24,12 +24,12 @@ const querySchema = z.object({
  * GET /api/pairs/:pairId/candles?timeframe=&from=&to=&limit=
  * Served through the read-through candle cache.
  */
-export async function GET(req: NextRequest, { params }: { params: { pairId: string } }) {
+export async function GET(req: NextRequest, { params }: { params: Promise<{ pairId: string }> }) {
   try {
     const limited = await enforceRateLimit(req, RATE_LIMITS.marketData);
     if (limited) return limited;
 
-    const { pairId } = paramsSchema.parse(params);
+    const { pairId } = paramsSchema.parse(await params);
     const query = querySchema.parse(Object.fromEntries(req.nextUrl.searchParams));
 
     if (query.from !== undefined && query.to !== undefined && query.from > query.to) {

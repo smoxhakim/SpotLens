@@ -148,7 +148,7 @@ New here? Start at `/learn/getting-started`, which walks the whole loop.
 
 ## Stack
 
-Next.js 14 (App Router) · TypeScript · Tailwind with shadcn-style primitives ·
+Next.js 16 (App Router) · TypeScript · Tailwind with shadcn-style primitives ·
 TradingView Lightweight Charts · TanStack Query · PostgreSQL + Prisma ·
 Auth.js v5 (credentials only) · Upstash Redis for rate limiting · Vitest ·
 Playwright.
@@ -244,7 +244,7 @@ Production refuses to start without `AUTH_SECRET` and a non-localhost
 ## Testing
 
 ```bash
-npm run test        # 237 Vitest unit tests — the analysis math is the priority surface
+npm run test        # 239 Vitest unit tests — the analysis math is the priority surface
 npm run e2e         # Playwright: a smoke suite and the full signed-in journey (port 3100)
 npm run lint
 npm run typecheck
@@ -253,6 +253,21 @@ npm run typecheck
 CI runs lint, typecheck and the unit tests on every push. E2E is manual — it
 drives the live exchange API, which is unreachable from GitHub's US-based
 runners, so run it locally or trigger it from the Actions tab.
+
+**Stop `npm run dev` before running E2E.** Next 16 refuses to start a second
+dev server in the same directory, and `npm run e2e` starts its own on 3100.
+Alternatively run the suite against a production build, which is what CI does
+and what the signed-in journey needs:
+
+```bash
+npm run build
+CI=1 AUTH_TRUST_HOST=true NEXTAUTH_URL=http://127.0.0.1:3100 npm run e2e
+```
+
+`AUTH_TRUST_HOST` is required because Auth.js only trusts the host in
+`NEXTAUTH_URL` when running a production build; without it sign-in returns
+"There is a problem with the server configuration" and the journey spec fails
+while every other spec passes.
 
 The engine's tests are written as behaviour, not arithmetic: a failure says
 "it offered a long in a downtrend", not "expected 1.42 to be 1.41". The

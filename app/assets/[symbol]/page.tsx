@@ -8,13 +8,13 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { EthicalChecklist } from "@/features/learning/components/EthicalChecklist";
 import { getAssetDetail } from "@/services/assets";
 
-export async function generateMetadata({ params }: { params: { symbol: string } }) {
-  const detail = await getAssetDetail(params.symbol);
+export async function generateMetadata({ params }: { params: Promise<{ symbol: string }> }) {
+  const detail = await getAssetDetail((await params).symbol);
   return { title: detail ? `${detail.asset.name} — SpotLens` : "Not found — SpotLens" };
 }
 
-export default async function AssetPage({ params }: { params: { symbol: string } }) {
-  const detail = await getAssetDetail(params.symbol);
+export default async function AssetPage({ params }: { params: Promise<{ symbol: string }> }) {
+  const detail = await getAssetDetail((await params).symbol);
   if (!detail) notFound();
 
   const { asset, checklist, exchangeSymbol } = detail;

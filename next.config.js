@@ -38,6 +38,13 @@ const securityHeaders = [
 const nextConfig = {
   reactStrictMode: true,
   poweredByHeader: false,
+  // Next 16 blocks requests for dev-only resources (/_next/hmr and friends)
+  // from hosts other than the one the dev server was addressed as. Playwright
+  // drives the app at 127.0.0.1 while the server announces localhost, so
+  // without this the client bundle never loads under test. Both entries are
+  // this machine's loopback, and the setting has no effect on a production
+  // build.
+  allowedDevOrigins: ["127.0.0.1", "localhost"],
   // Emits a self-contained server bundle for the Docker runtime stage.
   output: "standalone",
   images: {
