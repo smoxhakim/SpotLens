@@ -147,6 +147,52 @@ enum SetupEventType {
   INVALIDATED
 }
 
+/// What the user decided about a setup.
+///
+/// These are decisions, not trade states: SpotLens never places an order, so
+/// nothing here is produced by the system. Every transition is something a
+/// person chose.
+enum JournalDecision {
+  /// Recorded but not acted on yet.
+  WATCHING
+  /// Deliberately passed over. Research data, not an absence of data.
+  SKIPPED
+  /// The user entered a position themselves, on their own exchange.
+  TAKEN
+  /// Was watching or taken, then abandoned before an outcome existed.
+  CANCELLED
+  /// A taken position the user has since closed and recorded the result of.
+  CLOSED
+}
+
+/// Why a setup was passed over. Optional — never inferred, never required.
+enum JournalSkipReason {
+  LOW_CONFIDENCE
+  POOR_RR
+  BAD_REGIME
+  NO_CONFIRMATION
+  PERSONAL_RULE
+  MARKET_CONDITION
+  MISSED_ENTRY
+  OTHER
+}
+
+/// How a manually taken position ended. Recorded by the user, never inferred.
+enum TradeExitReason {
+  TAKE_PROFIT
+  STOP_LOSS
+  MANUAL_EXIT
+  INVALIDATED
+  OTHER
+}
+
+enum JournalEventType {
+  CREATED
+  DECISION_CHANGED
+  OUTCOME_RECORDED
+  NOTE_ADDED
+}
+
 enum YesNoUnclear {
   YES
   NO
@@ -196,6 +242,7 @@ model User {
   subscription       Subscription?
   auditLogs          AdminAuditLog[]
   checklistsUpdated  EthicalChecklist[]      @relation("ChecklistUpdatedBy")
+  JournalEntry       JournalEntry[]
 }
 
 // --- NextAuth Prisma adapter tables (standard shape) -----------------------
@@ -507,9 +554,10 @@ model TrackedSetup {
   /// Reference rather than a second copy of the same analysis.
   analysisSnapshotId String?
 
-  user        User         @relation(fields: [userId], references: [id], onDelete: Cascade)
-  tradingPair TradingPair  @relation(fields: [tradingPairId], references: [id], onDelete: Cascade)
-  events      SetupEvent[]
+  user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tradingPair  TradingPair   @relation(fields: [tradingPairId], references: [id], onDelete: Cascade)
+  events       SetupEvent[]
+  journalEntry JournalEntry?
 
   @@index([userId, tradingPairId, timeframe, status])
   @@index([userId, createdAt])
@@ -709,4 +757,82 @@ model TelegramConnection {
   updatedAt DateTime @updatedAt
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+/// One human decision about one setup.
+///
+/// The journal answers a different question from everything else in the
+/// schema. `TrackedSetup` records what the engine said; this records what the
+/// person did about it, and the two are deliberately kept apart so neither can
+/// be mistaken for the other.
+///
+/// It carries no copy of the engine's numbers. The setup's snapshot is already
+/// immutable — written once at creation and never rewritten — so duplicating
+/// it here would create a second version of the same truth that could drift
+/// from the first. The only engine fact frozen here is the lifecycle state at
+/// the moment of the decision, because that one *does* keep changing.
+///
+/// One entry per setup per user, enforced by the unique index: journaling the
+/// same setup twice is a mistake, not a second opinion.
+model JournalEntry {
+  id             String @id @default(uuid())
+  userId         String
+  trackedSetupId String
+
+  decision JournalDecision @default(WATCHING)
+
+  /// Where the setup was in its lifecycle when this decision was made. Frozen,
+  /// because the setup will move on and the decision was made against this.
+  setupStatusAtDecision SetupLifecycleStatus
+  /// The moment the decision was made — and the cutoff a replay reconstructs to.
+  decidedAt             DateTime             @default(now())
+
+  skipReason JournalSkipReason?
+  notes      String?
+
+  // --- the actual trade, when one was taken -------------------------------
+  //
+  // Deliberately separate from the setup's own entry/stop/target: the user's
+  // fill is rarely the plan, and overwriting the plan with the fill would
+  // destroy the only record of the difference between them.
+  actualEntry      Decimal?         @db.Decimal(24, 8)
+  actualStopLoss   Decimal?         @db.Decimal(24, 8)
+  actualTakeProfit Decimal?         @db.Decimal(24, 8)
+  actualExit       Decimal?         @db.Decimal(24, 8)
+  quantity         Decimal?         @db.Decimal(30, 8)
+  fees             Decimal?         @db.Decimal(24, 8)
+  slippage         Decimal?         @db.Decimal(24, 8)
+  exitReason       TradeExitReason?
+  openedAt         DateTime?
+  closedAt         DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user         User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  trackedSetup TrackedSetup   @relation(fields: [trackedSetupId], references: [id], onDelete: Cascade)
+  events       JournalEvent[]
+
+  @@unique([trackedSetupId])
+  @@index([userId, decidedAt])
+  @@index([userId, decision])
+}
+
+/// An append-only record of how a decision changed.
+///
+/// "What did I decide?" is rarely one answer — a setup gets watched, then
+/// taken, then closed — and the sequence is the interesting part. Overwriting
+/// `decision` alone would keep only the last frame of it.
+model JournalEvent {
+  id             String           @id @default(uuid())
+  journalEntryId String
+  type           JournalEventType
+  fromDecision   JournalDecision?
+  toDecision     JournalDecision
+  detail         String
+  createdAt      DateTime         @default(now())
+
+  journalEntry JournalEntry @relation(fields: [journalEntryId], references: [id], onDelete: Cascade)
+
+  @@index([journalEntryId, createdAt])
 }
