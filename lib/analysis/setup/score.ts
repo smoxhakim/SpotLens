@@ -1,5 +1,6 @@
 import type { MarketRead } from "../market-read";
 import type { MtfSummary } from "../mtf";
+import { MIN_MEANINGFUL_TARGET_R } from "./risk-reward";
 import type { EntryZone, RiskReward } from "./types";
 import { GOOD_RR, MIN_ACCEPTABLE_RR } from "./types";
 
@@ -272,16 +273,24 @@ function scoreRiskReward(riskReward: RiskReward): ScoreCategory {
   const { ratio } = riskReward;
 
   // A ratio measured to an R-multiple is that multiple restated, so crediting
-  // it would score the fallback ladder's own constant. It is scored the way
-  // every other missing input is — neutral, and never as though the chart had
-  // shown a reward worth taking.
+  // it would score the fallback ladder's own constant.
+  //
+  // Scored zero rather than neutral, and the distinction is load bearing. The
+  // neutral 40% the other categories use means "this input could not be
+  // computed" — true of RSI on forty candles. An absent target is not an
+  // uncomputed input; it is a fact about the chart, and a discouraging one.
+  // Scoring it neutral also created a rank inversion: a real resistance level
+  // 1.2R above the entry scores 20% of this category, so "no target at all"
+  // would have outscored "a target, measured, and mediocre" by two to one.
+  // Since a target only qualifies as structural once it is at least 1R away,
+  // every measured ratio now scores above every unmeasured one.
   if (riskReward.isSynthetic) {
     return {
-      score: max * 0.4,
+      score: 0,
       max,
-      reason: `There is no structural target above the entry, so risk/reward cannot be measured — the 1:${ratio.toFixed(
+      reason: `There is no structural target at least ${MIN_MEANINGFUL_TARGET_R}× the risk above the entry, so risk/reward cannot be measured — the 1:${ratio.toFixed(
         1,
-      )} figure is the fallback multiple restating itself. Scored neutral rather than credited.`,
+      )} figure is the fallback multiple restating itself. It earns nothing here: an unmeasured reward is not a good one.`,
     };
   }
 

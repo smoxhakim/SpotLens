@@ -7,35 +7,35 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
+import { STATUS_LABELS, buildExplanations } from "@/lib/analysis";
 import type { AnalysisResult, SetupScore, TradeStatus } from "@/lib/analysis";
 import { formatPrice } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
+import { ExplanationList } from "./ExplanationList";
 import { LearnLink } from "./LearnLink";
 import { MtfPanel } from "./MtfPanel";
 import { WhyDisclosure } from "./WhyDisclosure";
 
-const STATUS_META: Record<
-  TradeStatus,
-  { label: string; Icon: typeof CheckCircle2; className: string }
-> = {
+/**
+ * Presentation only. The labels come from `STATUS_LABELS` in the engine — a
+ * second copy of them here is how "Avoid for now" and "Avoid" end up on two
+ * different screens describing the same verdict.
+ */
+const STATUS_STYLE: Record<TradeStatus, { Icon: typeof CheckCircle2; className: string }> = {
   POTENTIAL_SETUP: {
-    label: "Potential setup",
     Icon: CheckCircle2,
     className: "border-bullish/40 bg-bullish/10 text-bullish",
   },
   WAIT_FOR_CONFIRMATION: {
-    label: "Wait for confirmation",
     Icon: Clock,
     className: "border-amber-500/40 bg-amber-500/10 text-amber-600 dark:text-amber-400",
   },
   HIGH_RISK: {
-    label: "High risk",
     Icon: AlertTriangle,
     className: "border-orange-500/40 bg-orange-500/10 text-orange-600 dark:text-orange-400",
   },
   AVOID: {
-    label: "Avoid for now",
     Icon: XCircle,
     className: "border-bearish/40 bg-bearish/10 text-bearish",
   },
@@ -103,9 +103,10 @@ export function TradeSetupPanel({ result, isPending, error, asOf }: TradeSetupPa
     );
   }
 
-  const status = STATUS_META[result.status];
+  const status = STATUS_STYLE[result.status];
   const { Icon } = status;
   const setup = result.setup;
+  const explanations = buildExplanations(result);
 
   return (
     <Card>
@@ -124,12 +125,14 @@ export function TradeSetupPanel({ result, isPending, error, asOf }: TradeSetupPa
         <div className={cn("rounded-lg border p-3", status.className)}>
           <div className="flex items-center gap-2 text-sm font-semibold">
             <Icon className="h-4 w-4" />
-            {status.label}
+            {STATUS_LABELS[result.status].label}
           </div>
           <p className="mt-1.5 text-[11px] leading-relaxed opacity-90">{result.statusReason}</p>
         </div>
 
         <LearnLink concept="status" label="What these four statuses mean" />
+
+        <ExplanationList explanations={explanations} />
 
         {result.mtf && <MtfPanel mtf={result.mtf} />}
 
@@ -207,10 +210,18 @@ export function TradeSetupPanel({ result, isPending, error, asOf }: TradeSetupPa
                 <span className="text-[10px] text-muted-foreground">
                   to {setup.riskReward.measuredTo}
                 </span>
-                {setup.riskReward.isPoor && (
+                {setup.riskReward.isSynthetic ? (
+                  // Without this the ratio reads as a measured one. It is the
+                  // fallback multiple restating itself, and it scores zero.
                   <Badge variant="bearish" className="text-[9px]">
-                    poor
+                    unmeasured
                   </Badge>
+                ) : (
+                  setup.riskReward.isPoor && (
+                    <Badge variant="bearish" className="text-[9px]">
+                      poor
+                    </Badge>
+                  )
                 )}
               </div>
               <WhyDisclosure>{setup.riskReward.reason}</WhyDisclosure>

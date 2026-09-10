@@ -12,7 +12,7 @@ import { GOOD_RR, MIN_ACCEPTABLE_RR } from "./types";
  * risk, and it is already the threshold the status engine treats as
  * disqualifying.
  */
-const MIN_MEANINGFUL_TARGET_R = 1;
+export const MIN_MEANINGFUL_TARGET_R = 1;
 
 /**
  * Risk/reward, measured to the second structural target where one exists.

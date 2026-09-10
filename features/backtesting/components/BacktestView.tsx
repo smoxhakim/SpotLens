@@ -182,6 +182,8 @@ function Report({ data }: { data: BacktestResponse }) {
           <p className="text-[11px] leading-relaxed text-muted-foreground">
             {data.warmupBars} further candles were read from before the range as history, so the
             indicators were already warm on its first bar — they are not part of what was tested.
+            This is a sample from the recent past, not a full historical evaluation: a run covers at
+            most a few hundred candles.
             {data.higherTimeframe
               ? ` The ${TIMEFRAME_LABELS[data.higherTimeframe]} trend was read alongside it, using only candles that had closed at the time, exactly as a multi-timeframe analysis would.`
               : ""}

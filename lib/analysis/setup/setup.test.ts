@@ -256,13 +256,27 @@ describe("runAnalysis — determinism", () => {
       expect(result.status).not.toBe("POTENTIAL_SETUP");
     });
 
-    it("scores an unmeasured reward neutral rather than crediting it", () => {
+    it("gives an unmeasured reward nothing rather than crediting it", () => {
       const score = runAnalysis(extendedAboveSupport()).score!;
       const category = score.breakdown.riskReward;
 
-      // Neutral is 40% of the category. A 1:2.5 ratio would have earned 80%.
-      expect(category.score).toBeCloseTo(category.max * 0.4);
-      expect(category.reason).toMatch(/cannot be measured|restating itself/i);
+      // Zero, not the 40% the other categories use for an input they could
+      // not compute. An absent target is a fact about the chart, not a gap in
+      // the data — and scoring it neutral let "no target" outrank a real
+      // level at 1.2R, which scores 20% of the category.
+      expect(category.score).toBe(0);
+      expect(category.reason).toMatch(/cannot be measured|earns nothing/i);
+    });
+
+    it("never lets an unmeasured reward outscore a measured one", () => {
+      // The rank inversion, closed by construction: a target only counts as
+      // structural once it is at least 1R away, so every measured ratio lands
+      // in a scoring band above zero.
+      const unmeasured = runAnalysis(extendedAboveSupport()).score!.breakdown.riskReward;
+      const measured = runAnalysis(pullbackIntoSupport()).score!.breakdown.riskReward;
+
+      expect(unmeasured.score).toBe(0);
+      expect(measured.score).toBeGreaterThan(unmeasured.score);
     });
 
     it("labels every target with where its price came from", () => {

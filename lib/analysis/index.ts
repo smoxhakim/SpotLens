@@ -36,8 +36,13 @@ export {
   defaultHigherTimeframe,
   isValidTimeframePair,
   HIGHER_TIMEFRAME,
+  MTF_AGREEMENT_LABELS,
 } from "./mtf";
 export type { MtfSummary, MtfAgreement } from "./mtf";
+
+export { buildExplanations } from "./explanations";
+export { EXPLANATION_ORDER, EXPLANATION_CATEGORY_LABELS } from "./explanations";
+export type { Explanation, ExplanationCategory, ExplanationSignal } from "./explanations";
 
 export { explainTrend, explainStructure, explainEmaAlignment } from "./explain/trend";
 export { explainZone, explainZones, explainZoneWidth } from "./explain/zones";

@@ -52,10 +52,45 @@ Branch `fix/phase-a-correctness`, on top of `chore/upgrade-next-16`.
       now measured to a structural target at least 1R away; when none exists
       it is flagged `isSynthetic`, scored neutral rather than credited, and
       cannot reach POTENTIAL_SETUP.
-- [x] Tests: 263 unit (was 237), including deliberate re-introduction of each
+- [x] **Supporting fix — blank optional env vars.** `UPSTASH_REDIS_REST_URL=`
+      with an empty value parsed as present-but-invalid and stopped the
+      production server booting outright, which blocked local E2E against a
+      production build. Blanks are now treated as unset, which is what
+      `.optional()` already implied.
+- [x] Tests: 264 unit (was 237), including deliberate re-introduction of each
       defect to confirm the new tests catch it. 27 Playwright specs pass.
 
-Next up, once reviewed: **Phase B — structured explanations.**
+### Known limitation — backtest sample size
+
+A run evaluates at most **740 candles**, because pre-roll (260) and the
+evaluated range share a single 1000-candle exchange page. **Do not read a
+backtest as a full historical evaluation**: on H4 that is about four months,
+and on H1 about a month. It is a sample from the recent past, and a small one.
+Deeper history needs pagination, which is deferred to Phase G by decision.
+
+## Phase B — structured explanations (done, awaiting review)
+
+Branch `feat/phase-b-structured-explanations`.
+
+- [x] `lib/analysis/explanations/` — an `Explanation` model (id, category,
+      signal, title, detail) and `buildExplanations(result)`, a pure function
+      over a finished `AnalysisResult`. It computes nothing and reaches nothing.
+- [x] Ten categories in a fixed order, ending on the verdict. A category with
+      nothing to say is omitted rather than padded — there is no price-position
+      entry when no entry zone exists.
+- [x] Removed duplicated strategy wording from components: `TradeSetupPanel`
+      held its own copy of the four status labels, and `MtfPanel` its own copy
+      of the five MTF classification labels. Both now read the engine's
+      (`STATUS_LABELS`, `MTF_AGREEMENT_LABELS`); the components keep only
+      colour and icon.
+- [x] Phase A's risk/reward rule is restated, not relaxed: an unmeasured reward
+      is `negative`, never `neutral`, and the ratio now carries an "unmeasured"
+      badge in the setup panel so a synthetic 1:2.5 cannot be read as a
+      measured one.
+- [x] 35 tests, including injected-defect checks for the synthetic signal and
+      the ordering guarantee. 299 unit total, 27 E2E.
+
+Next up, once reviewed: **Phase C — strict confirmation engine.**
 
 ## Phase 1 — Chart Foundation ✅
 
