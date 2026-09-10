@@ -50,6 +50,21 @@ export const HIGHER_TIMEFRAME: Record<Timeframe, Timeframe | null> = {
   W1: null,
 };
 
+/**
+ * Short labels for each classification.
+ *
+ * Here rather than in a component because the classification is a piece of
+ * strategy, not of presentation: the dashboard, an explanation list and a
+ * future notification all have to call a counter-trend bounce the same thing.
+ */
+export const MTF_AGREEMENT_LABELS: Record<MtfAgreement, string> = {
+  ALIGNED_BULLISH: "Timeframes aligned",
+  ALIGNED_BEARISH: "Both bearish",
+  PULLBACK_IN_UPTREND: "Pullback in an uptrend",
+  COUNTER_TREND_BOUNCE: "Counter-trend bounce",
+  MIXED: "No clear higher-timeframe direction",
+};
+
 export function defaultHigherTimeframe(lower: Timeframe): Timeframe | null {
   return HIGHER_TIMEFRAME[lower];
 }

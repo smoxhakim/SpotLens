@@ -4,6 +4,7 @@ import { AlertTriangle, ArrowRight, Minus, TrendingDown, TrendingUp } from "luci
 
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
+import { MTF_AGREEMENT_LABELS } from "@/lib/analysis";
 import type { MtfAgreement, MtfSummary } from "@/lib/analysis";
 import { TIMEFRAME_LABELS } from "@/lib/market-data/provider";
 import { cn } from "@/lib/utils";
@@ -17,18 +18,23 @@ const TREND_META = {
   SIDEWAYS: { label: "Sideways", variant: "neutral" as const, Icon: Minus },
 };
 
-const AGREEMENT_META: Record<MtfAgreement, { label: string; className: string }> = {
-  ALIGNED_BULLISH: { label: "Timeframes aligned", className: "text-bullish" },
-  ALIGNED_BEARISH: { label: "Both bearish", className: "text-bearish" },
-  PULLBACK_IN_UPTREND: { label: "Pullback in an uptrend", className: "text-bullish" },
-  COUNTER_TREND_BOUNCE: { label: "Counter-trend bounce", className: "text-bearish" },
-  MIXED: { label: "No clear higher-timeframe direction", className: "text-muted-foreground" },
+/**
+ * Presentation only. The labels themselves live with the classification in
+ * `lib/analysis/mtf`, so a counter-trend bounce is called the same thing here,
+ * in the explanation list, and anywhere else that reads a classification.
+ */
+const AGREEMENT_TONE: Record<MtfAgreement, string> = {
+  ALIGNED_BULLISH: "text-bullish",
+  ALIGNED_BEARISH: "text-bearish",
+  PULLBACK_IN_UPTREND: "text-bullish",
+  COUNTER_TREND_BOUNCE: "text-bearish",
+  MIXED: "text-muted-foreground",
 };
 
 export function MtfPanel({ mtf }: { mtf: MtfSummary }) {
   const higher = TREND_META[mtf.higherTrend];
   const lower = TREND_META[mtf.lowerTrend];
-  const agreement = AGREEMENT_META[mtf.agreement];
+  const agreementTone = AGREEMENT_TONE[mtf.agreement];
 
   return (
     <section className="space-y-2">
@@ -50,7 +56,9 @@ export function MtfPanel({ mtf }: { mtf: MtfSummary }) {
         />
       </div>
 
-      <p className={cn("text-[11px] font-medium", agreement.className)}>{agreement.label}</p>
+      <p className={cn("text-[11px] font-medium", agreementTone)}>
+        {MTF_AGREEMENT_LABELS[mtf.agreement]}
+      </p>
 
       {mtf.conflictNote && (
         <Alert variant="warning">

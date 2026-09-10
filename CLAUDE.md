@@ -24,6 +24,12 @@ make that unnecessary most of the time.
   for a trade just advised against defeats the point.
 - **Every number carries a reason.** The engine decides; `lib/analysis/explain`
   phrases it. AI never produces a number.
+- **Explanations are structured, not prose stitched in components.**
+  `lib/analysis/explanations` turns a finished `AnalysisResult` into an ordered
+  `Explanation[]` (category, signal, title, detail). It is pure — it explains
+  the score, it never computes one. UI renders that list; it must not re-derive
+  strategy meaning. A label that describes a verdict (a status, an MTF
+  classification) belongs in the engine, not in a component.
 - **Disclaimers come from `lib/constants/disclaimers.ts`.** Never inline the
   wording.
 - **No meme coins.** The curated list is `lib/market-data/curated-assets.ts`.
