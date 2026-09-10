@@ -1,3 +1,4 @@
+import type { ConfirmationResult } from "../confirmation";
 import { explainStructure } from "../explain/trend";
 import type { MarketRead } from "../market-read";
 import { type MtfAgreement, type MtfSummary, MTF_AGREEMENT_LABELS } from "../mtf";
@@ -45,7 +46,7 @@ export function buildExplanations(result: AnalysisResult): Explanation[] {
     volumeExplanation(result.read),
     pricePositionExplanation(result.setup),
     riskRewardExplanation(result.setup, result.score),
-    confirmationExplanation(result.setup),
+    confirmationExplanation(result.setup, result.confirmation),
     statusExplanation(result.status, result.statusReason),
   ].filter((entry): entry is Explanation => entry !== null);
 
@@ -390,15 +391,50 @@ function riskRewardFromSetup(riskReward: RiskReward): Explanation {
 }
 
 /**
- * The entry checklist, as a checklist.
+ * What the market has actually done at the level.
  *
- * Deliberately `neutral` and deliberately phrased as outstanding. The engine
- * has no notion of a confirmation having *occurred* — detecting that is a
- * separate piece of work — so claiming either way here would be asserting
- * something no calculation supports.
+ * Until the confirmation engine existed this could only ever restate the entry
+ * checklist, because nothing computed whether any of it had happened. It now
+ * reports the deterministic verdict, and falls back to the checklist only when
+ * there is no confirmation result to report.
  */
-function confirmationExplanation(setup: TradeSetup | null): Explanation | null {
-  if (!setup || setup.entry.confirmations.length === 0) return null;
+function confirmationExplanation(
+  setup: TradeSetup | null,
+  confirmation: ConfirmationResult | null,
+): Explanation | null {
+  if (!setup) return null;
+
+  if (confirmation) {
+    if (confirmation.status === "PRESENT") {
+      return {
+        id: "CONFIRMATION:present",
+        category: "CONFIRMATION",
+        signal: "positive",
+        title: `Confirmed by ${confirmation.signals.filter((s) => s.signal === "positive").length} signals`,
+        detail: confirmation.explanation,
+      };
+    }
+
+    if (confirmation.status === "CONTRADICTED") {
+      return {
+        id: "CONFIRMATION:contradicted",
+        category: "CONFIRMATION",
+        signal: "negative",
+        title: "Confirmation is contradicted",
+        detail: confirmation.explanation,
+      };
+    }
+
+    return {
+      id: "CONFIRMATION:not-present",
+      category: "CONFIRMATION",
+      signal: "neutral",
+      title: "Confirmation still to be seen",
+      detail: confirmation.explanation,
+    };
+  }
+
+  if (setup.entry.confirmations.length === 0) return null;
 
   return {
     id: "CONFIRMATION:checklist",

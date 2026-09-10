@@ -1,5 +1,6 @@
 import { formatPrice } from "@/lib/format";
 
+import type { ConfirmationResult } from "../confirmation";
 import type { MarketRead } from "../market-read";
 import type { MtfSummary } from "../mtf";
 import { EXTENDED_ATR_MULTIPLE } from "./entry";
@@ -26,6 +27,7 @@ export function determineStatus(
   riskReward: RiskReward,
   score: SetupScore,
   mtf?: MtfSummary,
+  confirmation?: ConfirmationResult,
 ): StatusVerdict {
   // --- Disqualifying conditions ------------------------------------------
 
@@ -167,6 +169,20 @@ export function determineStatus(
     };
   }
 
+  // --- Confirmation -------------------------------------------------------
+  //
+  // Last, and last on purpose. Every disqualifier above has already run, so
+  // this gate can only ever hold a setup at WAIT — it has no path by which it
+  // could promote one past the counter-trend veto, an unmeasured reward, or a
+  // failing grade. A setup that reaches here is well formed; the only question
+  // left is whether the market has done anything at the level yet.
+  if (confirmation && confirmation.status !== "PRESENT") {
+    return {
+      status: "WAIT_FOR_CONFIRMATION",
+      reason: `${confirmation.explanation} The setup itself is sound — entry, stop and targets are all defined — but a level that has not yet been defended is a level, not a trade.`,
+    };
+  }
+
   // --- Everything checked out --------------------------------------------
 
   return {
@@ -175,7 +191,9 @@ export function determineStatus(
       entry.high,
     )}, the trend supports a long, and risk/reward is 1:${riskReward.ratio.toFixed(
       1,
-    )}. The setup scores ${score.total}/100. This is a candidate to watch for confirmation, not an instruction to buy.`,
+    )}. The setup scores ${score.total}/100.${
+      confirmation ? ` ${confirmation.explanation}` : ""
+    } This is a candidate to review yourself, not an instruction to buy.`,
   };
 }
 
