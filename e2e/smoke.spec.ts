@@ -120,27 +120,29 @@ test("the analysis API validates its input", async ({ request }) => {
 test("the risk calculator sizes a position from the stop distance", async ({ page }) => {
   await page.goto("/risk-calculator");
 
-  await page.getByLabel("Portfolio balance").fill("10000");
+  await page.getByLabel("Account balance").fill("10000");
   await page.getByLabel("Risk per trade (%)").fill("1");
   await page.getByLabel("Entry price").fill("100");
-  await page.getByLabel("Stop loss price").fill("90");
+  await page.getByLabel("Stop loss").fill("90");
 
-  // Risking 1% of 10,000 = 100, with a 10-wide stop, is exactly 10 units.
-  await expect(page.getByTestId("position-size")).toContainText("10");
+  // Risking 1% of 10,000 is 100. With a 10-wide stop that is 10 units, costing
+  // 1,000 to hold — the three numbers the product exists to keep distinct.
   await expect(page.getByTestId("risk-amount")).toContainText("100");
-  await expect(page.getByTestId("position-value")).toContainText("1,000");
+  await expect(page.getByTestId("position-quantity")).toContainText("10");
+  await expect(page.getByTestId("position-size")).toContainText("1000");
   await expect(page.getByText(/never risk money that you cannot afford to lose/i)).toBeVisible();
 });
 
 test("the risk calculator refuses a stop above the entry", async ({ page }) => {
   await page.goto("/risk-calculator");
 
-  await page.getByLabel("Portfolio balance").fill("10000");
+  await page.getByLabel("Account balance").fill("10000");
   await page.getByLabel("Risk per trade (%)").fill("1");
   await page.getByLabel("Entry price").fill("100");
-  await page.getByLabel("Stop loss price").fill("110");
+  await page.getByLabel("Stop loss").fill("110");
 
-  await expect(page.getByText(/stop loss must be below the entry price/i)).toBeVisible();
+  // A named, per-field error rather than a blank result.
+  await expect(page.getByText(/stop loss must be below the entry/i)).toBeVisible();
 });
 
 test("user-scoped pages ask for sign-in rather than failing", async ({ page }) => {
@@ -160,15 +162,24 @@ test("user-scoped API routes reject anonymous callers", async ({ request }) => {
 
 test("position size API validates and computes", async ({ request }) => {
   const ok = await request.post("/api/risk/position-size", {
-    data: { balance: 10000, riskPercent: 1, entry: 100, stopLoss: 90 },
+    data: { balance: 10000, riskPercent: 1, entry: 100, stopLoss: 90, feeRate: 0 },
   });
   expect(ok.ok()).toBeTruthy();
-  expect((await ok.json()).positionSize).toBe(10);
+
+  const body = await ok.json();
+  expect(body.quantity).toBe(10);
+  expect(body.positionQuote).toBe(1000);
+  expect(body.intendedRiskAmount).toBe(100);
+  // Capital, risk and position are three different numbers, and the response
+  // keeps them that way.
+  expect(body.balance).toBe(10000);
 
   const bad = await request.post("/api/risk/position-size", {
     data: { balance: 10000, riskPercent: 1, entry: 100, stopLoss: 110 },
   });
   expect(bad.status()).toBe(400);
+  // Structured, per-field, so a caller can say which input was wrong.
+  expect((await bad.json()).errors[0].field).toBe("stopLoss");
 });
 
 test("multi-timeframe analysis reports both timeframes", async ({ page }) => {

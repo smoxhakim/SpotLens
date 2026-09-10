@@ -1,4 +1,5 @@
 import { RISK_DISCLAIMER } from "@/lib/constants/disclaimers";
+import { calculateRisk } from "@/lib/risk";
 
 export interface PositionSizeInput {
   /** Total account balance in quote currency. */
@@ -26,26 +27,41 @@ export interface PositionSizeResult {
  *
  * This is the calculation that decides whether a losing trade is survivable,
  * which is why it belongs beside the setup rather than in a separate tool.
+ *
+ * Since Phase H the arithmetic lives in `lib/risk`, and this is the adapter
+ * that keeps the older, narrower shape its existing callers expect. Two
+ * implementations of the same formula is exactly how a risk figure and a
+ * position size start disagreeing, so there is only one.
+ *
+ * Deliberately reports the **uncapped** size and warns when it exceeds the
+ * balance, rather than capping. That is the behaviour this function has always
+ * had and what its callers render; the full calculator in `lib/risk` is where
+ * the cap, the costs and the profit figures live.
  */
 export function calculatePositionSize(input: PositionSizeInput): PositionSizeResult | null {
-  const { balance, riskPercent, entry, stopLoss } = input;
+  const result = calculateRisk({
+    balance: input.balance,
+    riskPercent: input.riskPercent,
+    entry: input.entry,
+    stopLoss: input.stopLoss,
+    // No costs and no cap: this shape predates both, and adding either here
+    // would silently change numbers already on screen elsewhere.
+    feeRate: 0,
+    slippageRate: 0,
+  });
 
-  if (!Number.isFinite(balance) || balance <= 0) return null;
-  if (!Number.isFinite(riskPercent) || riskPercent <= 0 || riskPercent > 100) return null;
-  if (!Number.isFinite(entry) || entry <= 0) return null;
-  if (!Number.isFinite(stopLoss) || stopLoss <= 0 || stopLoss >= entry) return null;
+  if (!result.ok) return null;
 
-  const riskAmount = balance * (riskPercent / 100);
-  const riskPerUnit = entry - stopLoss;
-  const positionSize = riskAmount / riskPerUnit;
-  const positionValue = positionSize * entry;
-  const positionPctOfBalance = positionValue / balance;
+  const { calculation } = result;
+  const positionSize = calculation.uncappedQuantity;
+  const positionValue = calculation.uncappedPositionQuote;
+  const positionPctOfBalance = positionValue / input.balance;
 
   const notes = [
-    `Risking ${riskPercent}% of ${balance} means a maximum loss of ${riskAmount.toFixed(2)} if the stop is hit.`,
+    `Risking ${input.riskPercent}% of ${input.balance} means a maximum loss of ${calculation.intendedRiskAmount.toFixed(2)} if the stop is hit.`,
   ];
 
-  if (positionValue > balance) {
+  if (positionValue > input.balance) {
     notes.push(
       `This position would cost ${positionValue.toFixed(2)}, which is more than the whole balance. On spot you cannot buy it without leverage, which SpotLens does not support — either accept a smaller position and a smaller risk, or skip the trade.`,
     );
@@ -60,7 +76,7 @@ export function calculatePositionSize(input: PositionSizeInput): PositionSizeRes
   return {
     positionSize,
     positionValue,
-    riskAmount,
+    riskAmount: calculation.intendedRiskAmount,
     positionPctOfBalance,
     note: notes.join(" "),
   };

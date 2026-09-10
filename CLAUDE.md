@@ -78,6 +78,20 @@ WAITING_CONFIRMATION` is price arriving somewhere, not structure changing,
   than looping when a page makes no progress. `checkIntegrity` refuses
   duplicated or out-of-order candles outright and reports gaps without
   fabricating anything.
+- **Capital is not risk.** `lib/risk` sizes from the stop distance: 100 balance
+  at 1% with a 5%-away stop buys a **20** position risking **1**. On spot the
+  position is capped at the balance (or a tighter exposure limit) — and a capped
+  position then risks **less** than intended, which is reported as two separate
+  numbers rather than silently rewritten. A tighter stop must never become an
+  argument for leverage.
+- **Regime is context, never a decision.** `lib/regime` classifies from a
+  finished `MarketRead`, so it cannot see anything the engine did not and the
+  engine never receives it — `runAnalysis` has no regime field. Two axes:
+  direction (`TRENDING_UP/DOWN`, `RANGE`, `UNCLEAR`) and volatility
+  (`HIGH/NORMAL/LOW`), separate so a trending _and_ volatile market does not
+  have to pick one. `evidence` is a count out of 3, **never a probability**.
+  Regime may explain and warn; it may not change a status, a score, a
+  confirmation, a lifecycle transition or a risk percentage.
 - **Disclaimers come from `lib/constants/disclaimers.ts`.** Never inline the
   wording.
 - **No meme coins.** The curated list is `lib/market-data/curated-assets.ts`.
@@ -100,6 +114,8 @@ lib/
   setups/       setup identity + lifecycle planner (pure; no DB)
   scanner/      scheduling, concurrency, retries, ranking (pure; no I/O)
   notifications/ event mapping, dedupe keys, Telegram formatting (pure)
+  risk/         position sizing, caps, costs (pure; one source of the formula)
+  regime/       market environment classifier (pure; outside the engine)
 scripts/        the local scanner process (npm run scanner)
   market-data/  provider abstraction + Binance
 services/       DB-backed services (markets, candles, snapshots, backtests)

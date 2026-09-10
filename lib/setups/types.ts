@@ -64,6 +64,12 @@ export interface SetupSnapshotDetail {
   trend: string;
   mtfAgreement: string | null;
   createdFromCandleTime: number;
+  /**
+   * The environment the setup was first seen in. Context only — it played no
+   * part in the setup existing, and nothing downstream may treat it as if it
+   * had.
+   */
+  regime: { direction: string; volatility: string; evidence: number } | null;
 }
 
 /** The open setup being reconciled against, as the planner needs to see it. */

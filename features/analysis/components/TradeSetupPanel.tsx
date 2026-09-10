@@ -1,9 +1,11 @@
 "use client";
 
-import { AlertTriangle, CheckCircle2, Clock, XCircle } from "lucide-react";
+import { AlertTriangle, Calculator, CheckCircle2, Clock, XCircle } from "lucide-react";
+import Link from "next/link";
 
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -230,6 +232,8 @@ export function TradeSetupPanel({ result, isPending, error, asOf }: TradeSetupPa
               <WhyDisclosure>{setup.riskReward.reason}</WhyDisclosure>
               <LearnLink concept="risk-reward" label="Why 1:1 is a losing game" />
             </section>
+
+            <RiskCalculatorLink setup={setup} />
           </>
         )}
 
@@ -304,4 +308,43 @@ function Label({ children }: { children: React.ReactNode }) {
 
 function Value({ children, className }: { children: React.ReactNode; className?: string }) {
   return <p className={cn("tabular text-sm font-semibold", className)}>{children}</p>;
+}
+
+/**
+ * Carries the setup's levels into the risk calculator.
+ *
+ * A link, not a button that does something: the calculator sizes a position and
+ * nothing else, and the user still has to supply a balance and a risk
+ * percentage before it can. SpotLens has no order path, and this is not one.
+ *
+ * The target passed is the one `riskReward.measuredTo` names rather than a
+ * fixed index. The engine measures to the second *qualifying* structural
+ * target, which is frequently not TP2 — sending the wrong one would make the
+ * calculator quietly disagree with the panel it was opened from.
+ */
+function RiskCalculatorLink({ setup }: { setup: NonNullable<AnalysisResult["setup"]> }) {
+  const measured = setup.takeProfits.find((t) => t.label === setup.riskReward.measuredTo);
+
+  const params = new URLSearchParams({
+    entry: String(setup.entry.mid),
+    stop: String(setup.stopLoss.price),
+    ...(measured ? { tp: String(measured.level) } : {}),
+    ...(setup.riskReward.isSynthetic ? { unmeasured: "1" } : {}),
+  });
+
+  return (
+    <div className="rounded-md border border-dashed p-2">
+      <Button asChild size="sm" variant="outline">
+        <Link href={`/risk-calculator?${params.toString()}`}>
+          <Calculator className="h-3.5 w-3.5" />
+          Calculate position size
+        </Link>
+      </Button>
+      <p className="mt-1.5 text-[10px] leading-relaxed text-muted-foreground">
+        Opens the calculator with this entry, stop and target
+        {setup.riskReward.isSynthetic ? " — the target is one the engine never measured" : ""}. You
+        choose the balance and the risk. Nothing is placed, and nothing is sent anywhere.
+      </p>
+    </div>
+  );
 }

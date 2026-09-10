@@ -9,7 +9,26 @@ import { isDatabaseConfigured } from "@/lib/db/prisma";
 export const metadata = { title: "Risk Calculator — SpotLens" };
 export const dynamic = "force-dynamic";
 
-export default async function RiskCalculatorPage() {
+/**
+ * Reads one prefill value from the query string.
+ *
+ * Query strings are user-editable, so a value that is not a positive finite
+ * number is dropped rather than passed on — the calculator would reject it
+ * anyway, but arriving at a page with a pre-filled error is a worse first
+ * impression than arriving at an empty one.
+ */
+function prefill(value: string | string[] | undefined): number | undefined {
+  if (typeof value !== "string") return undefined;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+}
+
+export default async function RiskCalculatorPage({
+  searchParams,
+}: {
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+}) {
+  const params = await searchParams;
   let defaultRiskPercent = 1;
 
   if (isDatabaseConfigured) {
@@ -38,9 +57,21 @@ export default async function RiskCalculatorPage() {
           Size a position from the distance to your stop, so a losing trade costs what you decided
           it would — not whatever the market happens to charge.
         </p>
+        {prefill(params.entry) !== undefined && (
+          <p className="text-[11px] leading-relaxed text-muted-foreground">
+            Levels prefilled from a setup. Choose a balance and a risk percentage to size it —
+            SpotLens does not place orders, and nothing here does anything but arithmetic.
+          </p>
+        )}
       </header>
 
-      <PositionSizeCalculator defaultRiskPercent={defaultRiskPercent} />
+      <PositionSizeCalculator
+        defaultRiskPercent={defaultRiskPercent}
+        defaultEntry={prefill(params.entry)}
+        defaultStopLoss={prefill(params.stop)}
+        defaultTakeProfit={prefill(params.tp)}
+        takeProfitIsSynthetic={params.unmeasured === "1"}
+      />
 
       <Alert variant="muted">
         <AlertDescription>

@@ -65,6 +65,8 @@ export interface SetupFacts {
   confirmationSignals: { type: string; signal: string; title: string; detail: string }[];
   confirmationExplanation: string | null;
   invalidationReason: string | null;
+  /** Environment the setup was seen in. Context on the message, never a claim. */
+  regime: { direction: string; volatility: string } | null;
 }
 
 export interface DailySummaryFacts {

@@ -104,6 +104,8 @@ export async function POST(req: NextRequest) {
       byTimeframe: result.byTimeframe,
       byScoreBand: result.byScoreBand,
       byTargetKind: result.byTargetKind,
+      byRegime: result.byRegime,
+      byVolatility: result.byVolatility,
       disclaimer: BACKTEST_DISCLAIMER,
     });
   } catch (err) {

@@ -8,9 +8,11 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { explainZone, type MarketRead, type PriceZone } from "@/lib/analysis";
+import { classifyRegime } from "@/lib/regime";
 import { formatPrice } from "@/lib/format";
 
 import { LearnLink } from "./LearnLink";
+import { RegimePanel } from "./RegimePanel";
 import { WhyDisclosure } from "./WhyDisclosure";
 
 const TREND_META = {
@@ -43,6 +45,10 @@ export function MarketReadPanel({
 
   const trend = TREND_META[read.trend.trend];
   const { Icon } = trend;
+
+  // Classified from the read this panel already has — no extra request, and
+  // the engine never sees it.
+  const regime = classifyRegime(read);
 
   return (
     <Card>
@@ -80,6 +86,10 @@ export function MarketReadPanel({
           <WhyDisclosure>{read.trend.reason}</WhyDisclosure>
           <LearnLink concept="trend" label="How trend is decided" />
         </section>
+
+        <Separator />
+
+        <RegimePanel regime={regime} />
 
         <Separator />
 

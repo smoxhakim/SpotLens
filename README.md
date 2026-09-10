@@ -289,6 +289,68 @@ nothing at all the second time.
 same confirmation engine, the same setup lifecycle, the same market-data layer.
 There is no scanner-specific strategy, and no second exchange client.
 
+## Risk and position sizing
+
+The calculator answers one question: _if you decide to take this, how much?_
+It never answers whether to.
+
+```
+account balance → risk %  → risk amount
+                              ↓
+                  entry + stop → stop distance
+                              ↓
+                        position size
+```
+
+**Capital is not risk.** A 100 USDT account risking 1% on a trade whose stop
+sits 5% below the entry buys a **20 USDT** position that loses **1 USDT** if
+stopped. Not 100, and not 1.
+
+**Spot cannot exceed the balance.** A tighter stop implies a larger position for
+the same risk, and past some point that position costs more than the account
+holds. It is capped there — and the capped position then risks _less_ than
+intended. Both figures are shown:
+
+|                   |          |
+| ----------------- | -------- |
+| Risk-based size   | 5,000    |
+| Cap (the balance) | 1,000    |
+| Final size        | 1,000    |
+| Intended risk     | 10.00    |
+| **Actual risk**   | **2.00** |
+
+A tighter stop is never an argument for borrowing. There is no leverage here.
+
+Fees and slippage use the same convention as the backtester and are shown
+separately from the risk, so intended loss and estimated total loss never blur
+together. Invalid inputs return a named error per field rather than a
+misleading zero.
+
+## Market regime
+
+Regime describes the environment a setup occurred in. It is **context, not a
+verdict** — the analysis engine never receives it, so it cannot change a
+status, a score, a confirmation or a lifecycle transition, and it never alters
+your risk percentage.
+
+Two independent axes, so a market that is trending _and_ volatile does not have
+to be reported as only one:
+
+- **Direction** — `TRENDING_UP`, `TRENDING_DOWN`, `RANGE`, `UNCLEAR`. Trending
+  requires 2 of 3 agreeing signals: swing structure, EMA alignment, and price
+  against the EMA 200.
+- **Volatility** — ATR as a percentage of price. At or below 1% is `LOW`, at or
+  above 3% is `HIGH`. Relative rather than absolute, because an ATR of 40 is
+  enormous at a price of 200 and unremarkable at 90,000.
+
+`evidence` is a count out of three, not a probability, and is never rendered as
+a percentage. Regime is classified from the market read the engine already
+produced, so it costs no extra request and cannot see a candle the engine
+could not.
+
+Historical regime behaviour does not predict future market behaviour, and risk
+calculator outputs are mathematical estimates rather than trade instructions.
+
 ## Notifications
 
 The scanner reports what it found through two channels: an in-app list at
@@ -341,7 +403,7 @@ than no channel.
 ## Testing
 
 ```bash
-npm run test        # 570 Vitest unit tests — the analysis math is the priority surface
+npm run test        # 631 Vitest unit tests — the analysis math is the priority surface
 npm run e2e         # Playwright: a smoke suite and the full signed-in journey (port 3100)
 npm run lint
 npm run typecheck
