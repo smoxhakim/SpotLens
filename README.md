@@ -537,6 +537,12 @@ When you record what a trade did, the numbers are **yours** — your fill, your
 stop, your fees. Nothing is taken from the setup's plan, and if you traded
 without a stop there is no R to report rather than a borrowed one.
 
+Mistyped a fill? Correct it. The entry then shows the corrected numbers, and
+the version you replaced is kept in full on the event that replaced it — every
+field, plus the R it reported — so a correction can never quietly become a
+rewrite. `GET /api/journal/:id` returns them as `supersededVersions`, oldest
+first.
+
 `/replay/:setupId` reconstructs a setup as it looked at a chosen moment: only
 candles that had closed by then, only lifecycle events that had already
 happened, and the numbers SpotLens recorded at the time rather than

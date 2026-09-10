@@ -17,6 +17,8 @@ const entryFindMany = vi.fn();
 const entryCreate = vi.fn();
 const entryUpdate = vi.fn();
 const eventCreate = vi.fn();
+const eventUpdate = vi.fn();
+const eventDeleteMany = vi.fn();
 const transaction = vi.fn();
 
 vi.mock("@/lib/db/prisma", () => ({
@@ -33,10 +35,18 @@ vi.mock("@/lib/db/prisma", () => ({
       create: (a: unknown) => entryCreate(a),
       update: (a: unknown) => entryUpdate(a),
     },
-    journalEvent: { create: (a: unknown) => eventCreate(a) },
+    journalEvent: {
+      create: (a: unknown) => eventCreate(a),
+      // Stubbed only so a test can assert they are never reached: the event
+      // log is append-only, and nothing may edit or remove a past version.
+      update: (a: unknown) => eventUpdate(a),
+      deleteMany: (a: unknown) => eventDeleteMany(a),
+    },
     $transaction: (ops: unknown) => transaction(ops),
   },
 }));
+
+import { supersededVersions } from "@/lib/journal";
 
 const { createEntry, listEntries, recordOutcome, updateDecision } = await import("./journal");
 
@@ -50,6 +60,8 @@ beforeEach(() => {
     entryCreate,
     entryUpdate,
     eventCreate,
+    eventUpdate,
+    eventDeleteMany,
     transaction,
   ]) {
     fn.mockReset();
@@ -196,8 +208,22 @@ describe("updateDecision", () => {
 describe("recordOutcome", () => {
   const trade = { actualEntry: 100, actualStopLoss: 95, quantity: 2, actualExit: 110 };
 
+  /** A stored row with no trade on it yet. */
+  const blank = {
+    actualEntry: null,
+    actualStopLoss: null,
+    actualTakeProfit: null,
+    actualExit: null,
+    quantity: null,
+    fees: null,
+    slippage: null,
+    exitReason: null,
+    openedAt: null,
+    closedAt: null,
+  };
+
   it("refuses an outcome on a setup that was never entered", async () => {
-    entryFindFirst.mockResolvedValue({ id: "entry-1", decision: "SKIPPED" });
+    entryFindFirst.mockResolvedValue({ id: "entry-1", decision: "SKIPPED", ...blank });
 
     const result = await recordOutcome({ userId: "user-1", id: "entry-1", outcome: trade });
 
@@ -206,7 +232,7 @@ describe("recordOutcome", () => {
   });
 
   it("stores the user's own numbers, not the setup's plan", async () => {
-    entryFindFirst.mockResolvedValue({ id: "entry-1", decision: "TAKEN" });
+    entryFindFirst.mockResolvedValue({ id: "entry-1", decision: "TAKEN", ...blank });
 
     const result = await recordOutcome({
       userId: "user-1",
@@ -231,11 +257,22 @@ describe("recordOutcome", () => {
     expect(setupUpdate).not.toHaveBeenCalled();
   });
 
+  it("records the first outcome with no payload, because it superseded nothing", async () => {
+    entryFindFirst.mockResolvedValue({ id: "entry-1", decision: "TAKEN", ...blank });
+
+    await recordOutcome({ userId: "user-1", id: "entry-1", outcome: trade });
+
+    const event = eventCreate.mock.calls[0][0].data;
+    expect(event.type).toBe("OUTCOME_RECORDED");
+    expect(event.detail).not.toMatch(/Amended/);
+    expect(event.payload).toBeUndefined();
+  });
+
   it("logs a correction to a closed entry as an amendment", async () => {
     // A mistyped fill has to stay correctable — there is no other route to fix
     // one. What must not happen is the correction landing silently, so the
     // history says which recording replaced which.
-    entryFindFirst.mockResolvedValue({ id: "entry-1", decision: "CLOSED" });
+    entryFindFirst.mockResolvedValue({ id: "entry-1", decision: "CLOSED", ...blank });
 
     const result = await recordOutcome({
       userId: "user-1",
@@ -246,6 +283,74 @@ describe("recordOutcome", () => {
 
     expect(result.ok).toBe(true);
     expect(eventCreate.mock.calls[0][0].data.detail).toMatch(/^Amended\./);
+  });
+
+  it("preserves every superseded field before overwriting it", async () => {
+    // The whole point. The entry already holds a full recording; correcting it
+    // must put those exact values somewhere recoverable first.
+    entryFindFirst.mockResolvedValue({
+      id: "entry-1",
+      decision: "CLOSED",
+      actualEntry: 100,
+      actualStopLoss: 95,
+      actualTakeProfit: 118,
+      actualExit: 110,
+      quantity: 2,
+      fees: 1,
+      slippage: 0.5,
+      exitReason: "TAKE_PROFIT",
+      openedAt: new Date(1_000),
+      closedAt: new Date(5_000),
+    });
+
+    await recordOutcome({
+      userId: "user-1",
+      id: "entry-1",
+      outcome: { actualEntry: 101, actualStopLoss: 96, actualExit: 120, quantity: 3 },
+      close: true,
+    });
+
+    const superseded = eventCreate.mock.calls[0][0].data.payload.supersededOutcome;
+    expect(superseded).toMatchObject({
+      actualEntry: 100,
+      actualStopLoss: 95,
+      actualTakeProfit: 118,
+      actualExit: 110,
+      quantity: 2,
+      fees: 1,
+      slippage: 0.5,
+      exitReason: "TAKE_PROFIT",
+      openedAt: 1_000,
+      closedAt: 5_000,
+    });
+    // And what that version reported: 10 at risk, 20 made, 1.5 in costs.
+    expect(superseded.realizedR).toBeCloseTo(1.85);
+    expect(typeof superseded.supersededAt).toBe("number");
+
+    // The entry itself moves on to the corrected values.
+    expect(entryUpdate.mock.calls[0][0].data).toMatchObject({
+      actualEntry: 101,
+      actualStopLoss: 96,
+      actualExit: 120,
+      quantity: 3,
+    });
+  });
+
+  it("appends the amendment rather than editing any existing event", async () => {
+    entryFindFirst.mockResolvedValue({
+      id: "entry-1",
+      decision: "CLOSED",
+      ...blank,
+      actualEntry: 100,
+      quantity: 1,
+    });
+
+    await recordOutcome({ userId: "user-1", id: "entry-1", outcome: trade, close: true });
+
+    // One create, and nothing that could rewrite history.
+    expect(eventCreate).toHaveBeenCalledTimes(1);
+    expect(eventUpdate).not.toHaveBeenCalled();
+    expect(eventDeleteMany).not.toHaveBeenCalled();
   });
 
   it("refuses to close without an exit price", async () => {
@@ -260,6 +365,133 @@ describe("recordOutcome", () => {
 
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.errors[0].code).toBe("CLOSED_REQUIRES_EXIT");
+  });
+});
+
+describe("a trade corrected more than once", () => {
+  /**
+   * Threads a mutable row through the mocks so the sequence behaves like the
+   * database does: each write lands on the row, and the next read sees it.
+   */
+  function withStoredRow() {
+    const row: Record<string, unknown> = {
+      id: "entry-1",
+      decision: "CLOSED",
+      actualEntry: null,
+      actualStopLoss: null,
+      actualTakeProfit: null,
+      actualExit: null,
+      quantity: null,
+      fees: null,
+      slippage: null,
+      exitReason: null,
+      openedAt: null,
+      closedAt: null,
+    };
+
+    entryFindFirst.mockImplementation(async () => ({ ...row }));
+    entryUpdate.mockImplementation((args: { data: Record<string, unknown> }) => {
+      Object.assign(row, args.data);
+      return {};
+    });
+    return row;
+  }
+
+  it("keeps every previous version, oldest first", async () => {
+    const row = withStoredRow();
+    // Version 1 is a first recording; there is nothing before it.
+    row.decision = "TAKEN";
+
+    const record = (actualEntry: number, quantity: number, close = false) =>
+      recordOutcome({
+        userId: "user-1",
+        id: "entry-1",
+        outcome: {
+          actualEntry,
+          actualStopLoss: actualEntry - 5,
+          actualExit: actualEntry + 10,
+          quantity,
+        },
+        close,
+      });
+
+    await record(100, 1, true); // v1
+    await record(200, 2, true); // v2 supersedes v1
+    await record(300, 3, true); // v3 supersedes v2
+
+    const payloads = eventCreate.mock.calls.map((call) => call[0].data.payload);
+
+    // Three writes, two of which replaced something.
+    expect(payloads[0]).toBeUndefined();
+    expect(payloads[1].supersededOutcome).toMatchObject({ actualEntry: 100, quantity: 1 });
+    expect(payloads[2].supersededOutcome).toMatchObject({ actualEntry: 200, quantity: 2 });
+
+    // Each version was superseded after the one before it.
+    expect(payloads[2].supersededOutcome.supersededAt).toBeGreaterThanOrEqual(
+      payloads[1].supersededOutcome.supersededAt,
+    );
+
+    // And the entry holds the latest.
+    expect(row.actualEntry).toBe(300);
+    expect(row.quantity).toBe(3);
+  });
+
+  it("reconstructs version 1 from the log after version 3", async () => {
+    const row = withStoredRow();
+    row.decision = "TAKEN";
+
+    for (const [entry, qty] of [
+      [100, 1],
+      [200, 2],
+      [300, 3],
+    ]) {
+      await recordOutcome({
+        userId: "user-1",
+        id: "entry-1",
+        outcome: {
+          actualEntry: entry,
+          actualStopLoss: entry - 5,
+          actualExit: entry + 10,
+          quantity: qty,
+          fees: 1,
+        },
+        close: true,
+      });
+    }
+
+    const versions = supersededVersions(
+      eventCreate.mock.calls.map((call, i) => ({
+        payload: call[0].data.payload ?? null,
+        createdAt: i,
+      })),
+    );
+
+    expect(versions.map((v) => v.actualEntry)).toEqual([100, 200]);
+    // v1: 5 at risk on 1 unit, 10 made, 1 in fees.
+    expect(versions[0].realizedR).toBeCloseTo(1.8);
+    expect(versions[0].actualStopLoss).toBe(95);
+    expect(versions[0].fees).toBe(1);
+  });
+
+  it("leaves the decision closed and the setup untouched", async () => {
+    const row = withStoredRow();
+    row.actualEntry = 100;
+    row.quantity = 1;
+
+    await recordOutcome({
+      userId: "user-1",
+      id: "entry-1",
+      outcome: { actualEntry: 101, actualStopLoss: 96, actualExit: 120, quantity: 1 },
+      close: true,
+    });
+
+    // An amendment corrects the numbers; it does not reopen the decision.
+    expect(row.decision).toBe("CLOSED");
+    const reopen = await updateDecision({ userId: "user-1", id: "entry-1", decision: "TAKEN" });
+    expect(reopen.ok).toBe(false);
+
+    // And nothing reached the engine's own record.
+    expect(setupUpdate).not.toHaveBeenCalled();
   });
 });
 

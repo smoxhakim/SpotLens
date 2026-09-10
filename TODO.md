@@ -378,6 +378,14 @@ Branch `feat/phase-i-journal-replay-research`.
 - [x] Amending a closed entry stays possible (a mistyped fill has no other
       route to correction) but is logged as an amendment, so the history says
       which recording replaced which.
+- [x] **A correction preserves what it replaced.** Review caught that the
+      amendment event carried only prose — the previous fill, stop, exit, size
+      and costs were overwritten and unrecoverable. `JournalEvent.payload`
+      (jsonb, nullable, migration `20260910215110_add_journal_event_payload`)
+      now holds the ten superseded fields plus the R that version reported,
+      written before the entry is updated. No second history table; the
+      append-only log already was one. Verified on Postgres across a
+      version 1 → 2 → 3 chain.
 - [x] API: `/api/journal`, `/api/journal/:id`, `/api/journal/:id/decision`,
       `/api/journal/:id/outcome`, `/api/replay/:setupId`, `/api/research`. All
       owner-scoped in the `where`; another account's row answers **404, not
@@ -401,7 +409,7 @@ Research over the real history: 29 detected, 6 ever confirmed, 12 invalidated
 (41.4%). With three decisions recorded, the funnel was unchanged and only the
 one closed position contributed R.
 
-108 new tests (633 → 741). Six defect injections confirmed the no-lookahead
+127 new tests (633 → 760). Six defect injections confirmed the no-lookahead
 and immutability tests fail when the bug is reintroduced.
 
 ## Phase 1 — Chart Foundation ✅

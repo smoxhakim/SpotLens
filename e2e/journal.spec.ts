@@ -192,6 +192,45 @@ test.describe("journal, replay and research", () => {
     });
     expect(reopen.status()).toBe(400);
 
+    // --- correcting a mistyped fill keeps the version it replaced ---------
+    const amended = await page.request.post(`/api/journal/${entryId}/outcome`, {
+      data: {
+        actualEntry: 60250,
+        actualStopLoss: 58000,
+        actualExit: 64600,
+        quantity: 0.1,
+        fees: 5,
+        close: true,
+      },
+    });
+    expect(amended.ok()).toBeTruthy();
+
+    const { entry: detail } = await (await page.request.get(`/api/journal/${entryId}`)).json();
+
+    // The entry holds the corrected numbers...
+    expect(detail.trade.actualEntry).toBe(60250);
+    // ...and the original is recoverable in full, not summarised into prose.
+    expect(detail.supersededVersions).toHaveLength(1);
+    expect(detail.supersededVersions[0]).toMatchObject({
+      actualEntry: 60200,
+      actualStopLoss: 58000,
+      actualExit: 64600,
+      quantity: 0.1,
+      fees: 5,
+    });
+
+    // The amendment is an added event, not an edited one.
+    const recordings = detail.journalEvents.filter(
+      (e: { type: string }) => e.type === "OUTCOME_RECORDED",
+    );
+    expect(recordings).toHaveLength(2);
+    expect(recordings[0].supersededOutcome).toBeNull();
+    expect(recordings[1].supersededOutcome.actualEntry).toBe(60200);
+    expect(recordings[1].detail).toMatch(/^Amended\./);
+
+    // And the decision is still closed.
+    expect(detail.decision).toBe("CLOSED");
+
     // --- the entry, with both records side by side ------------------------
     await page.goto(`/journal/${entryId}`);
     // Both records, labelled as whose they are.

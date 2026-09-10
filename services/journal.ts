@@ -2,7 +2,10 @@ import type { Prisma } from "@prisma/client";
 
 import { prisma } from "@/lib/db/prisma";
 import {
+  buildAmendmentPayload,
   computeOutcome,
+  readAmendmentPayload,
+  supersededVersions,
   validateOutcome,
   validateTransition,
   type JournalDecision,
@@ -165,6 +168,12 @@ export async function updateDecision(input: {
  * The numbers are the user's own — their fill, their stop, their fees. Nothing
  * is taken from the setup's plan: the difference between the plan and the fill
  * is one of the things the journal exists to preserve.
+ *
+ * A recording over one already there is a correction, and correcting a
+ * mistyped fill has no other route. So it stays allowed — but the values being
+ * replaced are written onto the event that replaces them first, in full. The
+ * entry keeps the latest numbers; every earlier version stays recoverable from
+ * the append-only event log, in order.
  */
 export async function recordOutcome(input: {
   userId: string;
@@ -174,7 +183,22 @@ export async function recordOutcome(input: {
 }): Promise<JournalResult<{ realizedR: number | null }>> {
   const entry = await prisma.journalEntry.findFirst({
     where: { id: input.id, userId: input.userId },
-    select: { id: true, decision: true },
+    // The trade columns are read, not just the decision: they are about to be
+    // overwritten, and they cannot be preserved after that.
+    select: {
+      id: true,
+      decision: true,
+      actualEntry: true,
+      actualStopLoss: true,
+      actualTakeProfit: true,
+      actualExit: true,
+      quantity: true,
+      fees: true,
+      slippage: true,
+      exitReason: true,
+      openedAt: true,
+      closedAt: true,
+    },
   });
 
   if (!entry) {
@@ -196,6 +220,24 @@ export async function recordOutcome(input: {
   if (errors.length > 0) return { ok: false, errors };
 
   const outcome = computeOutcome(input.outcome);
+
+  // Whatever is about to be replaced, captured before the update runs. Null on
+  // a first recording — nothing was superseded.
+  const superseded = buildAmendmentPayload(
+    {
+      actualEntry: decimal(entry.actualEntry),
+      actualStopLoss: decimal(entry.actualStopLoss),
+      actualTakeProfit: decimal(entry.actualTakeProfit),
+      actualExit: decimal(entry.actualExit),
+      quantity: decimal(entry.quantity),
+      fees: decimal(entry.fees),
+      slippage: decimal(entry.slippage),
+      exitReason: entry.exitReason,
+      openedAt: entry.openedAt?.getTime() ?? null,
+      closedAt: entry.closedAt?.getTime() ?? null,
+    },
+    Date.now(),
+  );
 
   await prisma.$transaction([
     prisma.journalEntry.update({
@@ -228,6 +270,10 @@ export async function recordOutcome(input: {
           (outcome.realizedR === null
             ? "Trade details recorded; no result yet."
             : `Recorded ${outcome.realizedR.toFixed(2)}R on the risk actually taken.`),
+        // The prose above is for a reader. This is the record: the complete
+        // previous values, so the version being replaced can be reconstructed
+        // rather than inferred from a sentence.
+        ...(superseded ? { payload: toJson(superseded) } : {}),
       },
     }),
   ]);
@@ -303,7 +349,19 @@ export async function findEntry(userId: string, id: string) {
       toDecision: event.toDecision,
       detail: event.detail,
       createdAt: event.createdAt.toISOString(),
+      // The values this event replaced, when it replaced any. Null on a first
+      // recording and on every event written before the column existed.
+      supersededOutcome: readAmendmentPayload(event.payload),
     })),
+    // Every previous version of the trade, oldest first. The entry's own
+    // `trade` above is the current one, so the two together are the full
+    // sequence.
+    supersededVersions: supersededVersions(
+      row.events.map((event) => ({
+        payload: event.payload,
+        createdAt: event.createdAt.getTime(),
+      })),
+    ),
     snapshot: row.trackedSetup.snapshot,
   };
 }
@@ -377,4 +435,13 @@ function serialise(row: EntryRow) {
         }
       : null,
   };
+}
+
+/** Prisma `Decimal | null` as the plain number the rest of the code uses. */
+function decimal(value: Prisma.Decimal | null): number | null {
+  return value === null ? null : Number(value);
+}
+
+function toJson(value: unknown): Prisma.InputJsonValue {
+  return JSON.parse(JSON.stringify(value)) as Prisma.InputJsonValue;
 }

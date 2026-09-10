@@ -124,8 +124,33 @@ the lifecycle state is the one thing that does move.
 
 - id (uuid, pk), journalEntryId (fk), type: `CREATED | DECISION_CHANGED | NOTE_ADDED | OUTCOME_RECORDED`
 - fromDecision (nullable), toDecision, detail (string), createdAt
+- payload (jsonb, nullable) — the values this event replaced, when it replaced any
 - append-only: "what did I decide?" is rarely one answer, and the sequence is
   the part worth keeping
+
+`payload` is what makes a correction non-destructive. `JournalEntry` keeps the
+latest trade numbers, so every ordinary read stays a single row; recording an
+outcome over one already there writes the superseded fields here first:
+
+```json
+{
+  "supersededOutcome": {
+    "actualEntry": 100, "actualStopLoss": 90, "actualTakeProfit": null,
+    "actualExit": 120, "quantity": 1, "fees": 1, "slippage": 0.5,
+    "exitReason": "TAKE_PROFIT", "openedAt": 1000, "closedAt": 5000,
+    "realizedR": 1.85, "supersededAt": 1789077343809
+  }
+}
+```
+
+`realizedR` is derived from the fields beside it and stored anyway: the record
+is of what the user was shown, and recomputing it later would silently restate
+history if the formula ever moved. Timestamps are epoch ms so the payload stays
+a plain JSON value. Null means the event superseded nothing — a first
+recording, a decision change, or a row written before the column existed, all
+of which stay valid. Reading version 1, 2, 3 … is the ordered event log plus
+the entry's current values; there is deliberately no second history table to
+keep in step. The shape lives in `lib/journal/amendment.ts`.
 
 **LearnArticle**
 

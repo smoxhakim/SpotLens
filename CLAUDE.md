@@ -100,6 +100,16 @@ WAITING_CONFIRMATION` is price arriving somewhere, not structure changing,
   the user recorded both an exit and a real stop; falling back to the setup's
   planned stop would credit the engine's arithmetic to their trade. Journaling
   writes **nothing** back to the setup. Entries are setup-linked only.
+- **A correction never destroys what it replaced.** `JournalEntry` holds the
+  latest trade numbers, because that is what every reader wants. Recording an
+  outcome over one already there writes the ten superseded fields — plus the R
+  that version reported — onto the `JournalEvent` that replaces them, as
+  structured JSON in `payload`, _before_ the entry is updated. The prose in
+  `detail` is for a reader; the payload is the record. `lib/journal/amendment.ts`
+  owns the shape and is the only place that reads or writes it. There is no
+  second history table: the append-only event log already is one. A null
+  payload means the event superseded nothing — a first recording, a decision
+  change, or a row written before the column existed.
 - **Replay is offline and deterministic.** `lib/replay` is pure and takes the
   cutoff explicitly; nothing reads a clock. Only candles with
   `closeTime <= T` and events written by `T`, enforced **in the Prisma query**

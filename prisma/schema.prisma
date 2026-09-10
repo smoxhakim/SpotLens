@@ -830,6 +830,18 @@ model JournalEvent {
   fromDecision   JournalDecision?
   toDecision     JournalDecision
   detail         String
+  /// The values this event replaced, when it replaced any.
+  ///
+  /// `JournalEntry` holds the latest numbers, which is what every reader
+  /// wants. Recording an outcome over one already there would otherwise
+  /// destroy the previous version — so the superseded fields are written here
+  /// first, in full and structured, and the entry is then updated. Null on a
+  /// first recording, because nothing was superseded, and null on every event
+  /// written before this column existed.
+  ///
+  /// Shape when present: `{ supersededOutcome: { ...the ten trade fields,
+  /// realizedR, supersededAt } }`. See `lib/journal/amendment.ts`.
+  payload        Json?
   createdAt      DateTime         @default(now())
 
   journalEntry JournalEntry @relation(fields: [journalEntryId], references: [id], onDelete: Cascade)
