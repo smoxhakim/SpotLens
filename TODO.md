@@ -124,7 +124,49 @@ the backtest is the measurement that says anything.
 **H4 remains close to breakeven** (avg R 0.086). Confirmation improves it but
 does not fix it, and that is worth knowing before H4 is trusted.
 
-Next up, once reviewed: **Phase D — setup persistence + lifecycle.**
+## Phase D — setup persistence + lifecycle (done, awaiting review)
+
+Branch `feat/phase-d-setup-lifecycle`.
+
+- [x] `lib/setups/` — a **pure** planner. Given the stored setup and a finished
+      `AnalysisResult` it returns NONE / CREATE / TRANSITION / REPLACE.
+      `services/setups.ts` executes it and is the only thing that writes, so
+      `lib/analysis` stays free of I/O and every rule is testable without a
+      database.
+- [x] **Identity:** (user, pair, timeframe) + an entry zone that _overlaps_ the
+      stored origin. Overlap rather than equality because zones are ATR-scaled
+      and drift each candle — exact bounds, or a rounded bucket, would mint a
+      new setup almost every run. Consequence, stated openly: a zone drifting
+      over many candles stays one setup, because each step overlapped the last.
+- [x] **Deduplication:** an unchanged analysis writes **nothing at all** — no
+      row update, no event. Verified against the real database: 10 identical
+      runs produced 1 setup and 1 event.
+- [x] **Lifecycle:** SETUP_FORMING → WAITING_CONFIRMATION →
+      CONFIRMATION_DETECTED → POTENTIAL_SETUP → INVALIDATED. Regressions are
+      allowed (confirmation is evidence about the last closed candle and can
+      lapse); INVALIDATED is terminal, so a level that returns is a new setup
+      with its own id and history.
+- [x] **Immutable snapshot:** `TrackedSetup` splits columns written once at
+      creation from lifecycle columns that change. `applyTransition` never
+      names a snapshot column. `confirmedAt` is stamped only when still null,
+      so a setup that loses and regains confirmation keeps the first time.
+- [x] **Invalidation** — supported conditions, all deterministic and all
+      already computed by the engine: confirmation CONTRADICTED (which includes
+      support lost and structure broken downward), the engine no longer
+      offering a setup at all (AVOID), and the entry re-anchoring to a
+      different zone. **No time-based expiry** — the engine defines none, and
+      inventing one would be a strategy change.
+- [x] **API:** `GET /api/setups`, `GET /api/setups/:id`. Read-only — setups are
+      created by the lifecycle, never by a client. Zod-validated, owner-scoped
+      at the query, 404 rather than 403 for another account's row.
+- [x] Migration `20260910145846_add_setup_lifecycle` — purely additive (2
+      enums, 2 tables, 3 indexes, 3 FKs; no ALTER or DROP on anything
+      existing). Applied locally; every pre-existing row count unchanged.
+
+Phase E's scanner can call `trackSetup` after `runAnalysis` without changing
+this model.
+
+Next up, once reviewed: **Phase E — local autonomous scanner.**
 
 ## Phase 1 — Chart Foundation ✅
 

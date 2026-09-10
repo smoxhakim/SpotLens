@@ -65,6 +65,29 @@ enum SetupStatus {
   AVOID
 }
 
+/// Lifecycle of a tracked setup, distinct from the analysis verdict.
+///
+/// `SetupStatus` above is what the engine says about the market right now.
+/// This is what happened to one particular setup over time, which is a
+/// different question and needs its own vocabulary. CONFIRMATION_DETECTED is a
+/// lifecycle state, never an instruction — there is no CONFIRMED trading
+/// status and no code path that could act on one.
+enum SetupLifecycleStatus {
+  SETUP_FORMING
+  WAITING_CONFIRMATION
+  CONFIRMATION_DETECTED
+  POTENTIAL_SETUP
+  INVALIDATED
+}
+
+enum SetupEventType {
+  CREATED
+  STATUS_CHANGED
+  CONFIRMATION_DETECTED
+  POTENTIAL_SETUP
+  INVALIDATED
+}
+
 enum YesNoUnclear {
   YES
   NO
@@ -107,6 +130,7 @@ model User {
   watchlist         Watchlist[]
   snapshots         AnalysisSnapshot[]
   backtestRuns      BacktestRun[]
+  trackedSetups     TrackedSetup[]
   subscription      Subscription?
   auditLogs         AdminAuditLog[]
   checklistsUpdated EthicalChecklist[] @relation("ChecklistUpdatedBy")
@@ -179,11 +203,12 @@ model TradingPair {
   exchangeSymbol String  @unique
   isActive       Boolean @default(true)
 
-  asset        Asset              @relation(fields: [assetId], references: [id], onDelete: Cascade)
-  candles      Candle[]
-  watchlist    Watchlist[]
-  snapshots    AnalysisSnapshot[]
-  backtestRuns BacktestRun[]
+  asset         Asset              @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  candles       Candle[]
+  watchlist     Watchlist[]
+  snapshots     AnalysisSnapshot[]
+  backtestRuns  BacktestRun[]
+  trackedSetups TrackedSetup[]
 
   @@unique([assetId, quoteCurrency])
 }
@@ -355,4 +380,95 @@ model Subscription {
   updatedAt            DateTime @updatedAt
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+/// One setup, tracked across the runs that keep re-evaluating it.
+///
+/// Named `TrackedSetup` rather than `Setup` because the codebase already has
+/// two other things called a setup: the `TradeSetup` the engine returns for the
+/// current bar, and `BacktestSetup`, a simulated trade. This is neither — it is
+/// the identity of a level being watched over time.
+///
+/// ## Two halves, and the split is the point
+///
+/// Everything from `entryLow` down to `snapshot` is written once, at creation,
+/// and never updated. It is what the engine said when this setup was first
+/// seen. Later analysis will move the entry and change the score — that is the
+/// market, not a correction — and silently rewriting these would destroy the
+/// only record of what was actually on offer at the time.
+///
+/// The lifecycle fields below them do change, because they are the answer to
+/// "what happened next". Every change also appends a `SetupEvent`, so the
+/// sequence survives even though the current state is overwritten.
+model TrackedSetup {
+  id            String               @id @default(uuid())
+  userId        String
+  tradingPairId String
+  timeframe     Timeframe
+  status        SetupLifecycleStatus
+
+  // --- immutable snapshot: written at creation, never updated ---------------
+  entryLow              Decimal     @db.Decimal(24, 8)
+  entryHigh             Decimal     @db.Decimal(24, 8)
+  stopLoss              Decimal     @db.Decimal(24, 8)
+  takeProfit1           Decimal?    @db.Decimal(24, 8)
+  takeProfit2           Decimal?    @db.Decimal(24, 8)
+  takeProfit3           Decimal?    @db.Decimal(24, 8)
+  riskReward            Decimal     @db.Decimal(10, 2)
+  /// Phase A's distinction, carried through: a ratio measured to an R-multiple
+  /// is not evidence, and a stored setup must not lose that qualifier.
+  riskRewardIsSynthetic Boolean
+  score                 Int
+  scoreGrade            String
+  /// The engine's verdict at creation, for comparison against the lifecycle.
+  analysisStatus        SetupStatus
+  /// Reasons, score breakdown and targets as they stood — the full text, so
+  /// the record explains itself without re-running anything.
+  snapshot              Json
+
+  // --- identity ------------------------------------------------------------
+  /// The support zone the entry was anchored to. Identity is decided by
+  /// overlap against this, not by equality: zones are ATR-scaled and drift a
+  /// little every candle, and keying on exact bounds would mint a new setup
+  /// on every run.
+  originZoneLow  Decimal @db.Decimal(24, 8)
+  originZoneHigh Decimal @db.Decimal(24, 8)
+
+  // --- lifecycle: mutable, and mirrored into SetupEvent --------------------
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+  confirmedAt        DateTime?
+  invalidatedAt      DateTime?
+  invalidationReason String?
+
+  /// Reference rather than a second copy of the same analysis.
+  analysisSnapshotId String?
+
+  user        User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tradingPair TradingPair  @relation(fields: [tradingPairId], references: [id], onDelete: Cascade)
+  events      SetupEvent[]
+
+  @@index([userId, tradingPairId, timeframe, status])
+  @@index([userId, createdAt])
+}
+
+/// An append-only record of every lifecycle change.
+///
+/// Written only when the status actually moves. Re-evaluating a setup that has
+/// not changed writes nothing at all — which is what keeps a scanner running
+/// every few minutes from turning into a table of identical rows.
+model SetupEvent {
+  id         String                @id @default(uuid())
+  setupId    String
+  type       SetupEventType
+  fromStatus SetupLifecycleStatus?
+  toStatus   SetupLifecycleStatus
+  detail     String
+  /// Confirmation signals and explanation at the moment of the transition.
+  payload    Json?
+  createdAt  DateTime              @default(now())
+
+  setup TrackedSetup @relation(fields: [setupId], references: [id], onDelete: Cascade)
+
+  @@index([setupId, createdAt])
 }
