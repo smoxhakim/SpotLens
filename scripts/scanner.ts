@@ -22,6 +22,8 @@ import {
   nextScanWindow,
   sleep,
 } from "@/lib/scanner";
+import { buildDailySummary, eventsFromScan } from "@/services/notification-events";
+import { deliverEvents } from "@/services/notifications";
 import { DEFAULT_MAX_CONCURRENCY, resolveScannerUserId, runScan } from "@/services/scanner";
 import { timeframeSchema } from "@/lib/market-data/schema";
 
@@ -84,6 +86,11 @@ async function scan(triggeredBy: "SCHEDULE" | "MANUAL", due: Timeframe[], userId
     log(`   ! ${event.symbol} ${event.timeframe}: ${event.failureCategory} — ${event.detail}`);
   }
 
+  // Notifications are wired in here, not inside `runScan`. The scanner service
+  // has no idea Telegram exists — this script is the composition root, and it
+  // is the only place that knows both halves.
+  await notify(summary.events, userId);
+
   const top = summary.results.filter((r) => r.ok).slice(0, 3);
   if (top.length > 0) {
     log("   best ranked:");
@@ -94,6 +101,54 @@ async function scan(triggeredBy: "SCHEDULE" | "MANUAL", due: Timeframe[], userId
           (r.score === null ? "" : ` · quality ${r.score}/100`),
       );
     }
+  }
+}
+
+/**
+ * Routes a pass's events to the notification layer.
+ *
+ * Wrapped so that nothing it does can end a scan. A notification channel that
+ * can abort the analysis is worse than no channel at all — the whole point of
+ * the scanner is that it keeps running.
+ */
+async function notify(
+  scannerEvents: Awaited<ReturnType<typeof runScan>>["events"],
+  userId: string,
+) {
+  try {
+    const events = await eventsFromScan({ userId, scannerEvents });
+    if (events.length === 0) return;
+
+    const outcome = await deliverEvents(events);
+
+    if (outcome.created > 0 || outcome.duplicates > 0 || outcome.suppressed > 0) {
+      log(
+        `   notifications: ${outcome.sent} sent · ${outcome.failed} failed · ` +
+          `${outcome.duplicates} already seen · ${outcome.suppressed} not subscribed`,
+      );
+    }
+  } catch (err) {
+    log(`   notifications skipped: ${err instanceof Error ? err.message : "unknown error"}`);
+  }
+}
+
+/**
+ * Sends the daily summary once per UTC day.
+ *
+ * The dedupe key is the date, so calling this on every pass is safe: the first
+ * one after midnight writes a row and the rest are rejected by the unique
+ * index. That is simpler than a second schedule, and it cannot drift out of
+ * step with the scans it summarises.
+ */
+async function maybeSendDailySummary(userId: string) {
+  try {
+    const event = await buildDailySummary({ userId });
+    if (!event) return;
+
+    const outcome = await deliverEvents([event]);
+    if (outcome.created > 0) log(`   daily summary sent for ${event.summary?.date}`);
+  } catch (err) {
+    log(`   daily summary skipped: ${err instanceof Error ? err.message : "unknown error"}`);
   }
 }
 
@@ -135,6 +190,7 @@ async function main() {
 
     try {
       await scan("SCHEDULE", window.timeframes, userId);
+      await maybeSendDailySummary(userId);
     } catch (err) {
       // A pass that blows up must not end the process — the next candle close
       // is another chance, and a scanner that dies overnight is useless.

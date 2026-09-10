@@ -135,4 +135,12 @@ export const RATE_LIMITS = {
   register: { name: "register", limit: 5, windowMs: 60 * 60_000 },
   /** Reads that fall through to the exchange on a cache miss. */
   marketData: { name: "market-data", limit: 120, windowMs: 60_000 },
+  /**
+   * Telegram connection attempts. Tight on purpose: each one issues or claims a
+   * one-time code, and a generous limit here would turn a short code into
+   * something worth guessing.
+   */
+  telegramConnect: { name: "telegram-connect", limit: 10, windowMs: 60_000 },
+  /** Outbound test messages, so the button cannot be used to spam a chat. */
+  telegramTest: { name: "telegram-test", limit: 5, windowMs: 60_000 },
 } as const satisfies Record<string, RateLimitRule>;

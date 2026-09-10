@@ -209,7 +209,48 @@ Branch `feat/phase-e-scanner`.
 since the last pass"_ both times, setups 20 → 20 → 20, events 21 → 21 → 21.
 Zero writes.
 
-Next up, once reviewed: **Phase F — Telegram + in-app notifications.**
+## Phase F — notifications and Telegram (done, awaiting review)
+
+Branch `feat/phase-f-notifications`.
+
+- [x] `lib/notifications/` (pure: mapping, dedupe keys, MarkdownV2 formatting)
+      and `services/notifications.ts` (delivery, preferences, persistence).
+      The scanner emits events and knows nothing about Telegram;
+      `scripts/scanner.ts` is the composition root that joins them.
+- [x] Six event types, every one derived from a Phase D `SetupEvent` or a
+      finished scanner run. **No second state machine.**
+- [x] **STRUCTURE_CHANGED only when structure actually changed.** It fires on a
+      confirmation-engine `STRUCTURE_BREAK` or `RECLAIM`, not on any lifecycle
+      transition. A plain `SETUP_FORMING → WAITING_CONFIRMATION` is price
+      arriving at a level already identified, and says nothing.
+- [x] **Dedupe is Phase D's `SetupEvent.id`**, enforced by a unique index on
+      `(userId, channel, dedupeKey)` — the index is the guard, not a
+      check-then-write, so two passes racing cannot both insert.
+- [x] Telegram: one-time code hashed at rest, ten-minute expiry, burned after
+      ten claim attempts, bound to the requesting session. `getUpdates`
+      polling, no webhook — a local machine should not be exposed to receive a
+      message the user is about to send.
+- [x] Token read in exactly one file; never returned, logged, stored, and
+      stripped from provider errors before they reach a row.
+- [x] Conservative defaults: confirmations, invalidations and scanner errors
+      on; potential setups, structure changes and daily summary off.
+
+### Verified live
+
+One real scan produced **10 notifications from 24 lifecycle events** — the
+filtering working, not a bug: 4 confirmations + 6 invalidations delivered,
+setups created at forming/waiting silent. Two further scans added **zero**
+duplicates. A simulated Telegram outage returned in 774ms without throwing:
+in-app `SENT`, Telegram `FAILED` with a sanitised error, no token stored, and
+the 401 correctly not retried.
+
+**Fixed during verification:** replacement invalidations were being dropped.
+Phase E reports those with no setup id (the lifecycle returns the _new_ setup's),
+so six real "the level you were waiting on is gone" events went unreported.
+Resolved inside Phase F by looking the setup up from stored truth — no Phase A–E
+file was changed.
+
+Next up, once reviewed: **Phase G — advanced backtesting.**
 
 ## Phase 1 — Chart Foundation ✅
 

@@ -55,6 +55,17 @@ make that unnecessary most of the time.
   `lib/scanner`. It reads **closed candles only** — the forming candle is
   dropped before the engine sees it, which is what makes a repeated scan
   idempotent. It knows nothing about notifications.
+- **The notification layer consumes truth, it never re-derives it.**
+  `lib/notifications` maps Phase D lifecycle events onto messages; Phase D
+  decides whether a setup moved and Phase C decides what the market did.
+  STRUCTURE_CHANGED fires only when the confirmation engine reports a
+  `STRUCTURE_BREAK` or `RECLAIM` — a plain `SETUP_FORMING →
+WAITING_CONFIRMATION` is price arriving somewhere, not structure changing,
+  and says nothing. Dedupe is Phase D's `SetupEvent.id`, enforced by a unique
+  index, so re-observing an unchanged setup cannot notify twice.
+- **`TELEGRAM_BOT_TOKEN` is read in exactly one file**
+  (`lib/notifications/telegram-provider.ts`) and never returned, logged, or
+  stored. Errors are stripped of it before they reach a database row.
 - **Disclaimers come from `lib/constants/disclaimers.ts`.** Never inline the
   wording.
 - **No meme coins.** The curated list is `lib/market-data/curated-assets.ts`.
@@ -76,6 +87,7 @@ lib/
   backtesting/  bar-by-bar replay
   setups/       setup identity + lifecycle planner (pure; no DB)
   scanner/      scheduling, concurrency, retries, ranking (pure; no I/O)
+  notifications/ event mapping, dedupe keys, Telegram formatting (pure)
 scripts/        the local scanner process (npm run scanner)
   market-data/  provider abstraction + Binance
 services/       DB-backed services (markets, candles, snapshots, backtests)
