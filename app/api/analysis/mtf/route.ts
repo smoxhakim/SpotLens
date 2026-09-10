@@ -10,6 +10,7 @@ import { currentUserId } from "@/lib/auth";
 import { isLastCandleForming } from "@/lib/market-data/provider";
 import { getCandles } from "@/services/candles";
 import { findMarketByPairId } from "@/services/markets";
+import { trackSetup } from "@/services/setups";
 import { saveAnalysisSnapshot } from "@/services/snapshots";
 import type { AnalysisRunResponse } from "@/types/analysis";
 
@@ -89,6 +90,18 @@ export async function POST(req: NextRequest) {
           result,
         })
       : null;
+
+    // Same lifecycle path as the single-timeframe route — one setup per pair
+    // and entry timeframe, however the analysis was run.
+    if (userId) {
+      await trackSetup({
+        userId,
+        tradingPairId: market.pairId,
+        timeframe: body.lowerTimeframe,
+        result,
+        analysisSnapshotId: snapshotId,
+      });
+    }
 
     return NextResponse.json<AnalysisRunResponse>({
       pairId: market.pairId,

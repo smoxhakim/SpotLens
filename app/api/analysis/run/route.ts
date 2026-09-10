@@ -10,6 +10,7 @@ import { currentUserId } from "@/lib/auth";
 import { isLastCandleForming } from "@/lib/market-data/provider";
 import { getCandles } from "@/services/candles";
 import { findMarketByPairId } from "@/services/markets";
+import { trackSetup } from "@/services/setups";
 import { saveAnalysisSnapshot } from "@/services/snapshots";
 import type { AnalysisRunResponse } from "@/types/analysis";
 
@@ -67,6 +68,19 @@ export async function POST(req: NextRequest) {
           result,
         })
       : null;
+
+    // Lifecycle tracking sits here rather than inside the engine: `runAnalysis`
+    // is pure and must stay that way. Anonymous runs are not tracked, for the
+    // same reason they are not recorded — a setup belongs to an owner.
+    if (userId) {
+      await trackSetup({
+        userId,
+        tradingPairId: market.pairId,
+        timeframe: body.timeframe,
+        result,
+        analysisSnapshotId: snapshotId,
+      });
+    }
 
     return NextResponse.json<AnalysisRunResponse>({
       snapshotId,

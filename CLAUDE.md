@@ -37,6 +37,18 @@ make that unnecessary most of the time.
   the score, it never computes one. UI renders that list; it must not re-derive
   strategy meaning. A label that describes a verdict (a status, an MTF
   classification) belongs in the engine, not in a component.
+- **Setup identity is zone overlap, not equality.** `lib/setups` decides
+  whether an analysis belongs to a setup already being tracked: same pair, same
+  timeframe, and an entry zone that _overlaps_ the stored one. Zones are
+  ATR-scaled and drift every candle, so keying on exact bounds would mint a new
+  setup on every run. Re-running an unchanged analysis writes **nothing** —
+  that is what stops the future scanner filling the table. INVALIDATED is
+  terminal; a level that comes back is a new setup with a new id.
+- **A stored setup's numbers never change.** `TrackedSetup`'s snapshot columns
+  are written once. Later analysis moving the entry or the score is the market,
+  not a correction — rewriting them would destroy the record of what was
+  actually on offer. Lifecycle columns change, and every change appends a
+  `SetupEvent`.
 - **Disclaimers come from `lib/constants/disclaimers.ts`.** Never inline the
   wording.
 - **No meme coins.** The curated list is `lib/market-data/curated-assets.ts`.
@@ -56,6 +68,7 @@ lib/
   analysis/     the engine — pure, deterministic, no I/O
   indicators/   EMA, RSI, ATR, volume
   backtesting/  bar-by-bar replay
+  setups/       setup identity + lifecycle planner (pure; no DB)
   market-data/  provider abstraction + Binance
 services/       DB-backed services (markets, candles, snapshots, backtests)
 ```
