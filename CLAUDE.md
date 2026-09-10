@@ -49,6 +49,12 @@ make that unnecessary most of the time.
   not a correction — rewriting them would destroy the record of what was
   actually on offer. Lifecycle columns change, and every change appends a
   `SetupEvent`.
+- **The scanner has no strategy of its own.** `services/scanner.ts` calls the
+  same `runAnalysis` and the same `trackSetup` everything else does; all its
+  rules (scheduling, retries, ranking, failure classes) are pure functions in
+  `lib/scanner`. It reads **closed candles only** — the forming candle is
+  dropped before the engine sees it, which is what makes a repeated scan
+  idempotent. It knows nothing about notifications.
 - **Disclaimers come from `lib/constants/disclaimers.ts`.** Never inline the
   wording.
 - **No meme coins.** The curated list is `lib/market-data/curated-assets.ts`.
@@ -69,6 +75,8 @@ lib/
   indicators/   EMA, RSI, ATR, volume
   backtesting/  bar-by-bar replay
   setups/       setup identity + lifecycle planner (pure; no DB)
+  scanner/      scheduling, concurrency, retries, ranking (pure; no I/O)
+scripts/        the local scanner process (npm run scanner)
   market-data/  provider abstraction + Binance
 services/       DB-backed services (markets, candles, snapshots, backtests)
 ```
@@ -79,6 +87,8 @@ services/       DB-backed services (markets, candles, snapshots, backtests)
 npm run dev                  # port 3000
 npm run test                 # vitest — scope it: npx vitest run lib/analysis
 npm run e2e                  # playwright, serves on 3100 (3000 is often taken)
+npm run scanner              # local scanner: wakes after each candle close
+npm run scanner:once         # one pass over the universe, then exit
 npm run lint && npm run typecheck
 npx prisma migrate deploy    # apply migrations
 npm run prisma:seed          # assets, checklists, learn articles (idempotent)

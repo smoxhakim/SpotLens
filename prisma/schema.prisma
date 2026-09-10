@@ -80,6 +80,33 @@ enum SetupLifecycleStatus {
   INVALIDATED
 }
 
+enum ScannerRunStatus {
+  RUNNING
+  COMPLETED
+  /// Some markets failed and the rest were analysed. One asset failing must
+  /// never make a whole scan worthless.
+  PARTIAL
+  FAILED
+}
+
+enum ScannerResultStatus {
+  OK
+  FAILED
+}
+
+/// Why one market's analysis failed, kept coarse on purpose.
+///
+/// Categories, never the raw error: a stack trace or a provider payload can
+/// carry a URL, a token or a host, and none of that belongs in a table the UI
+/// reads from.
+enum ScannerFailureCategory {
+  MARKET_DATA_ERROR
+  INVALID_DATA
+  ANALYSIS_ERROR
+  DATABASE_ERROR
+  UNKNOWN
+}
+
 enum SetupEventType {
   CREATED
   STATUS_CHANGED
@@ -203,12 +230,13 @@ model TradingPair {
   exchangeSymbol String  @unique
   isActive       Boolean @default(true)
 
-  asset         Asset              @relation(fields: [assetId], references: [id], onDelete: Cascade)
-  candles       Candle[]
-  watchlist     Watchlist[]
-  snapshots     AnalysisSnapshot[]
-  backtestRuns  BacktestRun[]
-  trackedSetups TrackedSetup[]
+  asset          Asset              @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  candles        Candle[]
+  watchlist      Watchlist[]
+  snapshots      AnalysisSnapshot[]
+  backtestRuns   BacktestRun[]
+  trackedSetups  TrackedSetup[]
+  scannerResults ScannerResult[]
 
   @@unique([assetId, quoteCurrency])
 }
@@ -471,4 +499,82 @@ model SetupEvent {
   setup TrackedSetup @relation(fields: [setupId], references: [id], onDelete: Cascade)
 
   @@index([setupId, createdAt])
+}
+
+/// One pass of the scanner over the market universe.
+///
+/// Counts are kept on the run itself so "what did the scanner conclude?" is a
+/// single read, and so the no-trade outcomes survive: a scan where 43 of 45
+/// markets said AVOID is the tool working, and a summary that only counted
+/// setups would hide it.
+model ScannerRun {
+  id          String           @id @default(uuid())
+  startedAt   DateTime         @default(now())
+  completedAt DateTime?
+  status      ScannerRunStatus @default(RUNNING)
+  /// Which timeframes this pass covered, in the order they were scanned.
+  timeframes  Timeframe[]
+  /// Whether a person asked for this scan or the schedule did.
+  triggeredBy String           @default("SCHEDULE")
+
+  marketCount Int @default(0)
+  analysed    Int @default(0)
+  succeeded   Int @default(0)
+  failed      Int @default(0)
+
+  // --- what the markets actually said, no-trade outcomes included ----------
+  potentialSetups Int @default(0)
+  waiting         Int @default(0)
+  highRisk        Int @default(0)
+  avoided         Int @default(0)
+
+  // --- what changed as a result -------------------------------------------
+  setupsCreated Int @default(0)
+  stateChanges  Int @default(0)
+  invalidations Int @default(0)
+
+  durationMs Int?
+
+  results ScannerResult[]
+
+  @@index([startedAt])
+}
+
+/// One market on one timeframe, as the scanner found it.
+///
+/// Stored for every market rather than only the interesting ones, because
+/// "nothing here" is the answer most of the time and a scanner that only
+/// recorded its hits would be impossible to audit. Roughly 90 rows per pass.
+model ScannerResult {
+  id            String              @id @default(uuid())
+  scannerRunId  String
+  tradingPairId String
+  timeframe     Timeframe
+  status        ScannerResultStatus
+
+  /// The engine's verdict. Null when the market failed before it ran.
+  analysisStatus        SetupStatus?
+  score                 Int?
+  riskReward            Decimal?     @db.Decimal(10, 2)
+  /// Carried through so ranking can refuse to credit an unmeasured reward.
+  riskRewardIsSynthetic Boolean?
+  /// Open time of the last CLOSED candle the analysis was run on, epoch ms.
+  analysedAtCandle      BigInt?
+
+  trackedSetupId  String?
+  lifecycleStatus SetupLifecycleStatus?
+
+  failureCategory ScannerFailureCategory?
+  /// A short, sanitised message. Never a stack trace.
+  failureMessage  String?
+  attempts        Int                     @default(1)
+
+  durationMs Int?
+  createdAt  DateTime @default(now())
+
+  scannerRun  ScannerRun  @relation(fields: [scannerRunId], references: [id], onDelete: Cascade)
+  tradingPair TradingPair @relation(fields: [tradingPairId], references: [id], onDelete: Cascade)
+
+  @@index([scannerRunId, timeframe])
+  @@index([tradingPairId, createdAt])
 }

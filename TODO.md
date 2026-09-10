@@ -166,7 +166,50 @@ Branch `feat/phase-d-setup-lifecycle`.
 Phase E's scanner can call `trackSetup` after `runAnalysis` without changing
 this model.
 
-Next up, once reviewed: **Phase E — local autonomous scanner.**
+## Phase E — local autonomous scanner (done, awaiting review)
+
+Branch `feat/phase-e-scanner`.
+
+- [x] `scripts/scanner.ts` — a plain local Node process. `npm run scanner`
+      schedules; `npm run scanner:once` runs one pass. No queue, no cron
+      service, no worker: on a single machine none of them would make the
+      result more correct.
+- [x] **Candle-close driven, not polled.** Wakes 90s after each close, groups
+      timeframes closing at the same instant into one pass (an H4 close is also
+      an H1 close). Configurable via `SCANNER_CLOSE_DELAY_MS`.
+- [x] **Closed candles only.** The forming candle is dropped before the engine
+      sees anything — so a wick that has not finished forming can never trigger
+      a transition, and a scan repeated inside the same candle sees identical
+      input.
+- [x] **One strategy.** Calls the same `runAnalysis`, confirmation engine,
+      setup lifecycle and market-data layer as everything else. No scanner
+      analysis engine, no second exchange client.
+- [x] All decision logic pure in `lib/scanner` (scheduling, concurrency,
+      retries, failure classes, ranking, events); `services/scanner.ts` does
+      the I/O and owns no rules.
+- [x] Bounded concurrency (default 4), retries only for faults the provider
+      calls transient (max 3 attempts), per-market isolation, sanitised failure
+      categories that never store a URL, connection string or token.
+- [x] **Ranking:** status → quality score → measured R:R (an unmeasured one
+      counts as zero, per Phase A) → symbol as a stable tie-breaker.
+- [x] No-trade outcomes are counted and displayed. A pass where 45 markets say
+      avoid is the engine working.
+
+### Verified against live Binance data
+
+|                      | first pass (cold cache) | warm passes         |
+| -------------------- | ----------------------- | ------------------- |
+| markets × timeframes | 45 × 2 = 90             | 90                  |
+| succeeded / failed   | 90 / 0                  | 90 / 0              |
+| duration             | 36.4s                   | ~12s                |
+| candle requests      | ~180                    | ~180 (cache-served) |
+| rate-limit responses | none                    | none                |
+
+**Idempotency** — two consecutive scans on a warm cache: _"nothing changed
+since the last pass"_ both times, setups 20 → 20 → 20, events 21 → 21 → 21.
+Zero writes.
+
+Next up, once reviewed: **Phase F — Telegram + in-app notifications.**
 
 ## Phase 1 — Chart Foundation ✅
 

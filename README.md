@@ -179,6 +179,8 @@ lib/
     explanations/    structured, ordered Explanation[] built from a result
     confirmation/    the deterministic gate before POTENTIAL_SETUP
   setups/          setup identity + lifecycle planner (pure; services/ writes)
+  scanner/         scheduling, concurrency, retries, ranking (pure; no I/O)
+scripts/           the local scanner process
   indicators/        EMA, RSI, ATR, volume — pure math
   backtesting/       bar-by-bar replay + metrics
   market-data/       MarketDataProvider abstraction + Binance implementation
@@ -238,16 +240,70 @@ schema with `npx prisma migrate deploy`.
 | `BINANCE_API_BASE_URL`              | no             | Defaults to the public REST endpoint           |
 | `NEXT_PUBLIC_BINANCE_WS_BASE_URL`   | no             | Realtime price stream                          |
 | `UPSTASH_REDIS_REST_URL` / `_TOKEN` | no             | Shared rate limiting; falls back to in-process |
+| `SCANNER_MAX_CONCURRENCY`           | no             | Markets analysed at once (default 4)           |
+| `SCANNER_TIMEFRAMES`                | no             | Entry timeframes to scan (default `H1,H4`)     |
+| `SCANNER_CLOSE_DELAY_MS`            | no             | Wait after a candle closes (default 90000)     |
+| `SCANNER_USER_EMAIL`                | no             | Which account owns scanned setups              |
 
 Production refuses to start without `AUTH_SECRET` and a non-localhost
 `DATABASE_URL` — see `lib/env.ts`.
 
 ---
 
+## The scanner
+
+A separate local process that analyses the curated markets on its own, so you
+do not have to open forty-five charts to find out that forty-three of them say
+wait. It needs a database, because tracked setups are what it updates.
+
+```bash
+npm run dev          # the app, in one terminal
+npm run scanner      # the scanner, in another
+```
+
+One pass and exit, which is also what you want the first time:
+
+```bash
+npm run scanner:once
+```
+
+Stop the scheduled scanner with Ctrl-C; an in-flight pass finishes first.
+`/scanner` in the app shows recent passes.
+
+**It wakes on candle closes, not on a timer.** A candle-based strategy can only
+change its mind when a candle closes, so polling every minute would reach the
+same answer fifty-nine times and still be late for the one evaluation that
+mattered. The scanner sleeps until 90 seconds after the next close (the
+exchange needs a moment to settle the final candle), scans every timeframe
+whose candle just closed, and sleeps again. An H4 close is also an H1 close, so
+those are handled in one pass rather than two.
+
+**It only ever reads closed candles.** The forming candle is dropped before the
+engine sees anything, which means a rejection wick that has not finished
+forming can never trigger a setup transition — and a scan repeated inside the
+same candle sees identical input, reaches an identical verdict, and writes
+nothing at all the second time.
+
+**It shares everything with the rest of the app.** The same `runAnalysis`, the
+same confirmation engine, the same setup lifecycle, the same market-data layer.
+There is no scanner-specific strategy, and no second exchange client.
+
+### Troubleshooting the scanner
+
+| Symptom                        | Cause                                                                                                 |
+| ------------------------------ | ----------------------------------------------------------------------------------------------------- |
+| "No account found"             | Setups need an owner. Register at `/register`, or set `SCANNER_USER_EMAIL` if there is more than one. |
+| Every market fails             | Usually no `DATABASE_URL`, or the exchange is unreachable. The failure category is on `/scanner`.     |
+| A single market fails          | Expected and isolated — the run is reported PARTIAL and the other forty-four are analysed.            |
+| Nothing appears on `/scanner`  | Sign in: scanner history is behind the same auth as everything else.                                  |
+| Scans feel slow the first time | The candle cache is cold. A warm pass over 45 markets on two timeframes takes about 12 seconds.       |
+
+---
+
 ## Testing
 
 ```bash
-npm run test        # 379 Vitest unit tests — the analysis math is the priority surface
+npm run test        # 435 Vitest unit tests — the analysis math is the priority surface
 npm run e2e         # Playwright: a smoke suite and the full signed-in journey (port 3100)
 npm run lint
 npm run typecheck
