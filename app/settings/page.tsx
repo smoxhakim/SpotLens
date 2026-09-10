@@ -1,5 +1,6 @@
 import { Settings } from "lucide-react";
 
+import { NotificationSettings } from "@/features/notifications/components/NotificationSettings";
 import { SettingsForm } from "@/features/settings/components/SettingsForm";
 
 export const metadata = { title: "Settings — SpotLens" };
@@ -16,6 +17,7 @@ export default function SettingsPage() {
       </header>
 
       <SettingsForm />
+      <NotificationSettings />
     </div>
   );
 }

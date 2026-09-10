@@ -180,6 +180,7 @@ lib/
     confirmation/    the deterministic gate before POTENTIAL_SETUP
   setups/          setup identity + lifecycle planner (pure; services/ writes)
   scanner/         scheduling, concurrency, retries, ranking (pure; no I/O)
+  notifications/   event mapping, dedupe keys, Telegram formatting (pure)
 scripts/           the local scanner process
   indicators/        EMA, RSI, ATR, volume — pure math
   backtesting/       bar-by-bar replay + metrics
@@ -288,6 +289,43 @@ nothing at all the second time.
 same confirmation engine, the same setup lifecycle, the same market-data layer.
 There is no scanner-specific strategy, and no second exchange client.
 
+## Notifications
+
+The scanner reports what it found through two channels: an in-app list at
+`/notifications`, and Telegram if you connect a chat. Both are driven by the
+same events — there is no second path that could disagree.
+
+**Defaults are quiet.** Confirmations, invalidations and scanner errors are on;
+potential setups, structure changes and the daily summary are off. A single
+scan can create dozens of setups, and a channel that announces all of them
+stops being read. Change any of it in Settings → Notifications.
+
+**Nothing here is an instruction.** A notification says what already happened
+on a closed candle. SpotLens does not place orders, and no message will ever
+tell you to buy.
+
+### Connecting Telegram
+
+Create a bot with [@BotFather](https://t.me/botfather), put its token in
+`.env`, and restart:
+
+```bash
+TELEGRAM_BOT_TOKEN="123456:ABC..."
+```
+
+Then Settings → Notifications → **Connect Telegram**. SpotLens shows a
+one-time code; send it to your bot. There is no Chat ID to copy by hand.
+
+The code is hashed before storage, expires in ten minutes, is burned after ten
+claim attempts, and is bound to the session that asked for it — so it cannot be
+used to attach a chat to someone else's account. The token itself is read in
+exactly one file, never returned by an API, never written to the database, and
+stripped out of error messages before they are stored.
+
+If Telegram is unreachable the notification is marked failed and the scan
+carries on. A notification channel that can stop the analysis would be worse
+than no channel.
+
 ### Troubleshooting the scanner
 
 | Symptom                        | Cause                                                                                                 |
@@ -303,7 +341,7 @@ There is no scanner-specific strategy, and no second exchange client.
 ## Testing
 
 ```bash
-npm run test        # 435 Vitest unit tests — the analysis math is the priority surface
+npm run test        # 514 Vitest unit tests — the analysis math is the priority surface
 npm run e2e         # Playwright: a smoke suite and the full signed-in journey (port 3100)
 npm run lint
 npm run typecheck

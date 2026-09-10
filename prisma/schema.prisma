@@ -80,6 +80,38 @@ enum SetupLifecycleStatus {
   INVALIDATED
 }
 
+/// What a notification is about.
+///
+/// A mapping of the lifecycle truth Phase D already records, not a second state
+/// machine: each of these is derived from a `SetupEvent` that has already
+/// happened, or from a scanner run that has already finished.
+enum NotificationEventType {
+  SETUP_DETECTED
+  CONFIRMATION_DETECTED
+  SETUP_INVALIDATED
+  STRUCTURE_CHANGED
+  DAILY_SUMMARY
+  SYSTEM_ERROR
+}
+
+enum NotificationChannel {
+  IN_APP
+  TELEGRAM
+}
+
+enum NotificationStatus {
+  PENDING
+  SENT
+  FAILED
+}
+
+enum NotificationPriority {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
 enum ScannerRunStatus {
   RUNNING
   COMPLETED
@@ -152,15 +184,18 @@ model User {
   createdAt          DateTime  @default(now())
   updatedAt          DateTime  @updatedAt
 
-  accounts          Account[]
-  sessions          Session[]
-  watchlist         Watchlist[]
-  snapshots         AnalysisSnapshot[]
-  backtestRuns      BacktestRun[]
-  trackedSetups     TrackedSetup[]
-  subscription      Subscription?
-  auditLogs         AdminAuditLog[]
-  checklistsUpdated EthicalChecklist[] @relation("ChecklistUpdatedBy")
+  accounts           Account[]
+  sessions           Session[]
+  watchlist          Watchlist[]
+  snapshots          AnalysisSnapshot[]
+  backtestRuns       BacktestRun[]
+  trackedSetups      TrackedSetup[]
+  notifications      Notification[]
+  notificationPrefs  NotificationPreference?
+  telegramConnection TelegramConnection?
+  subscription       Subscription?
+  auditLogs          AdminAuditLog[]
+  checklistsUpdated  EthicalChecklist[]      @relation("ChecklistUpdatedBy")
 }
 
 // --- NextAuth Prisma adapter tables (standard shape) -----------------------
@@ -577,4 +612,101 @@ model ScannerResult {
 
   @@index([scannerRunId, timeframe])
   @@index([tradingPairId, createdAt])
+}
+
+/// One notification, on one channel.
+///
+/// A row per channel rather than per event, because in-app and Telegram
+/// succeed and fail independently: Telegram being unreachable must leave the
+/// in-app copy delivered, and retrying one must not resend the other.
+model Notification {
+  id       String                @id @default(uuid())
+  userId   String
+  type     NotificationEventType
+  channel  NotificationChannel
+  priority NotificationPriority
+  status   NotificationStatus    @default(PENDING)
+
+  /// Rendered at creation from structured data, so the record shows exactly
+  /// what the reader saw even if the setup later changes.
+  title String
+  body  String
+
+  // --- what it is about, for filtering and for the UI ----------------------
+  trackedSetupId String?
+  asset          String?
+  timeframe      Timeframe?
+
+  /// Deterministic identity, derived from the lifecycle event that caused it.
+  /// The unique index below is what makes the whole layer idempotent: a
+  /// scanner pass that re-observes an unchanged setup cannot insert a second
+  /// copy, whatever the caller does.
+  dedupeKey String
+
+  readAt   DateTime?
+  sentAt   DateTime?
+  attempts Int       @default(0)
+  /// A sanitised category and message. Never a token, never a stack trace.
+  error    String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, channel, dedupeKey])
+  @@index([userId, readAt, createdAt])
+  @@index([userId, status])
+}
+
+/// Which notifications a user wants, and where.
+///
+/// Defaults are deliberately quiet. A first scan over 45 markets created 20
+/// setups at forming or waiting; a channel that announced all of them would
+/// teach its reader to ignore it within a day.
+model NotificationPreference {
+  userId String @id
+
+  inAppEnabled    Boolean @default(true)
+  telegramEnabled Boolean @default(false)
+
+  setupDetected        Boolean @default(false)
+  confirmationDetected Boolean @default(true)
+  setupInvalidated     Boolean @default(true)
+  structureChanged     Boolean @default(false)
+  dailySummary         Boolean @default(false)
+  systemError          Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+/// A user's Telegram binding, and the pending code that creates one.
+///
+/// The bot token is never here. It lives only in the server's environment: a
+/// token in a database is a token in every backup of it.
+model TelegramConnection {
+  userId String @id
+
+  /// Null until the connection is completed.
+  chatId      String?
+  chatLabel   String?
+  connectedAt DateTime?
+
+  /// SHA-256 of the one-time code. Storing the code itself would mean anyone
+  /// with read access to this table could bind their own chat to the account.
+  pendingCodeHash String?
+  pendingExpires  DateTime?
+  /// Attempts to claim the current code, so guessing is bounded.
+  claimAttempts   Int       @default(0)
+
+  /// Telegram's update cursor, so one poll cannot re-read old messages.
+  lastUpdateId BigInt?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 }

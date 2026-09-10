@@ -35,6 +35,18 @@ connects to them directly, which is the architecture's realtime design.
 secret or a database, and rejects a database pointed at localhost. `.env` is
 git-ignored and has never been committed.
 
+**Telegram.** The bot token is read in one file, from the environment only. It
+is never returned by an API, never written to the database, never logged, and
+is stripped out of provider errors before they are stored — Telegram echoes the
+request URL back on some failures, and that URL contains the token. Connecting a
+chat uses a one-time code that is stored only as a SHA-256 hash, expires in ten
+minutes, is burned after ten claim attempts, and is bound to the session that
+requested it, so it cannot bind a chat to another account. Incoming Telegram
+payloads are parsed field by field and anything unrecognised is skipped.
+Connection and test endpoints are rate limited. The bot sends notifications and
+nothing else: there are no Telegram commands, and no code path from a message
+to an order.
+
 **No trade execution.** No code path can place an order, and no exchange API
 key with trading scope is ever requested or stored. This is structural, not a
 setting.
