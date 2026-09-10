@@ -1,4 +1,5 @@
 import { analyzeMultiTimeframe, runAnalysis } from "@/lib/analysis";
+import { classifyRegime } from "@/lib/regime";
 import type { Candle, Timeframe } from "@/lib/market-data/provider";
 
 import {
@@ -49,6 +50,15 @@ export interface BacktestSetupResult {
    */
   maxFavourableR: number | null;
   maxAdverseR: number | null;
+  /**
+   * The environment at the moment the setup triggered.
+   *
+   * Recorded so a result can be read by regime, never consulted while deciding
+   * one: the classifier runs after the engine has already produced its verdict,
+   * from the same read, and its output goes nowhere near the status gate.
+   */
+  regimeDirection: string | null;
+  regimeVolatility: string | null;
 }
 
 /**
@@ -276,6 +286,10 @@ export function runBacktest(candles: Candle[], options: BacktestOptions = {}): B
 
     const exitCandle = trade.exitIndex === null ? null : candles[trade.exitIndex];
 
+    // From the read the engine already built for this bar, so it sees exactly
+    // what the engine saw and nothing after it.
+    const regime = classifyRegime(analysis.read);
+
     const gross = trade.exitPrice === null ? null : (trade.exitPrice - fill.price) / risk;
     const net =
       trade.exitPrice === null
@@ -310,6 +324,8 @@ export function runBacktest(candles: Candle[], options: BacktestOptions = {}): B
       confirmationStatus: analysis.confirmation?.status ?? null,
       maxFavourableR: trade.maxFavourable === null ? null : trade.maxFavourable / risk,
       maxAdverseR: trade.maxAdverse === null ? null : trade.maxAdverse / risk,
+      regimeDirection: regime.direction,
+      regimeVolatility: regime.volatility,
     });
 
     // One position at a time. Scanning resumes after the trade closed, so a

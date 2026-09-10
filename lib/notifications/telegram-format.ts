@@ -92,6 +92,16 @@ function context(setup: SetupFacts): string[] {
     );
   }
 
+  // Context on the environment, never a claim about it. Added to the message
+  // rather than to the decision: the setup existed before this was calculated.
+  if (setup.regime) {
+    lines.push(
+      `${bold("Regime")}: ${escape(setup.regime.direction.toLowerCase().replace(/_/g, " "))}, ${escape(
+        setup.regime.volatility.toLowerCase(),
+      )} volatility`,
+    );
+  }
+
   return lines;
 }
 

@@ -67,6 +67,7 @@ function event(overrides: Partial<NotificationEvent> = {}): NotificationEvent {
       confirmationSignals: [],
       confirmationExplanation: null,
       invalidationReason: null,
+      regime: null,
     },
     summary: null,
     systemError: null,

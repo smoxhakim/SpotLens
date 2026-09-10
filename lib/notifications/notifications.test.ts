@@ -71,6 +71,7 @@ function setupFacts(overrides: Partial<SetupFacts> = {}): SetupFacts {
     confirmationSignals: [SIGNALS.volume, SIGNALS.higherLow],
     confirmationExplanation: "Confirmation is present.",
     invalidationReason: null,
+    regime: { direction: "TRENDING_UP", volatility: "NORMAL" },
     ...overrides,
   };
 }

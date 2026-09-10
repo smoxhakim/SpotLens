@@ -112,6 +112,10 @@ export async function executeBacktest(input: RunBacktestInput) {
       byTargetKind: breakdownBy(setups, (s) =>
         s.entryRiskRewardIsSynthetic ? "unmeasured reward" : "structural target",
       ),
+      // Research only. A regime that did well in one sample is a description
+      // of that sample, and nothing here selects parameters from it.
+      byRegime: breakdownBy(setups, (s) => s.regimeDirection),
+      byVolatility: breakdownBy(setups, (s) => s.regimeVolatility),
     };
   } catch (err) {
     await prisma.backtestRun

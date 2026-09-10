@@ -176,6 +176,7 @@ function toTransition(setup: NonNullable<SetupWithLatestEvent>): LoadedTransitio
       statusReason?: string;
       trend?: string;
       mtfAgreement?: string | null;
+      regime?: { direction: string; volatility: string } | null;
     };
 
     const payload = (event.payload ?? null) as {
@@ -210,6 +211,7 @@ function toTransition(setup: NonNullable<SetupWithLatestEvent>): LoadedTransitio
         confirmationSignals: payload?.signals ?? [],
         confirmationExplanation: payload?.explanation ?? null,
         invalidationReason: setup.invalidationReason,
+        regime: snapshot.regime ?? null,
       },
     };
   }

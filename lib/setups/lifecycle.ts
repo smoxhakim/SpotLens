@@ -1,4 +1,5 @@
 import type { AnalysisResult } from "@/lib/analysis";
+import { classifyRegime } from "@/lib/regime";
 
 import type {
   ConfirmationPayload,
@@ -301,6 +302,24 @@ export function snapshotOf(result: AnalysisResult): SetupSnapshot {
       trend: result.read.trend.trend,
       mtfAgreement: result.mtf?.agreement ?? null,
       createdFromCandleTime: result.read.lastCandleTime,
+      // Classified from the read the engine already produced, so this costs
+      // arithmetic and no data. It describes the environment; it did not help
+      // decide anything.
+      regime: regimeOf(result),
     },
+  };
+}
+
+/** The environment, as context on the stored snapshot. Never a decision input. */
+function regimeOf(result: AnalysisResult): {
+  direction: string;
+  volatility: string;
+  evidence: number;
+} | null {
+  const regime = classifyRegime(result.read);
+  return {
+    direction: regime.direction,
+    volatility: regime.volatility,
+    evidence: regime.evidence,
   };
 }

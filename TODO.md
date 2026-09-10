@@ -305,7 +305,41 @@ breakeven after the first target trades — and a breakeven stop is not
 breakeven once both legs are paid for. A fee-free backtest hides that
 completely. This is a historical observation on one sample, not a verdict.
 
-Next up, once reviewed: **Phase H.**
+## Phase H — risk management and market regime (done, awaiting review)
+
+Branch `feat/phase-h-risk-regime`.
+
+- [x] `lib/risk/` — position sizing from the stop distance, with structured
+      per-field errors instead of a bare null, the spot cap, fees and slippage
+      in the backtester's convention, profit figures and a ratio consistent
+      with the engine's own.
+- [x] **The cap reports both numbers.** A capped position risks less than
+      intended, and the calculator shows the risk-based size, the cap, the
+      final size, the intended risk and the actual risk side by side rather
+      than quietly rewriting the request.
+- [x] `calculatePositionSize` is now a thin adapter over `lib/risk`, so there
+      is one implementation of the formula and its existing callers are
+      untouched.
+- [x] `lib/regime/` — two axes (direction, volatility), explicit documented
+      thresholds, classified from a finished `MarketRead`. **The engine never
+      receives it**: `runAnalysis` has no regime field, so it cannot change a
+      status, score, confirmation or lifecycle transition.
+- [x] Regime reaches the analysis panel, the stored setup snapshot,
+      notification context and backtest breakdowns — as context only.
+
+### Verified live
+
+Six markets on H4: 3 RANGE, 3 UNCLEAR, all NORMAL volatility (ATR 1.00–2.83%).
+Repeated classification identical. The engine's verdict on BTCUSDT H4 was
+unchanged by regime existing.
+
+**R:R consistency checked directly.** Given the target
+`riskReward.measuredTo` names, the calculator returns **2.1475** against the
+engine's **2.1475**. Feeding `takeProfits[1]` blindly gives 1.30 — Phase A
+measures to the second _qualifying_ structural target, and TP1 at 0.57R is
+below its 1R floor. Pinned as a test.
+
+Next up, once reviewed: **Phase I.**
 
 ## Phase 1 — Chart Foundation ✅
 

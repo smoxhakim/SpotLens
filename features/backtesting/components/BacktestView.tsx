@@ -45,6 +45,8 @@ interface BacktestResponse {
   byTimeframe: Breakdown[];
   byScoreBand: Breakdown[];
   byTargetKind: Breakdown[];
+  byRegime: Breakdown[];
+  byVolatility: Breakdown[];
   disclaimer: string;
 }
 
@@ -340,6 +342,12 @@ function Report({ data }: { data: BacktestResponse }) {
               )}
               {data.byTargetKind.length > 1 && (
                 <BreakdownTable title="By target kind" rows={data.byTargetKind} />
+              )}
+              {data.byRegime.length > 1 && (
+                <BreakdownTable title="By market regime" rows={data.byRegime} />
+              )}
+              {data.byVolatility.length > 1 && (
+                <BreakdownTable title="By volatility" rows={data.byVolatility} />
               )}
 
               <Trades setups={data.setups} />

@@ -43,6 +43,8 @@ function trade(
     confirmationStatus: "PRESENT",
     maxFavourableR: null,
     maxAdverseR: null,
+    regimeDirection: "TRENDING_UP",
+    regimeVolatility: "NORMAL",
   };
 
   return { ...base, ...overrides };
