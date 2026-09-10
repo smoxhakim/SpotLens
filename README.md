@@ -134,6 +134,9 @@ prevent — and returns AVOID with no levels.
 | **Market analysis** | Candlestick chart with EMA and S/R overlays, the market read, and the full trade setup                         |
 | **Watchlist**       | Your own shortlist, toggleable on the chart                                                                    |
 | **Backtest**        | Bar-by-bar replay of the same engine over history, with win rate, average realised R, total R and max drawdown |
+| **Journal**         | What you decided about a tracked setup, kept beside what SpotLens said — including the setups you passed on    |
+| **Replay**          | Any old setup as it looked at a chosen moment: no later candle, no later event, the numbers recorded then      |
+| **Research**        | Descriptive statistics over your own history, with the engine's results and your decisions kept apart          |
 | **Learn**           | 15 articles covering every concept the engine uses, linked contextually from each analysis field               |
 | **Risk calculator** | Position size from balance, risk percentage, entry and stop                                                    |
 | **Asset research**  | Per-asset detail plus an ethical checklist for all 45 assets (informational, not a fatwa)                      |
@@ -171,6 +174,7 @@ features/
   learning/          learn index and article view
   market/            chart, selectors, live header
   risk-management/   position size calculator
+  journal/           journal, replay and research views
   watchlist/  auth/  settings/
 lib/
   analysis/          the engine — pure, deterministic, no I/O
@@ -181,6 +185,9 @@ lib/
   setups/          setup identity + lifecycle planner (pure; services/ writes)
   scanner/         scheduling, concurrency, retries, ranking (pure; no I/O)
   notifications/   event mapping, dedupe keys, Telegram formatting (pure)
+  journal/         decision states and their legal transitions (pure)
+  replay/          the cutoff: what was knowable at a moment (pure)
+  research/        engine funnel and decision counts, kept apart (pure)
 scripts/           the local scanner process
   indicators/        EMA, RSI, ATR, volume — pure math
   backtesting/       bar-by-bar replay + metrics
@@ -403,7 +410,7 @@ than no channel.
 ## Testing
 
 ```bash
-npm run test        # 631 Vitest unit tests — the analysis math is the priority surface
+npm run test        # 741 Vitest unit tests — the analysis math is the priority surface
 npm run e2e         # Playwright: a smoke suite and the full signed-in journey (port 3100)
 npm run lint
 npm run typecheck
@@ -415,6 +422,9 @@ runners, so run it locally or trigger it from the Actions tab.
 
 **Stop `npm run dev` before running E2E.** Next 16 refuses to start a second
 dev server in the same directory, and `npm run e2e` starts its own on 3100.
+A dev server left running from before a migration is worse than an obstacle:
+its Prisma client predates the new tables, so routes touching them 500 with
+`Cannot read properties of undefined`. Restart it after every migration.
 Alternatively run the suite against a production build, which is what CI does
 and what the signed-in journey needs:
 
@@ -509,12 +519,44 @@ boundaries below routes that can 404.
 
 ---
 
+## Journal, replay and research
+
+A setup and a trade are different things, and so are the engine finding a good
+setup and you trading it well. The journal keeps both records side by side and
+**never merges them**: `/research` reports what the engine produced as counts,
+and what your decisions produced in R, in two separate panels. One number
+across both would describe neither.
+
+Journal a tracked setup from `/setups` — including deciding to pass on it. A
+skipped setup is data too; without it, research only ever sees the trades you
+took. Decisions move `WATCHING → SKIPPED | TAKEN | CANCELLED`, a skip can still
+become a take later, and `CLOSED` is the end of the line. A taken position can
+never become a skip.
+
+When you record what a trade did, the numbers are **yours** — your fill, your
+stop, your fees. Nothing is taken from the setup's plan, and if you traded
+without a stop there is no R to report rather than a borrowed one.
+
+Mistyped a fill? Correct it. The entry then shows the corrected numbers, and
+the version you replaced is kept in full on the event that replaced it — every
+field, plus the R it reported — so a correction can never quietly become a
+rewrite. `GET /api/journal/:id` returns them as `supersededVersions`, oldest
+first.
+
+`/replay/:setupId` reconstructs a setup as it looked at a chosen moment: only
+candles that had closed by then, only lifecycle events that had already
+happened, and the numbers SpotLens recorded at the time rather than
+recalculated with today's data. It reads stored candles only and **never
+fetches** — where the local history is short, it says so rather than filling
+the gap.
+
 ## Status
 
-**All eight phases are shipped and merged.** The engine, the full setup
+**Phases A–H are shipped and merged; Phase I is on its branch.** The engine, the full setup
 calculator, accounts and watchlist, multi-timeframe analysis, the learning
 section, backtesting, and the hardening pass are all complete and verified
-against live market data.
+against live market data. The journal, replay and research workflow is built
+and verified against the real local database, awaiting review.
 
 Deliberately **not** built, each by explicit decision for a single-user app:
 Stripe billing and plan gating, Sentry, uptime monitoring, staging

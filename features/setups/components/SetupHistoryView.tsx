@@ -1,8 +1,9 @@
 "use client";
 
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
 import { useSession } from "next-auth/react";
+import { useState } from "react";
 
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
@@ -161,6 +162,8 @@ function SetupCard({ setup }: { setup: TrackedSetup }) {
           them; this record deliberately does not follow.
         </p>
 
+        <JournalActions setupId={setup.id} />
+
         {setup.invalidationReason && (
           <Alert variant="warning">
             <AlertDescription className="text-[11px]">{setup.invalidationReason}</AlertDescription>
@@ -176,6 +179,66 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
     <div>
       <dt className="text-muted-foreground">{label}</dt>
       <dd className="tabular font-medium text-foreground">{children}</dd>
+    </div>
+  );
+}
+
+/**
+ * Records a decision about this setup, or opens the one already recorded.
+ *
+ * Journaling is not acting: it writes down what the person decided, including
+ * deciding to pass. Nothing is sent to an exchange, and the request is
+ * idempotent — a setup already journaled returns its existing entry rather
+ * than a second one.
+ */
+function JournalActions({ setupId }: { setupId: string }) {
+  const queryClient = useQueryClient();
+  const [entryId, setEntryId] = useState<string | null>(null);
+
+  const journal = useMutation({
+    mutationFn: (decision: "WATCHING" | "SKIPPED") =>
+      fetchApi<{ id: string }>("/api/journal", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ trackedSetupId: setupId, decision }),
+      }),
+    onSuccess: (data) => {
+      setEntryId(data.id);
+      queryClient.invalidateQueries({ queryKey: ["journal"] });
+    },
+  });
+
+  return (
+    <div className="flex flex-wrap items-center gap-1.5 pt-1">
+      {entryId ? (
+        <Button asChild size="sm" variant="outline" className="h-7 px-2 text-[10px]">
+          <Link href={`/journal/${entryId}`}>Open journal entry</Link>
+        </Button>
+      ) : (
+        <>
+          <Button
+            size="sm"
+            variant="outline"
+            className="h-7 px-2 text-[10px]"
+            onClick={() => journal.mutate("WATCHING")}
+            disabled={journal.isPending}
+          >
+            Journal as watching
+          </Button>
+          <Button
+            size="sm"
+            variant="ghost"
+            className="h-7 px-2 text-[10px]"
+            onClick={() => journal.mutate("SKIPPED")}
+            disabled={journal.isPending}
+          >
+            Journal as skipped
+          </Button>
+        </>
+      )}
+      <Button asChild size="sm" variant="ghost" className="h-7 px-2 text-[10px]">
+        <Link href={`/replay/${setupId}`}>Replay</Link>
+      </Button>
     </div>
   );
 }
