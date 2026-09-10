@@ -266,13 +266,26 @@ describe("price position and confirmation", () => {
     expect(find(result, "CONFIRMATION")).toBeUndefined();
   });
 
-  it("frames confirmation as outstanding rather than met", () => {
-    // The engine has no notion of a confirmation having occurred; claiming
-    // either way would assert something no calculation supports.
-    const confirmation = find(runAnalysis(pullbackIntoSupport()), "CONFIRMATION")!;
+  it("reports the deterministic confirmation verdict rather than guessing", () => {
+    // Changed in Phase C. Until the confirmation engine existed this could only
+    // restate the entry checklist, because nothing computed whether any of it
+    // had happened. It now reports what the engine decided — and only what the
+    // engine decided.
+    const result = runAnalysis(pullbackIntoSupport());
+    const confirmation = find(result, "CONFIRMATION")!;
 
-    expect(confirmation.signal).toBe("neutral");
-    expect(confirmation.title).toMatch(/still to be seen/i);
+    expect(result.confirmation!.status).toBe("PRESENT");
+    expect(confirmation.signal).toBe("positive");
+    expect(confirmation.detail).toBe(result.confirmation!.explanation);
+  });
+
+  it("still frames an unconfirmed setup as outstanding", () => {
+    const result = runAnalysis(extendedAboveSupport());
+    const confirmation = find(result, "CONFIRMATION")!;
+
+    expect(result.confirmation!.status).not.toBe("PRESENT");
+    expect(confirmation.signal).not.toBe("positive");
+    expect(confirmation.title).toMatch(/still to be seen|contradicted/i);
   });
 });
 

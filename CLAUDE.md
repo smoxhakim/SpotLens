@@ -20,6 +20,11 @@ make that unnecessary most of the time.
 - **Prefer WAIT.** Status rules are ordered so every disqualifying condition is
   ruled out _before_ POTENTIAL_SETUP can be returned. If most analyses start
   returning "potential setup", that is a bug.
+- **Confirmation is the last gate, and only a gate.** `lib/analysis/confirmation`
+  runs after every other rule, so it can hold a setup at WAIT and nothing else —
+  it cannot promote past the counter-trend veto, an unmeasured reward, or a
+  failing grade. It judges **closed candles only**. It adds no status and no
+  score category.
 - **AVOID shows no numbers.** No entry, stop or targets — handing over levels
   for a trade just advised against defeats the point.
 - **Every number carries a reason.** The engine decides; `lib/analysis/explain`

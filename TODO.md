@@ -90,7 +90,41 @@ Branch `feat/phase-b-structured-explanations`.
 - [x] 35 tests, including injected-defect checks for the synthetic signal and
       the ordering guarantee. 299 unit total, 27 E2E.
 
-Next up, once reviewed: **Phase C — strict confirmation engine.**
+## Phase C — strict confirmation engine (done, awaiting review)
+
+Branch `feat/phase-c-confirmation-engine`.
+
+- [x] `lib/analysis/confirmation/` — five deterministic signals, each tri-state,
+      judged on **closed candles only**. Called from `runAnalysis`, so the
+      backtester and live analysis run the identical function.
+- [x] Applied as the **last** gate in `determineStatus`, after every existing
+      disqualifier. It can only hold a setup at WAIT; there is no path by which
+      it promotes one past the counter-trend veto, an unmeasured reward, or a
+      failing grade. No fifth status, no new score category.
+- [x] The rule, stated once: any negative signal ⇒ CONTRADICTED; otherwise ≥1
+      positive _primary_ signal **and** ≥2 positive signals total ⇒ PRESENT;
+      else NOT_PRESENT. Volume is supporting-only and can never confirm alone.
+
+### Effect on quality (700 bars × 45 markets, both timeframes)
+
+Confirmation cut setup count by about two thirds and roughly doubled per-trade
+expectancy on H1, with drawdown less than half what it was:
+
+|              | H1 before | H1 after  | H4 before | H4 after  |
+| ------------ | --------- | --------- | --------- | --------- |
+| setups       | 146       | **51**    | 133       | **43**    |
+| win rate     | 58.1%     | **75.0%** | 50.8%     | **53.3%** |
+| avg R        | 0.252     | **0.481** | 0.030     | **0.086** |
+| max drawdown | 4.9%      | **2.0%**  | 5.5%      | **4.7%**  |
+
+Live census over all 45 curated markets was 0 POTENTIAL_SETUP on H1 and H4
+both before and after — the live boundary was already at zero, which is why
+the backtest is the measurement that says anything.
+
+**H4 remains close to breakeven** (avg R 0.086). Confirmation improves it but
+does not fix it, and that is worth knowing before H4 is trusted.
+
+Next up, once reviewed: **Phase D — setup persistence + lifecycle.**
 
 ## Phase 1 — Chart Foundation ✅
 

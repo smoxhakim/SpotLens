@@ -40,6 +40,24 @@ export {
 } from "./mtf";
 export type { MtfSummary, MtfAgreement } from "./mtf";
 
+export { evaluateConfirmation } from "./confirmation";
+export {
+  MIN_POSITIVE_SIGNALS,
+  PRIMARY_SIGNALS,
+  RECENT_SWING_MAX_AGE_BARS,
+  RECLAIM_LOOKBACK_BARS,
+  REJECTION_MIN_CLOSE_POSITION,
+  REJECTION_MIN_WICK_RATIO,
+  THIN_VOLUME_RELATIVE,
+} from "./confirmation";
+export type {
+  ConfirmationResult,
+  ConfirmationSignal,
+  ConfirmationSignalType,
+  ConfirmationSignalDirection,
+  ConfirmationStatus,
+} from "./confirmation";
+
 export { buildExplanations } from "./explanations";
 export { EXPLANATION_ORDER, EXPLANATION_CATEGORY_LABELS } from "./explanations";
 export type { Explanation, ExplanationCategory, ExplanationSignal } from "./explanations";

@@ -1,6 +1,7 @@
 import { ANALYSIS_DISCLAIMER, DISCLAIMER_VERSION } from "@/lib/constants/disclaimers";
 import type { Candle } from "@/lib/market-data/provider";
 
+import { evaluateConfirmation, type ConfirmationResult } from "../confirmation";
 import { runMarketRead, type MarketRead, type MarketReadOptions } from "../market-read";
 import type { MtfSummary } from "../mtf";
 import { calculateEntryZone } from "./entry";
@@ -23,6 +24,15 @@ export interface AnalysisResult {
    * reasoning behind the refusal rather than a number to trade on.
    */
   score: SetupScore | null;
+  /**
+   * Deterministic confirmation, evaluated once a setup exists.
+   *
+   * Null when the run never got as far as building one — there is nothing to
+   * confirm at a level the engine already refused. Computed here rather than
+   * by each caller so that live analysis and the backtester run the identical
+   * function on the identical input.
+   */
+  confirmation: ConfirmationResult | null;
   status: TradeStatus;
   statusReason: string;
   disclaimer: string;
@@ -60,6 +70,7 @@ export function runAnalysis(candles: Candle[], options: RunAnalysisOptions = {})
     ...base,
     setup: null,
     score: null,
+    confirmation: null,
     status,
     statusReason,
   });
@@ -109,7 +120,17 @@ export function runAnalysis(candles: Candle[], options: RunAnalysisOptions = {})
   }
 
   const score = scoreSetup(read, entry, riskReward, mtf ?? undefined);
-  const verdict = determineStatus(read, entry, riskReward, score, mtf ?? undefined);
+
+  // Judged on closed candles only, and folded in as the final gate below.
+  const confirmation = evaluateConfirmation({
+    read,
+    entry,
+    candles,
+    lastCandleIsForming: options.lastCandleIsForming,
+    swingLookback: options.swingLookback,
+  });
+
+  const verdict = determineStatus(read, entry, riskReward, score, mtf ?? undefined, confirmation);
 
   // The status engine can reach AVOID on evidence that only exists once the
   // setup has been built — a risk/reward below 1, or a score under the AVOID
@@ -125,6 +146,7 @@ export function runAnalysis(candles: Candle[], options: RunAnalysisOptions = {})
       ...base,
       setup: null,
       score,
+      confirmation,
       status: verdict.status,
       statusReason: verdict.reason,
     };
@@ -134,6 +156,7 @@ export function runAnalysis(candles: Candle[], options: RunAnalysisOptions = {})
     ...base,
     setup: { direction: "LONG", entry, stopLoss, takeProfits, riskReward },
     score,
+    confirmation,
     status: verdict.status,
     statusReason: verdict.reason,
   };

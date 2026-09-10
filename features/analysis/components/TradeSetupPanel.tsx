@@ -12,6 +12,7 @@ import type { AnalysisResult, SetupScore, TradeStatus } from "@/lib/analysis";
 import { formatPrice } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
+import { ConfirmationPanel } from "./ConfirmationPanel";
 import { ExplanationList } from "./ExplanationList";
 import { LearnLink } from "./LearnLink";
 import { MtfPanel } from "./MtfPanel";
@@ -135,6 +136,8 @@ export function TradeSetupPanel({ result, isPending, error, asOf }: TradeSetupPa
         <ExplanationList explanations={explanations} />
 
         {result.mtf && <MtfPanel mtf={result.mtf} />}
+
+        {result.confirmation && <ConfirmationPanel confirmation={result.confirmation} />}
 
         {!setup && (
           <p className="text-[11px] leading-relaxed text-muted-foreground">
