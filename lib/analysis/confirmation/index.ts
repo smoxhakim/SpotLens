@@ -10,6 +10,7 @@ export type { ConfirmationInput } from "./engine";
 export {
   MIN_POSITIVE_SIGNALS,
   PRIMARY_SIGNALS,
+  isPrimarySignal,
   RECENT_SWING_MAX_AGE_BARS,
   RECLAIM_LOOKBACK_BARS,
   REJECTION_MIN_CLOSE_POSITION,

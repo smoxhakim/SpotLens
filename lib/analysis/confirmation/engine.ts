@@ -6,7 +6,7 @@ import { DEFAULT_SWING_LOOKBACK, readStructure, type StructureRead } from "../st
 import type { EntryZone } from "../setup/types";
 import {
   MIN_POSITIVE_SIGNALS,
-  PRIMARY_SIGNALS,
+  isPrimarySignal,
   RECENT_SWING_MAX_AGE_BARS,
   RECLAIM_LOOKBACK_BARS,
   REJECTION_MIN_CLOSE_POSITION,
@@ -84,12 +84,20 @@ export function evaluateConfirmation(input: ConfirmationInput): ConfirmationResu
     reclaim(candle, closed, entry),
   ].filter((signal): signal is ConfirmationSignal => signal !== null);
 
-  const negatives = signals.filter((s) => s.signal === "negative");
   const positives = signals.filter((s) => s.signal === "positive");
-  const hasPrimary = positives.some((s) => PRIMARY_SIGNALS.includes(s.type));
+  const negatives = signals.filter((s) => s.signal === "negative");
+
+  // Only a primary signal can contradict. Thin volume means nobody showed up,
+  // and nobody showing up cannot refute a rejection wick and a higher low that
+  // visibly did happen — it leaves them uncorroborated, which is what
+  // NOT_PRESENT already says.
+  const contradicting = negatives.filter((s) => isPrimarySignal(s.type));
+  const unsupportive = negatives.filter((s) => !isPrimarySignal(s.type));
+
+  const hasPrimary = positives.some((s) => isPrimarySignal(s.type));
 
   const status: ConfirmationStatus =
-    negatives.length > 0
+    contradicting.length > 0
       ? "CONTRADICTED"
       : hasPrimary && positives.length >= MIN_POSITIVE_SIGNALS
         ? "PRESENT"
@@ -103,7 +111,7 @@ export function evaluateConfirmation(input: ConfirmationInput): ConfirmationResu
   return {
     status,
     signals,
-    explanation: explain(status, positives, negatives),
+    explanation: explain(status, positives, contradicting, unsupportive),
     evaluatedAt: candle.closeTime,
     invalidationReason: lostSupport ? lostSupport.detail : null,
   };
@@ -344,29 +352,31 @@ function reclaim(candle: Candle, closed: Candle[], entry: EntryZone): Confirmati
 function explain(
   status: ConfirmationStatus,
   positives: ConfirmationSignal[],
-  negatives: ConfirmationSignal[],
+  contradicting: ConfirmationSignal[],
+  unsupportive: ConfirmationSignal[],
 ): string {
+  const list = (signals: ConfirmationSignal[]) =>
+    signals.map((s) => s.title.toLowerCase()).join(", ");
+
+  // Kept separate from both other groups on purpose. A caveat is not a reason
+  // to act, and it is not a contradiction either — conflating it with the
+  // latter is what let quiet volume overrule evidence that visibly happened.
+  const caveat =
+    unsupportive.length > 0
+      ? ` It is worth noting that ${list(unsupportive)} — that does not refute the evidence above, but it does mean the reaction went unaccompanied.`
+      : "";
+
   if (status === "CONTRADICTED") {
-    return `Confirmation is contradicted: ${negatives
-      .map((s) => s.title.toLowerCase())
-      .join(
-        ", ",
-      )}. Whatever else the chart shows, the market has answered at this level in the wrong direction.`;
+    return `Confirmation is contradicted: ${list(contradicting)}. Whatever else the chart shows, the market has answered at this level in the wrong direction.`;
   }
 
   if (status === "PRESENT") {
-    return `Confirmation is present: ${positives
-      .map((s) => s.title.toLowerCase())
-      .join(", ")}. The level has been tested and held, on more than one piece of evidence.`;
+    return `Confirmation is present: ${list(positives)}. The level has been tested and held, on more than one piece of evidence.${caveat}`;
   }
 
   if (positives.length === 0) {
-    return "No confirmation yet. Price is at the level, but nothing has happened there to show buyers are defending it. Waiting costs one candle.";
+    return `No confirmation yet. Price is at the level, but nothing has happened there to show buyers are defending it. Waiting costs one candle.${caveat}`;
   }
 
-  return `Not enough confirmation yet — ${positives
-    .map((s) => s.title.toLowerCase())
-    .join(
-      ", ",
-    )}, but a single piece of evidence is the one most easily erased by the next candle. At least ${MIN_POSITIVE_SIGNALS} are required, one of which must be structural rather than volume alone.`;
+  return `Not enough confirmation yet — ${list(positives)}, but a single piece of evidence is the one most easily erased by the next candle. At least ${MIN_POSITIVE_SIGNALS} are required, one of which must be structural rather than volume alone.${caveat}`;
 }
