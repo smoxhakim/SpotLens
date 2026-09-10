@@ -24,7 +24,9 @@ make that unnecessary most of the time.
   runs after every other rule, so it can hold a setup at WAIT and nothing else —
   it cannot promote past the counter-trend veto, an unmeasured reward, or a
   failing grade. It judges **closed candles only**. It adds no status and no
-  score category.
+  score category. CONTRADICTED means opposing evidence (a primary signal fired
+  negative); NOT_PRESENT means missing evidence. Thin volume is the latter — an
+  absence cannot refute evidence that visibly happened.
 - **AVOID shows no numbers.** No entry, stop or targets — handing over levels
   for a trade just advised against defeats the point.
 - **Every number carries a reason.** The engine decides; `lib/analysis/explain`

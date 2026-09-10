@@ -246,7 +246,7 @@ Production refuses to start without `AUTH_SECRET` and a non-localhost
 ## Testing
 
 ```bash
-npm run test        # 341 Vitest unit tests — the analysis math is the priority surface
+npm run test        # 346 Vitest unit tests — the analysis math is the priority surface
 npm run e2e         # Playwright: a smoke suite and the full signed-in journey (port 3100)
 npm run lint
 npm run typecheck

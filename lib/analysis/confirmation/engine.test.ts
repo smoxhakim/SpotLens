@@ -205,11 +205,14 @@ describe("volume", () => {
     expect(types(result, "positive")).not.toContain("VOLUME_CONFIRMATION");
   });
 
-  it("contradicts on thin volume", () => {
+  it("records thin volume as a negative signal without contradicting", () => {
+    // Thin volume is missing evidence, not opposing evidence. It is still
+    // reported — the reader should see it — but it cannot by itself say the
+    // level failed.
     const result = evaluate(filler(30), readWith({ relative: 0.4 }));
 
     expect(types(result, "negative")).toContain("VOLUME_CONFIRMATION");
-    expect(result.status).toBe("CONTRADICTED");
+    expect(result.status).toBe("NOT_PRESENT");
   });
 
   it("says nothing when volume could not be computed", () => {
@@ -286,13 +289,16 @@ describe("the aggregation rule", () => {
     expect(alone.explanation).toMatch(/single piece of evidence/i);
   });
 
-  it("lets a negative signal override any number of positives", () => {
+  it("lets a negative primary signal override any number of positives", () => {
+    // Support lost is opposing evidence, and it overrules a rejection wick on
+    // the same candle.
     const contradicted = evaluate(
-      [...filler(30), ...makeCandles([rejection])],
-      readWith({ relative: 0.3 }),
+      [...filler(30), ...makeCandles([{ open: 108, high: 112, low: 90, close: 99, volume: 100 }])],
+      readWith({ relative: 1.6, isAboveAverage: true, trend: "INCREASING" }),
     );
 
     expect(contradicted.signals.some((s) => s.signal === "positive")).toBe(true);
+    expect(types(contradicted, "negative")).toContain("RECLAIM");
     expect(contradicted.status).toBe("CONTRADICTED");
   });
 
@@ -400,5 +406,102 @@ describe("determinism", () => {
     const result = evaluate(series);
 
     expect(result.evaluatedAt).toBe(series.at(-1)!.closeTime);
+  });
+});
+
+/**
+ * The four cases that pin down the line between "the market said no" and "the
+ * market has not said anything yet". Thin volume is the latter, and treating it
+ * as the former let an absence overrule evidence that visibly happened.
+ */
+describe("thin volume is missing evidence, not opposing evidence", () => {
+  const thin = readWith({ relative: 0.4 });
+
+  /**
+   * A series that has just printed a confirmed higher low at 112, with two
+   * quiet candles after it so the swing is confirmed *before* the final candle
+   * — otherwise the final candle's wick becomes one of the swing's right-hand
+   * comparators and un-confirms the very structure the case is about.
+   */
+  function afterHigherLow(final: {
+    open: number;
+    high: number;
+    low: number;
+    close: number;
+    volume: number;
+  }): Candle[] {
+    return makeCandles([
+      ...new Array(20).fill(120),
+      { close: 118 },
+      { close: 112, low: 110 }, // swing low at 110
+      { close: 118 },
+      { close: 124, high: 126 }, // swing high between them
+      { close: 118 },
+      { close: 114, low: 112 }, // higher swing low at 112
+      { close: 118 },
+      { close: 118 },
+      final,
+    ]);
+  }
+
+  // Wicks into the zone (low 100 ≤ zone.high 104), lower wick 6/14 = 43% of the
+  // range, closes at 86% of it, and closes at 112 — level with the higher low,
+  // so structure is not broken downward.
+  const REJECTION = { open: 106, high: 114, low: 100, close: 112, volume: 100 };
+
+  it("case 1: rejection + higher low + thin volume is PRESENT", () => {
+    const result = evaluate(afterHigherLow(REJECTION), thin);
+
+    expect(types(result, "positive")).toEqual(
+      expect.arrayContaining(["BULLISH_REJECTION", "HIGHER_LOW"]),
+    );
+    expect(types(result, "negative")).toContain("VOLUME_CONFIRMATION");
+    // Two positive primaries already carry it; the quiet volume is a caveat.
+    expect(result.status).toBe("PRESENT");
+    expect(result.explanation).toMatch(/does not refute/i);
+  });
+
+  it("case 2: rejection + thin volume is NOT_PRESENT", () => {
+    const result = evaluate(
+      [
+        ...filler(30),
+        ...makeCandles([{ open: 108, high: 112, low: 100, close: 110, volume: 100 }]),
+      ],
+      thin,
+    );
+
+    expect(types(result, "positive")).toEqual(["BULLISH_REJECTION"]);
+    expect(result.status).toBe("NOT_PRESENT");
+  });
+
+  it("case 3: rejection + higher low + a bearish structure break is CONTRADICTED", () => {
+    // Same rejection geometry, but closing at 109 — below the confirmed higher
+    // low at 112. That is opposing evidence, and it overrules both positives.
+    const result = evaluate(
+      afterHigherLow({ open: 104, high: 110, low: 98, close: 109, volume: 100 }),
+    );
+
+    expect(types(result, "positive")).toContain("BULLISH_REJECTION");
+    expect(types(result, "negative")).toContain("STRUCTURE_BREAK");
+    expect(result.status).toBe("CONTRADICTED");
+  });
+
+  it("case 4: thin volume alone is NOT_PRESENT and can never become PRESENT", () => {
+    const result = evaluate(filler(40), thin);
+
+    expect(types(result, "positive")).toEqual([]);
+    expect(result.status).toBe("NOT_PRESENT");
+  });
+
+  it("still refuses to confirm on two supporting signals, because there is only one", () => {
+    // Guards the shape of the rule rather than one case of it: volume is the
+    // only supporting signal, so it can never reach the two-signal minimum
+    // without a primary alongside it.
+    const heavy = evaluate(
+      filler(40),
+      readWith({ relative: 3, isAboveAverage: true, trend: "INCREASING" }),
+    );
+
+    expect(heavy.status).toBe("NOT_PRESENT");
   });
 });

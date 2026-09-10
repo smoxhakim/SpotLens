@@ -34,10 +34,19 @@ export interface ConfirmationSignal {
  * `CONTRADICTED` is not "not present with extra steps".
  *
  * NOT_PRESENT means the market has not answered yet — the level is untested,
- * and waiting costs nothing. CONTRADICTED means it answered in the wrong
- * direction: support broke, structure gave way, the zone was rejected downward.
- * Both hold the setup at WAIT, but only one of them says the premise is
- * actively failing, which is what Phase D will need to invalidate on.
+ * or what evidence exists is too thin to act on. CONTRADICTED means it answered
+ * in the wrong direction: support broke, structure gave way, the zone was
+ * rejected downward.
+ *
+ * The line between them is *opposing evidence* versus *missing evidence*, and
+ * only a primary signal can supply the former. Quiet volume is an absence —
+ * nobody showed up — and an absence cannot contradict a rejection wick and a
+ * higher low that visibly did happen. It can only leave them uncorroborated,
+ * which is what NOT_PRESENT already says.
+ *
+ * Both statuses hold the setup at WAIT. The difference matters because only one
+ * of them says the premise is actively failing, which is what Phase D will need
+ * to invalidate on.
  */
 export type ConfirmationStatus = "NOT_PRESENT" | "PRESENT" | "CONTRADICTED";
 
@@ -69,6 +78,13 @@ export interface ConfirmationResult {
  * people traded, not that they bought — a support zone breaking down does it
  * on heavy volume too. It confirms a move that price action has already
  * established, which is the same role it plays in the scoring engine.
+ *
+ * This one distinction governs the rule in **both** directions, which is the
+ * point of stating it as a property of the signal rather than as two separate
+ * lists. A supporting signal cannot confirm on its own, and it cannot
+ * contradict on its own either: the same reason disqualifies it from both.
+ * Thin volume means nobody showed up, and nobody showing up is not evidence
+ * that the level failed — it is the absence of evidence that it held.
  */
 export const PRIMARY_SIGNALS: ConfirmationSignalType[] = [
   "BULLISH_REJECTION",
@@ -77,13 +93,20 @@ export const PRIMARY_SIGNALS: ConfirmationSignalType[] = [
   "RECLAIM",
 ];
 
+/** True when a signal of this type is strong enough to carry, or to refute. */
+export function isPrimarySignal(type: ConfirmationSignalType): boolean {
+  return PRIMARY_SIGNALS.includes(type);
+}
+
 /**
  * The rule, stated once so it cannot drift between the code and the docs:
  *
- *   CONTRADICTED  — any negative signal, whatever else is present.
+ *   CONTRADICTED  — any negative signal of a PRIMARY type, whatever else is
+ *                   present. A supporting signal cannot contradict.
  *   PRESENT       — at least one positive PRIMARY signal, and at least
  *                   MIN_POSITIVE_SIGNALS positive signals in total.
- *   NOT_PRESENT   — anything else.
+ *   NOT_PRESENT   — anything else, including a lone primary signal and any
+ *                   amount of volume on its own.
  *
  * Two signals rather than one, because every single signal here has a common
  * failure mode: a rejection wick that the next candle erases, a higher low that
