@@ -66,6 +66,18 @@ WAITING_CONFIRMATION` is price arriving somewhere, not structure changing,
 - **`TELEGRAM_BOT_TOKEN` is read in exactly one file**
   (`lib/notifications/telegram-provider.ts`) and never returned, logged, or
   stored. Errors are stripped of it before they reach a database row.
+- **A backtest reports its own assumptions.** Fees, slippage, the entry policy
+  and the same-candle stop/target policy travel on the report, because a result
+  is uninterpretable without them. Fees are charged on both legs and **never
+  change a decision** — trade count is identical with fees on or off; they only
+  change what the trade was worth. Everything is measured in **R**; the
+  backtester models no account and no position sizing, so a currency figure
+  would be an invention.
+- **Backtest history is paged.** `services/candle-history.ts` walks a range one
+  exchange page at a time, drops the candle each page repeats, and stops rather
+  than looping when a page makes no progress. `checkIntegrity` refuses
+  duplicated or out-of-order candles outright and reports gaps without
+  fabricating anything.
 - **Disclaimers come from `lib/constants/disclaimers.ts`.** Never inline the
   wording.
 - **No meme coins.** The curated list is `lib/market-data/curated-assets.ts`.

@@ -1,20 +1,54 @@
 import { analyzeMultiTimeframe, runAnalysis } from "@/lib/analysis";
 import type { Candle, Timeframe } from "@/lib/market-data/provider";
 
+import {
+  DEFAULT_ENTRY_POLICY,
+  DEFAULT_FEE_RATE,
+  DEFAULT_SAME_CANDLE_POLICY,
+  DEFAULT_SLIPPAGE_RATE,
+  type BacktestAssumptions,
+  type EntryPolicy,
+  type SameCandlePolicy,
+} from "./types";
+
 export type SetupOutcome = "TP1_HIT" | "TP2_HIT" | "TP3_HIT" | "SL_HIT" | "NO_HIT" | "STILL_OPEN";
 
 export interface BacktestSetupResult {
   /** Open time of the candle the setup triggered on. */
   triggeredAt: number;
+  /** Open time of the candle the fill happened on. */
+  entryTime: number;
   entry: number;
   stopLoss: number;
   takeProfits: { label: string; level: number; rr: number }[];
   outcome: SetupOutcome;
   /** Realised reward in multiples of the risk taken. Negative for a loss. */
   realizedRR: number | null;
+  /** The same figure before fees and slippage, so their cost is visible. */
+  grossRealizedRR: number | null;
   exitTime: number | null;
   exitPrice: number | null;
   setupScore: number;
+
+  // --- context, so a result can be explained without re-running anything ---
+  symbol: string | null;
+  timeframe: Timeframe | null;
+  /** Candles held, from the fill to the exit. Null while unresolved. */
+  barsHeld: number | null;
+  holdingMs: number | null;
+  /** Reward-to-risk the engine measured at entry. */
+  entryRiskReward: number;
+  /** Phase A's qualifier: a ratio measured to an R-multiple is not evidence. */
+  entryRiskRewardIsSynthetic: boolean;
+  trend: string;
+  mtfAgreement: string | null;
+  confirmationStatus: string | null;
+  /**
+   * Best and worst the trade ever went, in R, while it was open. Null when the
+   * trade never opened or the data ran out before it could be measured.
+   */
+  maxFavourableR: number | null;
+  maxAdverseR: number | null;
 }
 
 /**
@@ -52,6 +86,19 @@ export interface BacktestOptions {
   evaluateFrom?: number;
   /** Higher-timeframe context, folded in exactly as a live MTF run would. */
   mtf?: BacktestMtfInput;
+
+  /** Labels carried onto every result, for breakdowns. Never used in a decision. */
+  symbol?: string;
+  timeframe?: Timeframe;
+
+  /** Round-trip fee as a fraction of notional, charged on entry and on exit. */
+  feeRate?: number;
+  /** Slippage as a fraction of price, always applied against the trade. */
+  slippageRate?: number;
+  /** Which of the stop and the target is assumed to have traded first. */
+  sameCandlePolicy?: SameCandlePolicy;
+  /** Where the simulated fill happens. */
+  entryPolicy?: EntryPolicy;
 }
 
 export interface BacktestReport {
@@ -71,6 +118,15 @@ export interface BacktestReport {
   evaluatedTo: number | null;
   /** The higher timeframe folded in, or null for a single-timeframe replay. */
   higherTimeframe: Timeframe | null;
+  /** Everything that was assumed, so the numbers can be interpreted. */
+  assumptions: BacktestAssumptions;
+  /**
+   * Setups the engine produced that never became a simulated trade, and why.
+   * Reported rather than dropped: "the engine found 40 setups and 6 were not
+   * tradeable under these assumptions" is a different statement from "the
+   * engine found 34".
+   */
+  skipped: { at: number; reason: string }[];
 }
 
 export const DEFAULT_WARMUP_BARS = 260;
@@ -127,6 +183,19 @@ export function runBacktest(candles: Candle[], options: BacktestOptions = {}): B
   const maxHold = options.maxHoldBars ?? DEFAULT_MAX_HOLD_BARS;
   const higherTimeframe = options.mtf?.higherTimeframe ?? null;
 
+  const assumptions: BacktestAssumptions = {
+    feeRate: options.feeRate ?? DEFAULT_FEE_RATE,
+    slippageRate: options.slippageRate ?? DEFAULT_SLIPPAGE_RATE,
+    sameCandlePolicy: options.sameCandlePolicy ?? DEFAULT_SAME_CANDLE_POLICY,
+    entryPolicy: options.entryPolicy ?? DEFAULT_ENTRY_POLICY,
+    warmupBars: warmup,
+    maxHoldBars: maxHold,
+    // Both are properties of the engine rather than switches: confirmation is
+    // always part of the status gate, and MTF applies when candles are given.
+    confirmationEnabled: true,
+    mtfEnabled: higherTimeframe !== null,
+  };
+
   // Evaluation starts at the requested range when there is enough pre-roll in
   // front of it, and otherwise as soon as the engine is warm. Taking the later
   // of the two is what stops a short pre-roll from quietly reporting setups
@@ -140,6 +209,8 @@ export function runBacktest(candles: Candle[], options: BacktestOptions = {}): B
   const lastEvaluable = candles.length - 1;
 
   const results: BacktestSetupResult[] = [];
+  const skipped: { at: number; reason: string }[] = [];
+
   const report = (): BacktestReport => ({
     setups: results,
     warmupBars: Math.min(start, candles.length),
@@ -148,6 +219,8 @@ export function runBacktest(candles: Candle[], options: BacktestOptions = {}): B
     evaluatedFrom: start < lastEvaluable ? candles[start].openTime : null,
     evaluatedTo: start < lastEvaluable ? candles[lastEvaluable - 1].openTime : null,
     higherTimeframe,
+    assumptions,
+    skipped,
   });
 
   if (start >= lastEvaluable) return report();
@@ -167,29 +240,52 @@ export function runBacktest(candles: Candle[], options: BacktestOptions = {}): B
     const { setup } = analysis;
     const trigger = candles[i];
 
-    // Enter at the close of the triggering bar. A POTENTIAL_SETUP requires
-    // price to be inside the entry zone, so the close is a price that was
-    // actually available — unlike the middle of the zone, which may not have
-    // traded.
-    const entry = trigger.close;
-    const risk = entry - setup.stopLoss.price;
+    const fill = fillFor(candles, i, assumptions);
+    if (!fill) {
+      skipped.push({
+        at: trigger.openTime,
+        reason: "No candle follows the signal, so the fill could not be simulated.",
+      });
+      i += 1;
+      continue;
+    }
+
+    const risk = fill.price - setup.stopLoss.price;
     if (risk <= 0) {
+      // The fill landed at or below the stop — possible under NEXT_OPEN when
+      // the market gapped down overnight. Not a tradeable setup, and counting
+      // it either way would be an invention.
+      skipped.push({
+        at: trigger.openTime,
+        reason:
+          "The simulated fill was at or below the stop loss, so there was no risk to measure.",
+      });
       i += 1;
       continue;
     }
 
     const trade = simulateTrade({
       candles,
-      startIndex: i + 1,
-      entry,
+      startIndex: fill.index + 1,
+      entry: fill.price,
       stopLoss: setup.stopLoss.price,
       takeProfits: setup.takeProfits.map((t) => t.level),
       maxHold,
+      sameCandlePolicy: assumptions.sameCandlePolicy,
     });
+
+    const exitCandle = trade.exitIndex === null ? null : candles[trade.exitIndex];
+
+    const gross = trade.exitPrice === null ? null : (trade.exitPrice - fill.price) / risk;
+    const net =
+      trade.exitPrice === null
+        ? null
+        : (applyCosts(trade.exitPrice, fill.price, assumptions) - fill.price) / risk;
 
     results.push({
       triggeredAt: trigger.openTime,
-      entry,
+      entryTime: fill.candle.openTime,
+      entry: fill.price,
       stopLoss: setup.stopLoss.price,
       takeProfits: setup.takeProfits.map((t) => ({
         label: t.label,
@@ -197,10 +293,23 @@ export function runBacktest(candles: Candle[], options: BacktestOptions = {}): B
         rr: t.rr,
       })),
       outcome: trade.outcome,
-      realizedRR: trade.exitPrice === null ? null : (trade.exitPrice - entry) / risk,
+      realizedRR: net,
+      grossRealizedRR: gross,
       exitTime: trade.exitTime,
       exitPrice: trade.exitPrice,
       setupScore: analysis.score.total,
+
+      symbol: options.symbol ?? null,
+      timeframe: options.timeframe ?? null,
+      barsHeld: trade.exitIndex === null ? null : trade.exitIndex - fill.index,
+      holdingMs: exitCandle === null ? null : exitCandle.openTime - fill.candle.openTime,
+      entryRiskReward: setup.riskReward.ratio,
+      entryRiskRewardIsSynthetic: setup.riskReward.isSynthetic,
+      trend: analysis.read.trend.trend,
+      mtfAgreement: analysis.mtf?.agreement ?? null,
+      confirmationStatus: analysis.confirmation?.status ?? null,
+      maxFavourableR: trade.maxFavourable === null ? null : trade.maxFavourable / risk,
+      maxAdverseR: trade.maxAdverse === null ? null : trade.maxAdverse / risk,
     });
 
     // One position at a time. Scanning resumes after the trade closed, so a
@@ -272,6 +381,65 @@ function countClosedBy(candles: Candle[], closeTime: number): number {
   return low;
 }
 
+/**
+ * Where the simulated fill happens, and at what price.
+ *
+ * `SIGNAL_CLOSE` fills at the close of the signal candle. That is the engine's
+ * own premise — POTENTIAL_SETUP requires price to be inside the entry zone, so
+ * the close is a price that demonstrably traded — and management then starts on
+ * the following bar, which is why the signal candle can never also be the exit
+ * candle.
+ *
+ * `NEXT_OPEN` fills at the open of the following candle, which is what someone
+ * reacting to a closed candle would actually get.
+ */
+function fillFor(
+  candles: Candle[],
+  signalIndex: number,
+  assumptions: BacktestAssumptions,
+): { index: number; candle: Candle; price: number } | null {
+  if (assumptions.entryPolicy === "NEXT_OPEN") {
+    const next = candles[signalIndex + 1];
+    if (!next) return null;
+    return {
+      index: signalIndex + 1,
+      candle: next,
+      price: withEntrySlippage(next.open, assumptions),
+    };
+  }
+
+  const candle = candles[signalIndex];
+  return {
+    index: signalIndex,
+    candle,
+    price: withEntrySlippage(candle.close, assumptions),
+  };
+}
+
+/** Slippage always works against the trade: a long fills a little higher. */
+function withEntrySlippage(price: number, assumptions: BacktestAssumptions): number {
+  return price * (1 + assumptions.slippageRate);
+}
+
+/**
+ * The exit price after costs, expressed as an equivalent price so the caller
+ * can keep dividing by the same risk.
+ *
+ * Fees are charged on both legs and slippage is applied against the exit, so a
+ * round trip costs `2 × fee + slippage` of notional whatever the outcome. That
+ * is why a "breakeven" stop is not actually breakeven once costs exist — a
+ * detail a backtest without fees hides entirely.
+ */
+function applyCosts(
+  exitPrice: number,
+  entryPrice: number,
+  assumptions: BacktestAssumptions,
+): number {
+  const exitWithSlippage = exitPrice * (1 - assumptions.slippageRate);
+  const fees = (entryPrice + exitWithSlippage) * assumptions.feeRate;
+  return exitWithSlippage - fees;
+}
+
 interface SimulateInput {
   candles: Candle[];
   startIndex: number;
@@ -279,6 +447,7 @@ interface SimulateInput {
   stopLoss: number;
   takeProfits: number[];
   maxHold: number;
+  sameCandlePolicy: SameCandlePolicy;
 }
 
 interface SimulateResult {
@@ -286,6 +455,9 @@ interface SimulateResult {
   exitPrice: number | null;
   exitTime: number | null;
   exitIndex: number | null;
+  /** Best and worst the position ever went, in price, while it was open. */
+  maxFavourable: number | null;
+  maxAdverse: number | null;
 }
 
 function simulateTrade(input: SimulateInput): SimulateResult {
@@ -295,21 +467,52 @@ function simulateTrade(input: SimulateInput): SimulateResult {
   let stopLevel = stopLoss;
   let reached = 0;
 
+  // Excursions are tracked as the trade runs, because they cannot be
+  // reconstructed afterwards from an exit price alone.
+  let maxFavourable: number | null = null;
+  let maxAdverse: number | null = null;
+
   const end = Math.min(candles.length, startIndex + maxHold);
+
+  const finish = (
+    result: Omit<SimulateResult, "maxFavourable" | "maxAdverse">,
+  ): SimulateResult => ({
+    ...result,
+    maxFavourable,
+    maxAdverse,
+  });
 
   for (let i = startIndex; i < end; i += 1) {
     const candle = candles[i];
 
-    // Stop first, always. Within one candle the sequence is unknowable, and
-    // guessing in the strategy's favour is how backtests start lying.
-    if (candle.low <= stopLevel) {
+    maxFavourable = Math.max(maxFavourable ?? 0, candle.high - entry);
+    maxAdverse = Math.min(maxAdverse ?? 0, candle.low - entry);
+
+    const hitsStop = candle.low <= stopLevel;
+    const target = tp3 !== undefined && candle.high >= tp3 ? tp3 : null;
+
+    // When one candle covers both, OHLC cannot say which traded first. The
+    // policy decides, and the default assumes the worse of the two — guessing
+    // in the strategy's favour is how backtests start lying.
+    if (hitsStop && (input.sameCandlePolicy === "STOP_FIRST" || target === null)) {
       const outcome: SetupOutcome =
         reached === 0 ? "SL_HIT" : reached === 1 ? "TP1_HIT" : "TP2_HIT";
-      return { outcome, exitPrice: stopLevel, exitTime: candle.openTime, exitIndex: i };
+      return finish({ outcome, exitPrice: stopLevel, exitTime: candle.openTime, exitIndex: i });
     }
 
-    if (tp3 !== undefined && candle.high >= tp3) {
-      return { outcome: "TP3_HIT", exitPrice: tp3, exitTime: candle.openTime, exitIndex: i };
+    if (target !== null) {
+      return finish({
+        outcome: "TP3_HIT",
+        exitPrice: target,
+        exitTime: candle.openTime,
+        exitIndex: i,
+      });
+    }
+
+    if (hitsStop) {
+      const outcome: SetupOutcome =
+        reached === 0 ? "SL_HIT" : reached === 1 ? "TP1_HIT" : "TP2_HIT";
+      return finish({ outcome, exitPrice: stopLevel, exitTime: candle.openTime, exitIndex: i });
     }
 
     if (tp2 !== undefined && reached < 2 && candle.high >= tp2) {
@@ -326,7 +529,7 @@ function simulateTrade(input: SimulateInput): SimulateResult {
 
   const last = candles[end - 1];
   if (!last || end <= startIndex) {
-    return { outcome: "STILL_OPEN", exitPrice: null, exitTime: null, exitIndex: null };
+    return finish({ outcome: "STILL_OPEN", exitPrice: null, exitTime: null, exitIndex: null });
   }
 
   // Two different endings, and conflating them makes the numbers lie.
@@ -339,13 +542,13 @@ function simulateTrade(input: SimulateInput): SimulateResult {
   const ranOutOfData = end === candles.length && end < startIndex + maxHold;
 
   if (ranOutOfData) {
-    return { outcome: "STILL_OPEN", exitPrice: null, exitTime: null, exitIndex: end - 1 };
+    return finish({ outcome: "STILL_OPEN", exitPrice: null, exitTime: null, exitIndex: end - 1 });
   }
 
-  return {
+  return finish({
     outcome: "NO_HIT",
     exitPrice: last.close,
     exitTime: last.openTime,
     exitIndex: end - 1,
-  };
+  });
 }

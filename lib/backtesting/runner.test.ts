@@ -168,18 +168,18 @@ describe("computeMetrics", () => {
   it("reports zeroes for an empty run rather than NaN", () => {
     const metrics = computeMetrics([]);
 
-    expect(metrics.numSetups).toBe(0);
+    expect(metrics.totalSetups).toBe(0);
     expect(metrics.winRate).toBe(0);
-    expect(metrics.avgRealizedRR).toBe(0);
-    expect(metrics.maxDrawdownPct).toBe(0);
+    expect(metrics.averageR).toBe(0);
+    expect(metrics.maxDrawdownR).toBe(0);
     expect(metrics.best).toBeNull();
   });
 
   it("computes win rate over closed setups only", () => {
     const metrics = computeMetrics([setup(2), setup(-1), setup(1), setup(null, "STILL_OPEN")]);
 
-    expect(metrics.numSetups).toBe(4);
-    expect(metrics.closedSetups).toBe(3);
+    expect(metrics.totalSetups).toBe(4);
+    expect(metrics.closedTrades).toBe(3);
     expect(metrics.wins).toBe(2);
     expect(metrics.winRate).toBeCloseTo(66.67, 1);
   });
@@ -188,7 +188,7 @@ describe("computeMetrics", () => {
     const metrics = computeMetrics([setup(3), setup(-1), setup(-1), setup(-1)]);
 
     expect(metrics.totalR).toBe(0);
-    expect(metrics.avgRealizedRR).toBe(0);
+    expect(metrics.averageR).toBe(0);
     // Break-even in R is still a 50% loss rate; the numbers must not flatter it.
     expect(metrics.winRate).toBe(25);
   });
@@ -197,8 +197,8 @@ describe("computeMetrics", () => {
     // Up 5R, then down 3R, then up again: the dip is the drawdown.
     const metrics = computeMetrics([setup(5), setup(-1), setup(-1), setup(-1), setup(5)]);
 
-    expect(metrics.maxDrawdownPct).toBeGreaterThan(0);
-    expect(metrics.maxDrawdownPct).toBeLessThan(100);
+    expect(metrics.maxDrawdownR).toBeGreaterThan(0);
+    expect(metrics.maxDrawdownR).toBeLessThan(100);
   });
 
   it("excludes unfinished trades from every ratio", () => {
@@ -208,10 +208,10 @@ describe("computeMetrics", () => {
       setup(null, "STILL_OPEN"),
     ]);
 
-    expect(metrics.numSetups).toBe(3);
-    expect(metrics.closedSetups).toBe(1);
+    expect(metrics.totalSetups).toBe(3);
+    expect(metrics.closedTrades).toBe(1);
     expect(metrics.winRate).toBe(100);
-    expect(metrics.avgRealizedRR).toBe(2);
+    expect(metrics.averageR).toBe(2);
   });
 
   it("treats a breakeven exit as neither a win nor a loss", () => {

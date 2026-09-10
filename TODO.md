@@ -250,7 +250,62 @@ so six real "the level you were waiting on is gone" events went unreported.
 Resolved inside Phase F by looking the setup up from stored truth — no Phase A–E
 file was changed.
 
-Next up, once reviewed: **Phase G — advanced backtesting.**
+## Phase G — backtest depth and research quality (done, awaiting review)
+
+Branch `feat/phase-g-backtest-depth`.
+
+- [x] **Data ceiling removed.** `services/candle-history.ts` pages the exchange:
+      BTCUSDT H1 over a year is 9,020 candles in 10 requests, where the old
+      single-request path capped evaluation at 740. Pages cannot overlap (each
+      one drops the candle the exchange repeats) and a page that makes no
+      progress stops the loop rather than hammering a public endpoint.
+- [x] **Dataset integrity.** Duplicated or out-of-order candles are fatal —
+      index order _is_ time order everywhere in the runner. Gaps and bad OHLC
+      are reported. Nothing is ever fabricated to make a dataset look whole.
+- [x] **Explicit assumptions on every report**: fee, slippage, entry policy,
+      same-candle stop/target policy, warmup, max hold. Two reports are only
+      comparable if these match, so they travel with the numbers.
+- [x] **Fees and slippage**, charged on both legs. They never change a
+      decision — trade count is identical either way — only what a trade was
+      worth.
+- [x] **Metrics in R**: expectancy, profit factor, drawdown in R, win/loss
+      streaks (consecutive, not totals), holding time, median, distribution,
+      cost of fees. Plus breakdowns by symbol, timeframe, score band and target
+      kind, each carrying a small-sample flag.
+- [x] Richer trade model: symbol, timeframe, entry time, bars held, MFE/MAE,
+      entry R:R and whether it was structural or unmeasured, trend, MTF
+      agreement, confirmation state. Setups that could not become trades are
+      reported with a reason rather than dropped.
+- [x] API takes several markets and timeframes, so breakdowns are a real
+      comparison rather than a one-row table.
+
+### Regression: the accounting change is exactly neutral
+
+Replayed on the **identical 700-bar window** as the Phase F baseline, with fees
+off:
+
+|                     | baseline   | Phase G, fees off |
+| ------------------- | ---------- | ----------------- |
+| H1 setups / total R | 9 / 4.1014 | **9 / 4.1014**    |
+| H4 setups / total R | 3 / 0.8088 | **3 / 0.8088**    |
+
+Byte-identical. No strategy behaviour changed.
+
+### The finding that matters
+
+On BTCUSDT H1 over a **year** (8,759 evaluated bars, 7 setups):
+
+|          | fees off | fees on (0.1%/side) |
+| -------- | -------- | ------------------- |
+| total R  | +0.55    | **−1.51**           |
+| win rate | 60.0%    | **28.6%**           |
+
+Fees cost **2.06R across 7 trades**. The strategy exits many trades at
+breakeven after the first target trades — and a breakeven stop is not
+breakeven once both legs are paid for. A fee-free backtest hides that
+completely. This is a historical observation on one sample, not a verdict.
+
+Next up, once reviewed: **Phase H.**
 
 ## Phase 1 — Chart Foundation ✅
 

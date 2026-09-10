@@ -71,10 +71,12 @@ test.describe("signed-in journey", () => {
     // --- backtest --------------------------------------------------------
     await page.goto("/backtest");
 
-    // A range wider than the candle ceiling is refused with a usable message
-    // rather than a timeout or a truncated result. The ceiling counts the bars
-    // that will be *evaluated* — the engine also reads several hundred candles
-    // of history from before the range, which is charged separately.
+    // A range wider than the candle ceiling is still refused with a usable
+    // message rather than a timeout or a truncated result. Phase G paginates
+    // history, so that ceiling moved from 740 evaluated candles to tens of
+    // thousands — six months of 4h candles now runs rather than being
+    // rejected. Reaching the limit takes a much finer timeframe.
+    await page.selectOption("#tf", "M1");
     await page.getByLabel("From").fill("2025-01-01");
     await page.getByLabel("To").fill("2025-06-30");
     await page.getByRole("button", { name: /Run backtest/ }).click();
@@ -82,7 +84,8 @@ test.describe("signed-in journey", () => {
       timeout: 30_000,
     });
 
-    // ~120 days of 4h candles sits inside the ceiling.
+    // ~120 days of 4h candles is comfortably inside it.
+    await page.selectOption("#tf", "H4");
     await page.getByLabel("To").fill("2025-05-01");
     await page.getByRole("button", { name: /Run backtest/ }).click();
 
