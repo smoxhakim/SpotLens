@@ -52,8 +52,21 @@ Branch `fix/phase-a-correctness`, on top of `chore/upgrade-next-16`.
       now measured to a structural target at least 1R away; when none exists
       it is flagged `isSynthetic`, scored neutral rather than credited, and
       cannot reach POTENTIAL_SETUP.
-- [x] Tests: 263 unit (was 237), including deliberate re-introduction of each
+- [x] **Supporting fix — blank optional env vars.** `UPSTASH_REDIS_REST_URL=`
+      with an empty value parsed as present-but-invalid and stopped the
+      production server booting outright, which blocked local E2E against a
+      production build. Blanks are now treated as unset, which is what
+      `.optional()` already implied.
+- [x] Tests: 264 unit (was 237), including deliberate re-introduction of each
       defect to confirm the new tests catch it. 27 Playwright specs pass.
+
+### Known limitation — backtest sample size
+
+A run evaluates at most **740 candles**, because pre-roll (260) and the
+evaluated range share a single 1000-candle exchange page. **Do not read a
+backtest as a full historical evaluation**: on H4 that is about four months,
+and on H1 about a month. It is a sample from the recent past, and a small one.
+Deeper history needs pagination, which is deferred to Phase G by decision.
 
 Next up, once reviewed: **Phase B — structured explanations.**
 
