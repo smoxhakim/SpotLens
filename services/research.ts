@@ -109,6 +109,7 @@ export async function runResearch(input: {
       entries.push({
         setupId: row.id,
         decision: entry.decision,
+        statusAtDecision: entry.setupStatusAtDecision,
         skipReason: entry.skipReason,
         decidedAt: entry.decidedAt.getTime(),
         actualEntry: entry.actualEntry === null ? null : Number(entry.actualEntry),

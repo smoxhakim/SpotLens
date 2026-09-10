@@ -39,6 +39,12 @@ export interface ResearchSetup {
 export interface ResearchEntry {
   setupId: string;
   decision: JournalDecision;
+  /**
+   * The setup's lifecycle state when the decision was made, frozen on the
+   * journal entry at that moment. This — not the setup's eventual state — is
+   * what the person could see.
+   */
+  statusAtDecision: string;
   skipReason: JournalSkipReason | null;
   decidedAt: number;
   actualEntry: number | null;
@@ -117,6 +123,13 @@ export function humanDecisions(entries: ResearchEntry[]): HumanDecisions {
  * the user recorded. Anything genuinely unavailable — maximum excursion, for
  * instance, which nobody wrote down — stays null rather than being invented.
  */
+/** Whether confirmation had already been seen at the moment of the decision. */
+export function confirmationAtDecision(statusAtDecision: string): string {
+  return statusAtDecision === "CONFIRMATION_DETECTED" || statusAtDecision === "POTENTIAL_SETUP"
+    ? "PRESENT"
+    : "NOT_PRESENT";
+}
+
 export function toMetricRow(
   entry: ResearchEntry,
   setup: ResearchSetup,
@@ -159,7 +172,11 @@ export function toMetricRow(
     entryRiskRewardIsSynthetic: setup.riskRewardIsSynthetic,
     trend: setup.regimeDirection ?? "UNKNOWN",
     mtfAgreement: null,
-    confirmationStatus: setup.confirmationStatus,
+    // What the person could see when they decided, not what the setup went on
+    // to do. Keying this off the setup's whole history would let a confirmation
+    // that arrived *after* entry sort the trade into the confirmed bucket —
+    // hindsight, quietly improving the wrong column.
+    confirmationStatus: confirmationAtDecision(entry.statusAtDecision),
     // Nobody recorded how far the trade went before it turned. Null, not zero.
     maxFavourableR: null,
     maxAdverseR: null,

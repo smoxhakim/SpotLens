@@ -1,6 +1,13 @@
 import { prisma } from "@/lib/db/prisma";
 import { TIMEFRAME_MS, type Candle, type Timeframe } from "@/lib/market-data/provider";
-import { coverageFor, markersUpTo, type ReplayCoverage, type ReplayMarker } from "@/lib/replay";
+import {
+  candlesUpTo,
+  coverageFor,
+  eventsUpTo,
+  markersUpTo,
+  type ReplayCoverage,
+  type ReplayMarker,
+} from "@/lib/replay";
 
 /**
  * Reconstructs what was knowable about a setup at a moment.
@@ -98,21 +105,33 @@ export async function buildReplayFrame(input: {
     take: REPLAY_WINDOW_CANDLES,
   });
 
-  const candles: Candle[] = rows.map((row) => ({
-    openTime: row.openTime.getTime(),
-    open: Number(row.open),
-    high: Number(row.high),
-    low: Number(row.low),
-    close: Number(row.close),
-    volume: Number(row.volume),
-    closeTime: row.closeTime.getTime(),
-  }));
+  // Filtered again after loading. The query above is the real defence — this
+  // costs nothing and means a future candle cannot reach the response even if
+  // that `where` clause is ever weakened by an edit that looks harmless.
+  const candles: Candle[] = candlesUpTo(
+    rows.map((row) => ({
+      openTime: row.openTime.getTime(),
+      open: Number(row.open),
+      high: Number(row.high),
+      low: Number(row.low),
+      close: Number(row.close),
+      volume: Number(row.volume),
+      closeTime: row.closeTime.getTime(),
+    })),
+    at,
+  );
 
   // Same rule for the lifecycle: only what had already been written.
-  const events = await prisma.setupEvent.findMany({
+  const eventRows = await prisma.setupEvent.findMany({
     where: { setupId: setup.id, createdAt: { lte: new Date(at) } },
     orderBy: { createdAt: "asc" },
   });
+
+  // Same belt and braces as the candles above.
+  const events = eventsUpTo(
+    eventRows.map((row) => ({ ...row, createdAt: row.createdAt.getTime() })),
+    at,
+  );
 
   return {
     setupId: setup.id,
@@ -121,15 +140,7 @@ export async function buildReplayFrame(input: {
     at,
     candles,
     coverage: coverageFor({ candles, intervalMs, windowStart, cutoff: at }),
-    markers: markersUpTo(
-      events.map((e) => ({
-        createdAt: e.createdAt.getTime(),
-        toStatus: e.toStatus,
-        type: e.type,
-      })),
-      decidedAt,
-      at,
-    ),
+    markers: markersUpTo(events, decidedAt, at),
     snapshot: {
       // Named, so a reader is never left guessing whether these numbers were
       // recorded at the time or recalculated just now.
@@ -152,7 +163,7 @@ export async function buildReplayFrame(input: {
       fromStatus: event.fromStatus,
       toStatus: event.toStatus,
       detail: event.detail,
-      createdAt: event.createdAt.toISOString(),
+      createdAt: new Date(event.createdAt).toISOString(),
     })),
     decision:
       setup.journalEntry && decidedAt !== null && decidedAt <= at

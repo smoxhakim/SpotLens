@@ -1,7 +1,8 @@
 # SpotLens Development Roadmap
 
-**All eight phases are shipped and merged to `main`.** What follows is the
-original roadmap with its outcomes; open items are collected here.
+**Phases A–H are shipped and merged to `main`; Phase I is on its branch,
+awaiting review.** What follows is the original roadmap with its outcomes;
+open items are collected here.
 
 ## Where we left off
 
@@ -340,6 +341,68 @@ measures to the second _qualifying_ structural target, and TP1 at 0.57R is
 below its 1R floor. Pinned as a test.
 
 Next up, once reviewed: **Phase I.**
+
+## Phase I — journal, replay and research (done, awaiting review)
+
+Branch `feat/phase-i-journal-replay-research`.
+
+- [x] `JournalEntry` / `JournalEvent`, migration `20260910194626_add_journal`.
+      Purely additive; every pre-existing row verified intact afterwards.
+      **Setup-linked only** — every entry references a `TrackedSetup`, so "what
+      did SpotLens say at the time?" always has an answer.
+- [x] `lib/journal/` — the five decision states and the transitions between
+      them. `TAKEN → SKIPPED` is deliberately absent (a position that was
+      entered cannot retroactively become one passed over) and `CLOSED` is
+      terminal as a decision. R is **null** unless the user recorded both an
+      exit and a real stop: measuring against the setup's planned stop would
+      credit the engine's arithmetic to the user's trade.
+- [x] `lib/replay/` — the cutoff, as pure functions. Closed candles only, and
+      events that had already been written. Nothing reads a clock.
+- [x] `lib/research/` — the engine funnel and the human decision counts, kept
+      apart, plus an adapter that reuses the backtester's own metric
+      definitions so an expectancy here means what an expectancy there means.
+- [x] **Replay is offline and deterministic.** It reads persisted candles only
+      and never fetches or backfills. Where the stored history is short the gap
+      is stated, never filled.
+- [x] The cutoff is applied **in the database query**, and again after loading.
+      The query is the real defence; the second filter costs nothing and means
+      a future candle cannot reach the response if that `where` clause is ever
+      weakened by an edit that looks harmless.
+- [x] **Engine performance and decision performance never merge.** The funnel
+      counts setups; R comes only from closed journal entries. One number
+      across both would describe neither.
+- [x] A trade is grouped by the confirmation state **at the decision**, read
+      from the frozen `setupStatusAtDecision`, not from whether the setup ever
+      confirmed — a confirmation that arrived after entry must not sort the
+      trade into the confirmed column.
+- [x] Amending a closed entry stays possible (a mistyped fill has no other
+      route to correction) but is logged as an amendment, so the history says
+      which recording replaced which.
+- [x] API: `/api/journal`, `/api/journal/:id`, `/api/journal/:id/decision`,
+      `/api/journal/:id/outcome`, `/api/replay/:setupId`, `/api/research`. All
+      owner-scoped in the `where`; another account's row answers **404, not
+      403**, so no endpoint doubles as a way of asking which ids exist.
+- [x] UI: `/journal`, `/journal/:id`, `/replay/:setupId`, `/research`, plus
+      journal actions on a tracked setup.
+
+### Verified live
+
+All 29 real stored setups replayed at their own creation moment: **no candle
+and no event past the cutoff**, snapshots identical to the stored rows, the
+same replay twice byte-identical, and the overlap between two cutoffs
+identical across 194 shared candles. Replay is a sliding window, so an earlier
+cutoff shows an earlier window rather than a prefix.
+
+The full decision path exercised against the live database on real setups —
+journaled, moved, closed, amended — then deleted: **29 setups before, 29
+after, byte-identical rows.** Journaling writes nothing back to the setup.
+
+Research over the real history: 29 detected, 6 ever confirmed, 12 invalidated
+(41.4%). With three decisions recorded, the funnel was unchanged and only the
+one closed position contributed R.
+
+108 new tests (633 → 741). Six defect injections confirmed the no-lookahead
+and immutability tests fail when the bug is reintroduced.
 
 ## Phase 1 — Chart Foundation ✅
 

@@ -4,8 +4,9 @@ Educational crypto **spot trading** analysis app. A deterministic engine reads
 market structure and produces entry / stop / targets / score / status, with a
 plain-language reason attached to every number.
 
-All eight phases are shipped and merged to `main`. **Open items and where work
-stopped are at the top of `TODO.md`** — start there.
+Phases A–H are shipped and merged to `main`; Phase I (journal, replay,
+research) is on `feat/phase-i-journal-replay-research`. **Open items and where
+work stopped are at the top of `TODO.md`** — start there.
 
 Full spec in `PRD.md`, design in `ARCHITECTURE.md`, security posture in
 `SECURITY.md`. Read those only when the task needs them — this file is meant to
@@ -92,6 +93,27 @@ WAITING_CONFIRMATION` is price arriving somewhere, not structure changing,
   have to pick one. `evidence` is a count out of 3, **never a probability**.
   Regime may explain and warn; it may not change a status, a score, a
   confirmation, a lifecycle transition or a risk percentage.
+- **The journal records, it never infers.** `lib/journal` owns the five
+  decision states and the legal moves between them. `TAKEN → SKIPPED` is absent
+  on purpose — a position that was entered cannot retroactively become one
+  passed over — and `CLOSED` is terminal as a decision. R is **null** unless
+  the user recorded both an exit and a real stop; falling back to the setup's
+  planned stop would credit the engine's arithmetic to their trade. Journaling
+  writes **nothing** back to the setup. Entries are setup-linked only.
+- **Replay is offline and deterministic.** `lib/replay` is pure and takes the
+  cutoff explicitly; nothing reads a clock. Only candles with
+  `closeTime <= T` and events written by `T`, enforced **in the Prisma query**
+  and again after loading. It reads persisted candles only and **never fetches
+  or backfills** — a reconstruction that goes to the network is not a
+  reconstruction. Missing history is stated, never filled. The window slides,
+  so an earlier cutoff is an earlier window, not a prefix.
+- **Research never merges the two questions.** The engine funnel is counts (a
+  setup is not a trade); R comes only from closed journal entries. One number
+  across both would describe neither, which is the specific misleading figure
+  the split exists to prevent. Metrics are reused from `lib/backtesting`
+  through an adapter — never redefined. A trade is grouped by the confirmation
+  state **at the decision** (`setupStatusAtDecision`), not by whether the setup
+  ever confirmed.
 - **Disclaimers come from `lib/constants/disclaimers.ts`.** Never inline the
   wording.
 - **No meme coins.** The curated list is `lib/market-data/curated-assets.ts`.
@@ -114,6 +136,9 @@ lib/
   setups/       setup identity + lifecycle planner (pure; no DB)
   scanner/      scheduling, concurrency, retries, ranking (pure; no I/O)
   notifications/ event mapping, dedupe keys, Telegram formatting (pure)
+  journal/      decision states and their legal transitions (pure)
+  replay/       the cutoff: what was knowable at a moment (pure)
+  research/     engine funnel vs decision counts, kept apart (pure)
   risk/         position sizing, caps, costs (pure; one source of the formula)
   regime/       market environment classifier (pure; outside the engine)
 scripts/        the local scanner process (npm run scanner)
@@ -147,6 +172,10 @@ npm run prisma:seed          # assets, checklists, learn articles (idempotent)
   Excluded via `lastCandleIsForming`.
 - **Fixtures are all closed candles.** Several real bugs only appeared against
   live data. Verify against the running app, not only the suite.
+- **Restart `npm run dev` after a migration.** A dev server started before one
+  holds a Prisma client without the new tables, so every route touching them
+  500s with `Cannot read properties of undefined (reading 'findMany')`. The
+  code is fine; the process is stale.
 - **No `loading.tsx` at the app root.** It wraps every page in Suspense, the
   response streams, and its 200 is sent before `notFound()` can run — so every
   404 became "200 Page not found". Keep loading boundaries below routes that

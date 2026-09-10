@@ -9,6 +9,7 @@ import {
   History,
   LayoutDashboard,
   LineChart,
+  NotebookPen,
   Radar,
   Settings,
   type LucideIcon,
@@ -34,6 +35,8 @@ const NAV: NavItem[] = [
   { href: "/setups", label: "Setups", icon: History },
   { href: "/scanner", label: "Scanner", icon: Radar },
   { href: "/notifications", label: "Notifications", icon: Bell },
+  { href: "/journal", label: "Journal", icon: NotebookPen },
+  { href: "/research", label: "Research", icon: FlaskConical },
   // Not in the PRD's six-item sidebar: backtesting arrived later, and it is a
   // full workflow with its own page rather than a panel that could live inside
   // another destination. Burying it would be worse than the extra entry.

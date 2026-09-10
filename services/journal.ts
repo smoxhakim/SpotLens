@@ -220,10 +220,14 @@ export async function recordOutcome(input: {
         type: "OUTCOME_RECORDED",
         fromDecision: from === target ? null : from,
         toDecision: target,
+        // An already-closed entry being written again is a correction, not a
+        // second trade. Saying so keeps the history readable — two identical
+        // "recorded" lines would look like the position was taken twice.
         detail:
-          outcome.realizedR === null
+          (from === "CLOSED" ? "Amended. " : "") +
+          (outcome.realizedR === null
             ? "Trade details recorded; no result yet."
-            : `Recorded ${outcome.realizedR.toFixed(2)}R on the risk actually taken.`,
+            : `Recorded ${outcome.realizedR.toFixed(2)}R on the risk actually taken.`),
       },
     }),
   ]);

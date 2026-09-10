@@ -105,6 +105,28 @@ All tables via Prisma. Enums noted inline.
 - realizedRR (decimal, nullable), exitTime (datetime, nullable), exitPrice (decimal, nullable)
 - index (backtestRunId, triggeredAt)
 
+**JournalEntry** (Phase I)
+
+- id (uuid, pk), userId (fk → User), trackedSetupId (fk → TrackedSetup, **unique**)
+- decision: enum `WATCHING | SKIPPED | TAKEN | CANCELLED | CLOSED`
+- skipReason: enum `LOW_CONFIDENCE | POOR_RR | BAD_REGIME | NO_CONFIRMATION | PERSONAL_RULE | MARKET_CONDITION | MISSED_ENTRY | OTHER` (nullable)
+- setupStatusAtDecision (string) — the lifecycle state frozen at the moment of the decision
+- notes (text, nullable), decidedAt, createdAt, updatedAt
+- the trade, all nullable and all the user's own: actualEntry, actualStopLoss, actualTakeProfit, actualExit, quantity, fees, slippage, exitReason (`TAKE_PROFIT | STOP_LOSS | MANUAL_EXIT | INVALIDATED | OTHER`), openedAt, closedAt
+- the unique index on `trackedSetupId` is what makes journaling idempotent
+
+Everything the engine knew is *referenced*, not copied: `TrackedSetup`'s
+snapshot columns are already immutable, so duplicating them here would create a
+second copy that could drift. Only `setupStatusAtDecision` is frozen, because
+the lifecycle state is the one thing that does move.
+
+**JournalEvent** (Phase I)
+
+- id (uuid, pk), journalEntryId (fk), type: `CREATED | DECISION_CHANGED | NOTE_ADDED | OUTCOME_RECORDED`
+- fromDecision (nullable), toDecision, detail (string), createdAt
+- append-only: "what did I decide?" is rarely one answer, and the sequence is
+  the part worth keeping
+
 **LearnArticle**
 
 - id (uuid, pk), slug (unique), title, category (string), bodyMarkdown (text)
@@ -125,7 +147,7 @@ All tables via Prisma. Enums noted inline.
 ## System components
 
 - **Web app (Next.js App Router):** server components for pages, client components for chart/interactivity; route handlers under `/app/api/*` serve as the backend.
-- **Feature modules** (`/features/market`, `/features/analysis`, `/features/watchlist`, `/features/learning`, `/features/risk-management`, `/features/backtesting`, `/features/admin`): UI + hooks per feature, no cross-feature imports except through `/lib` and `/services`.
+- **Feature modules** (`/features/market`, `/features/analysis`, `/features/watchlist`, `/features/learning`, `/features/risk-management`, `/features/backtesting`, `/features/journal`, `/features/admin`): UI + hooks per feature, no cross-feature imports except through `/lib` and `/services`.
 - **Market Data Provider layer** (`/lib/market-data`): `MarketDataProvider` interface (`getMarkets`, `getTicker`, `getCandles`, `getVolume`) with a `BinanceProvider` implementation. All chart/analysis code depends only on the interface.
 - **Candle cache service:** reads through Postgres `Candle` table first; on cache miss/staleness, calls provider, upserts, returns. Cron job refreshes recent candles for all active pairs/timeframes.
 - **Analysis Engine** (`/lib/analysis`, `/lib/indicators`): pure, deterministic, framework-agnostic functions — indicator math, swing/structure detection, S/R zone clustering, volume analysis, entry/SL/TP calculators, scoring, status engine. No I/O; takes candle arrays in, returns typed results out. This is the most heavily unit-tested layer.
@@ -136,6 +158,9 @@ All tables via Prisma. Enums noted inline.
 - **Notifications:** `lib/notifications` (pure: mapping, dedupe keys, MarkdownV2 formatting) + `services/notifications.ts` (delivery, preferences, persistence). The scanner emits structured events and knows nothing about Telegram; `scripts/scanner.ts` is the composition root that joins the two. Six event types, all derived from Phase D lifecycle events or finished scanner runs — no second state machine. Channels are rows, so in-app and Telegram succeed and fail independently. Deduplication is the `SetupEvent.id` behind a unique index on `(userId, channel, dedupeKey)`, which makes the layer idempotent regardless of caller behaviour. Telegram connects via a one-time hashed code and `getUpdates` polling — no webhook, so the machine is never exposed. Defaults are quiet: confirmations, invalidations and scanner errors only.
 - **Scanner:** a plain local Node process (`scripts/scanner.ts`, `npm run scanner`) — no queue, no cron service, no worker, because none of them would make the result more correct on a single machine. Wakes 90s after each candle close rather than polling, groups timeframes closing at the same instant into one pass, and analyses closed candles only. Bounded concurrency (default 4) over 45 markets × 2 timeframes = 90 analyses and ~180 candle requests per pass. Retries only faults the provider calls transient, at most 3 attempts. Per-market isolation: one failure leaves the run PARTIAL, not FAILED. All decision logic is pure in `lib/scanner`; `services/scanner.ts` does the I/O and owns no rules. Emits structured events (SETUP_CREATED / SETUP_STATE_CHANGED / SETUP_INVALIDATED / ANALYSIS_FAILED) with no knowledge of how they are delivered — Phase F consumes them.
 - **Setup lifecycle:** `lib/setups` is a pure planner — given the stored setup and a finished `AnalysisResult` it returns a plan (NONE / CREATE / TRANSITION / REPLACE); `services/setups.ts` is the only thing that writes. That split keeps `lib/analysis` free of I/O and makes identity, deduplication and transitions testable without a database. States: SETUP_FORMING → WAITING_CONFIRMATION → CONFIRMATION_DETECTED → POTENTIAL_SETUP → INVALIDATED (terminal). CONFIRMATION_DETECTED is a lifecycle state, never a trading status. Identity = (user, pair, timeframe) plus an entry zone overlapping the stored origin. `TrackedSetup` splits an immutable snapshot from mutable lifecycle columns, and `SetupEvent` is append-only. Phase E's scanner calls `trackSetup` after `runAnalysis` and needs no changes to this model.
+- **Journal** (`lib/journal` pure, `services/journal.ts` writes): the five decision states and the legal moves between them. `TAKEN → SKIPPED` is absent on purpose — a position that was entered cannot retroactively become one passed over — and `CLOSED` is terminal as a decision. R is **null** unless the user recorded both an exit and a real stop; falling back to the setup's planned stop would credit the engine's arithmetic to the user's trade. Amending a closed entry stays possible (a mistyped fill has no other route to correction) but is logged as an amendment. Every entry references a `TrackedSetup`, so "what did SpotLens say at the time?" always has an answer.
+- **Replay** (`lib/replay` pure, `services/replay.ts` reads): reconstructs what was knowable at a moment. Closed candles only (`closeTime <= T`) and events that had already been written, with the cutoff applied **in the database query** and again after loading — the query is the real defence, the second filter means a future candle cannot reach the response if that `where` clause is ever weakened by an edit that looks harmless. It reads persisted candles only and **never fetches or backfills**: a reconstruction that goes to the network is no longer a reconstruction, and would stop being reproducible the moment the exchange changed what it serves for that range. Where the stored history is short the gap is reported, never filled. The window slides — an earlier cutoff shows an earlier window, not a prefix. Nothing here reads a clock.
+- **Research** (`lib/research` pure, `services/research.ts` queries): descriptive statistics over the caller's own history. The engine funnel counts setups (a setup is not a trade; measuring it in R would mean assuming trades that never happened) and R comes only from closed journal entries — **the two never merge**, because one number across both would describe neither. It reuses `lib/backtesting`'s metric definitions through an adapter rather than defining a second expectancy. A trade is grouped by the confirmation state **at the decision**, read from the frozen `setupStatusAtDecision`: a confirmation that arrived after entry must not sort the trade into the confirmed column. Filters are pushed into SQL where they can be, and one query with `include` avoids the N+1 over a year of scanning.
 - **Explanation layer:** two tiers, both templated and deterministic — not LLM-dependent for correctness; an optional LLM rephrasing pass can be layered on top later without changing numbers.
   - `lib/analysis/explain/` writes the individual sentences the engine embeds in its own output (`read.trend.reason`, each target's `reason`, and so on).
   - `lib/analysis/explanations/` assembles a finished `AnalysisResult` into an ordered, categorised, signal-tagged `Explanation[]`. It is a pure function of the result: it computes nothing, stores nothing, and makes no request. Consumers render the reasoning without knowing any trading rules, so the dashboard, a notification and a journal entry cannot end up wording the same verdict three different ways.
@@ -192,6 +217,18 @@ All routes under `/app/api`. "Auth" = required session unless noted.
 - `POST /api/backtest/run` — body `{tradingPairIds: string[], timeframes: Timeframe[], startDate, endDate, feeRate?, slippageRate?}`; runs **synchronously** and returns the finished report — metrics, per-dataset coverage, the assumptions it ran under, and the symbol/timeframe/score/target breakdowns (auth). Several markets and timeframes per run, bounded, so breakdowns are a real comparison.
 - `GET /api/backtest` — list caller's runs (auth)
 - `GET /api/backtest/:id` — run summary and its setups (auth, owner-only)
+
+**Journal, replay and research** (Phase I; all auth, all owner-scoped in the
+`where` so another account's row answers **404, not 403** — no endpoint doubles
+as a way of asking which ids exist)
+
+- `GET /api/journal` — the caller's entries, newest decision first, cursor-paginated
+- `POST /api/journal` — body `{trackedSetupId, decision?, notes?}`; **idempotent**, a setup already journaled returns its existing entry (200) rather than a second one (201)
+- `GET /api/journal/:id` — one entry with the engine's history and the user's, kept separate
+- `PATCH /api/journal/:id/decision` — body `{decision, skipReason?, notes?}`; an illegal move is 400 with the reason
+- `POST /api/journal/:id/outcome` — the user's own fill, stop, size and costs; nothing is defaulted from the setup's plan, and no field here could place an order
+- `GET /api/replay/:setupId` — optional `?at=<epoch ms>`; the frame as at that moment, defaulting to the decision and otherwise to when the setup was first seen
+- `GET /api/research` — descriptive statistics under an explicit filter set, echoed back so a result is reproducible
 
 **Admin** (auth, role=ADMIN)
 
