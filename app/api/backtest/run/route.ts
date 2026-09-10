@@ -8,19 +8,35 @@ import { apiError, handleRouteError } from "@/lib/api/response";
 import { RATE_LIMITS, enforceRateLimit } from "@/lib/rate-limit";
 import { BACKTEST_DISCLAIMER } from "@/lib/constants/disclaimers";
 import { isDatabaseConfigured } from "@/lib/db/prisma";
-import { MAX_EVALUATED_CANDLES, estimateCandles, executeBacktest } from "@/services/backtests";
-import { findMarketByPairId } from "@/services/markets";
+import {
+  MAX_EVALUATED_CANDLES,
+  MAX_MARKETS_PER_RUN,
+  estimateCandles,
+  executeBacktest,
+} from "@/services/backtests";
 
 export const dynamic = "force-dynamic";
-/** A synchronous replay of up to 1000 bars needs more than the default budget. */
-export const maxDuration = 60;
 
-const bodySchema = z.object({
-  tradingPairId: z.string().uuid(),
-  timeframe: timeframeSchema,
-  startDate: z.coerce.date(),
-  endDate: z.coerce.date(),
-});
+/**
+ * Paged history over several markets takes longer than a single request used
+ * to. Still synchronous, still local, still bounded by the candle ceiling.
+ */
+export const maxDuration = 300;
+
+const bodySchema = z
+  .object({
+    // Accepts one pair or several, so symbol breakdowns are a real comparison
+    // rather than a one-row table. Bounded, because each market pages its own
+    // history.
+    tradingPairIds: z.array(z.string().uuid()).min(1).max(MAX_MARKETS_PER_RUN),
+    timeframes: z.array(timeframeSchema).min(1).max(4),
+    startDate: z.coerce.date(),
+    endDate: z.coerce.date(),
+    /** Round-trip taker fee per side, as a fraction. Capped at a sane 1%. */
+    feeRate: z.number().min(0).max(0.01).optional(),
+    slippageRate: z.number().min(0).max(0.01).optional(),
+  })
+  .strict();
 
 /** POST /api/backtest/run — runs synchronously and returns the finished report. */
 export async function POST(req: NextRequest) {
@@ -48,41 +64,46 @@ export async function POST(req: NextRequest) {
       return apiError("INVALID_REQUEST", "The start date must be before the end date.", 400);
     }
 
-    const estimated = estimateCandles(body.startDate, body.endDate, body.timeframe);
+    // Charged per market and timeframe: three markets on two timeframes is six
+    // datasets to page, not one.
+    const perDataset = Math.max(
+      ...body.timeframes.map((tf) => estimateCandles(body.startDate, body.endDate, tf)),
+    );
+    const datasets = body.tradingPairIds.length * body.timeframes.length;
+    const estimated = perDataset * datasets;
+
     if (estimated > MAX_EVALUATED_CANDLES) {
       return apiError(
         "RANGE_TOO_LARGE",
-        `That range needs about ${estimated} candles to evaluate; the limit is ${MAX_EVALUATED_CANDLES} per run. The engine also reads several hundred candles of history from before the range, which is why the ceiling is lower than the exchange's page size. Shorten the range or use a higher timeframe.`,
+        `That request needs about ${estimated} candles to evaluate across ${datasets} ${
+          datasets === 1 ? "dataset" : "datasets"
+        }; the limit is ${MAX_EVALUATED_CANDLES} per run. Shorten the range, use a higher timeframe, or pick fewer markets.`,
         400,
       );
     }
 
-    const market = await findMarketByPairId(body.tradingPairId);
-    if (!market) return apiError("PAIR_NOT_FOUND", "Unknown trading pair.", 404);
-
     const result = await executeBacktest({
       userId: guard.userId,
-      tradingPairId: market.pairId,
-      exchangeSymbol: market.exchangeSymbol,
-      timeframe: body.timeframe,
+      tradingPairIds: body.tradingPairIds,
+      timeframes: body.timeframes,
       startDate: body.startDate,
       endDate: body.endDate,
+      feeRate: body.feeRate,
+      slippageRate: body.slippageRate,
     });
 
     return NextResponse.json({
       runId: result.runId,
-      label: market.label,
-      timeframe: body.timeframe,
-      // Reported separately so a run can never look like it covered a period
-      // it only read as warmup.
-      candlesUsed: result.candlesUsed,
-      warmupBars: result.warmupBars,
-      evaluatedBars: result.evaluatedBars,
-      evaluatedFrom: result.evaluatedFrom,
-      evaluatedTo: result.evaluatedTo,
-      higherTimeframe: result.higherTimeframe,
+      // Everything needed to answer "what exactly did I test?" — the
+      // assumptions and the data actually obtained, not just the numbers.
+      assumptions: result.assumptions,
+      datasets: result.datasets,
       metrics: result.metrics,
       setups: result.setups,
+      bySymbol: result.bySymbol,
+      byTimeframe: result.byTimeframe,
+      byScoreBand: result.byScoreBand,
+      byTargetKind: result.byTargetKind,
       disclaimer: BACKTEST_DISCLAIMER,
     });
   } catch (err) {

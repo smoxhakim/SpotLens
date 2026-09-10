@@ -71,10 +71,12 @@ test.describe("signed-in journey", () => {
     // --- backtest --------------------------------------------------------
     await page.goto("/backtest");
 
-    // A range wider than the candle ceiling is refused with a usable message
-    // rather than a timeout or a truncated result. The ceiling counts the bars
-    // that will be *evaluated* — the engine also reads several hundred candles
-    // of history from before the range, which is charged separately.
+    // A range wider than the candle ceiling is still refused with a usable
+    // message rather than a timeout or a truncated result. Phase G paginates
+    // history, so that ceiling moved from 740 evaluated candles to tens of
+    // thousands — six months of 4h candles now runs rather than being
+    // rejected. Reaching the limit takes a much finer timeframe.
+    await page.selectOption("#tf", "M1");
     await page.getByLabel("From").fill("2025-01-01");
     await page.getByLabel("To").fill("2025-06-30");
     await page.getByRole("button", { name: /Run backtest/ }).click();
@@ -82,9 +84,41 @@ test.describe("signed-in journey", () => {
       timeout: 30_000,
     });
 
-    // ~120 days of 4h candles sits inside the ceiling.
+    // ~120 days of 4h candles is comfortably inside it.
+    await page.selectOption("#tf", "H4");
     await page.getByLabel("To").fill("2025-05-01");
     await page.getByRole("button", { name: /Run backtest/ }).click();
+
+    // --- the API contract itself ------------------------------------------
+    //
+    // `page.request` carries the session cookie, so unlike the anonymous smoke
+    // test these reach schema validation instead of stopping at the auth guard.
+    // That is what makes them a test of the contract rather than of the ordering.
+
+    // The pre-Phase-G singular shape is gone, and `.strict()` rejects it.
+    const stale = await page.request.post("/api/backtest/run", {
+      data: {
+        tradingPairId: "00000000-0000-4000-8000-000000000000",
+        timeframe: "H4",
+        startDate: "2025-01-01",
+        endDate: "2025-03-01",
+      },
+    });
+    expect(stale.status()).toBe(400);
+    expect(await stale.text()).toMatch(/tradingPairIds/i);
+
+    // The current plural shape parses, and the request then reaches the range
+    // check beyond it — which is only possible if the body validated.
+    const current = await page.request.post("/api/backtest/run", {
+      data: {
+        tradingPairIds: ["00000000-0000-4000-8000-000000000000"],
+        timeframes: ["M1"],
+        startDate: "2025-01-01",
+        endDate: "2025-06-30",
+      },
+    });
+    expect(current.status()).toBe(400);
+    expect(await current.text()).toMatch(/needs about \d+ candles to evaluate/i);
 
     // Either a report or an honest "no setups" — both are valid outcomes, and
     // an engine that passes on most conditions will often produce the latter.

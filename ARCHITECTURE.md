@@ -11,8 +11,8 @@
 - **Auth:** Auth.js (NextAuth) v5, Prisma adapter, database sessions (revocable), Credentials + Google OAuth.
 - **Validation:** Zod on every API route input/output boundary.
 - **Realtime prices:** Browser connects directly to exchange public WebSocket (Binance) for ticker/candle streaming — no server-side WS relay needed, keeps infra boring.
-- **Rate limiting & queue:** Upstash Redis + `@upstash/ratelimit` for API rate limiting; Upstash QStash for async/long-running jobs (backtests, candle backfills) since Vercel functions are stateless/time-limited.
-- **Background/scheduled work:** Vercel Cron hitting internal `/api/cron/*` routes (candle refresh, queued backtest processing).
+- **Rate limiting:** Upstash Redis + `@upstash/ratelimit` for API rate limiting, falling back to an in-process sliding window when Upstash is not configured. **No job queue**: backtests run synchronously under a candle ceiling and the scanner is a local process, both by explicit decision.
+- **Background/scheduled work:** none hosted. The scanner is a local process (`npm run scanner`) that wakes on candle closes; backtests run inside the request that asks for them.
 - **Testing:** Vitest for unit tests (analysis engine math is the highest-risk code), Playwright for E2E, `@testing-library/react` for components.
 - **Billing (Phase 8):** Stripe Checkout + Billing Portal + webhooks.
 - **Monitoring:** Sentry (errors), UptimeRobot (uptime), Vercel Analytics (basic usage).
@@ -130,18 +130,19 @@ All tables via Prisma. Enums noted inline.
 - **Candle cache service:** reads through Postgres `Candle` table first; on cache miss/staleness, calls provider, upserts, returns. Cron job refreshes recent candles for all active pairs/timeframes.
 - **Analysis Engine** (`/lib/analysis`, `/lib/indicators`): pure, deterministic, framework-agnostic functions — indicator math, swing/structure detection, S/R zone clustering, volume analysis, entry/SL/TP calculators, scoring, status engine. No I/O; takes candle arrays in, returns typed results out. This is the most heavily unit-tested layer.
 - **Confirmation layer:** `lib/analysis/confirmation` — pure, closed-candle-only evaluation of five deterministic signals (bullish rejection, higher low, structure break, volume, reclaim), each tri-state. Called from `runAnalysis`, so live analysis and the backtester run the identical function and cannot drift. Applied as the final gate before POTENTIAL_SETUP: it can only ever downgrade to WAIT. Rule: any negative signal *of a primary type* ⇒ CONTRADICTED; otherwise ≥1 positive *primary* signal and ≥2 positive signals total ⇒ PRESENT; else NOT_PRESENT. Volume is supporting-only, which disqualifies it from confirming alone **and** from contradicting: CONTRADICTED means opposing evidence, NOT_PRESENT means missing evidence.
+- **Backtesting:** `lib/backtesting` is pure — `runner.ts` replays `runAnalysis` bar by bar, `metrics.ts` measures the result, `integrity.ts` validates the dataset, `types.ts` holds the assumptions. `services/candle-history.ts` pages the exchange (removing the old 740-candle ceiling; ~9000 hourly candles in 10 requests), and `services/backtests.ts` orchestrates several markets with bounded concurrency. Entry fills at the close of the signal candle, so a trade can never open and close on the same bar; where one candle contains both the stop and a target, the stop is assumed first. Fees and slippage are explicit, configurable and reported. Metrics are in R: expectancy, profit factor, drawdown in R, streaks, holding time, distribution, plus breakdowns by symbol, timeframe, score band and target kind, each with a small-sample flag.
 - **Notifications:** `lib/notifications` (pure: mapping, dedupe keys, MarkdownV2 formatting) + `services/notifications.ts` (delivery, preferences, persistence). The scanner emits structured events and knows nothing about Telegram; `scripts/scanner.ts` is the composition root that joins the two. Six event types, all derived from Phase D lifecycle events or finished scanner runs — no second state machine. Channels are rows, so in-app and Telegram succeed and fail independently. Deduplication is the `SetupEvent.id` behind a unique index on `(userId, channel, dedupeKey)`, which makes the layer idempotent regardless of caller behaviour. Telegram connects via a one-time hashed code and `getUpdates` polling — no webhook, so the machine is never exposed. Defaults are quiet: confirmations, invalidations and scanner errors only.
 - **Scanner:** a plain local Node process (`scripts/scanner.ts`, `npm run scanner`) — no queue, no cron service, no worker, because none of them would make the result more correct on a single machine. Wakes 90s after each candle close rather than polling, groups timeframes closing at the same instant into one pass, and analyses closed candles only. Bounded concurrency (default 4) over 45 markets × 2 timeframes = 90 analyses and ~180 candle requests per pass. Retries only faults the provider calls transient, at most 3 attempts. Per-market isolation: one failure leaves the run PARTIAL, not FAILED. All decision logic is pure in `lib/scanner`; `services/scanner.ts` does the I/O and owns no rules. Emits structured events (SETUP_CREATED / SETUP_STATE_CHANGED / SETUP_INVALIDATED / ANALYSIS_FAILED) with no knowledge of how they are delivered — Phase F consumes them.
 - **Setup lifecycle:** `lib/setups` is a pure planner — given the stored setup and a finished `AnalysisResult` it returns a plan (NONE / CREATE / TRANSITION / REPLACE); `services/setups.ts` is the only thing that writes. That split keeps `lib/analysis` free of I/O and makes identity, deduplication and transitions testable without a database. States: SETUP_FORMING → WAITING_CONFIRMATION → CONFIRMATION_DETECTED → POTENTIAL_SETUP → INVALIDATED (terminal). CONFIRMATION_DETECTED is a lifecycle state, never a trading status. Identity = (user, pair, timeframe) plus an entry zone overlapping the stored origin. `TrackedSetup` splits an immutable snapshot from mutable lifecycle columns, and `SetupEvent` is append-only. Phase E's scanner calls `trackSetup` after `runAnalysis` and needs no changes to this model.
 - **Explanation layer:** two tiers, both templated and deterministic — not LLM-dependent for correctness; an optional LLM rephrasing pass can be layered on top later without changing numbers.
   - `lib/analysis/explain/` writes the individual sentences the engine embeds in its own output (`read.trend.reason`, each target's `reason`, and so on).
   - `lib/analysis/explanations/` assembles a finished `AnalysisResult` into an ordered, categorised, signal-tagged `Explanation[]`. It is a pure function of the result: it computes nothing, stores nothing, and makes no request. Consumers render the reasoning without knowing any trading rules, so the dashboard, a notification and a journal entry cannot end up wording the same verdict three different ways.
-- **Backtest runner** (`/lib/backtesting`): replays the Phase 2/3 engine bar-by-bar over stored candles, strictly using only candles up to the current bar index (guards against look-ahead bias), records BacktestSetup outcomes. Runs as an async job (QStash) since ranges can be long-running.
+- **Backtest runner** (`/lib/backtesting`): replays the engine bar-by-bar, strictly using only candles up to the current bar index (guards against look-ahead bias), and records BacktestSetup outcomes. Runs **synchronously inside the request** — SpotLens is local-only, so there is no queue and no worker; the candle ceiling per run is what keeps that safe.
 - **Realtime price client:** browser-side hook subscribing directly to Binance WebSocket streams; falls back to REST polling via TanStack Query on WS failure.
 - **Admin panel:** protected route group under `/app/admin`, reuses the same API routes with role-gated middleware.
 - **Auth module:** NextAuth config, Prisma adapter, credentials + OAuth providers, session callbacks that attach role/plan to session.
 - **Billing module:** Stripe SDK wrapper, webhook handler that syncs `Subscription` table.
-- **Job/cron routes:** `/api/cron/*` — protected by a shared secret header, triggered by Vercel Cron; also handle QStash callbacks for backtest processing.
+- **Job/cron routes:** none. Scheduled work is the local scanner process; backtests are synchronous.
 
 ## API design
 
@@ -186,10 +187,9 @@ All routes under `/app/api`. "Auth" = required session unless noted.
 
 **Backtesting**
 
-- `POST /api/backtest/run` — body `{tradingPairId, timeframe, startDate, endDate}`; creates `QUEUED` run, enqueues job, returns `{runId}` (auth; plan-gated volume via middleware)
+- `POST /api/backtest/run` — body `{tradingPairIds: string[], timeframes: Timeframe[], startDate, endDate, feeRate?, slippageRate?}`; runs **synchronously** and returns the finished report — metrics, per-dataset coverage, the assumptions it ran under, and the symbol/timeframe/score/target breakdowns (auth). Several markets and timeframes per run, bounded, so breakdowns are a real comparison.
 - `GET /api/backtest` — list caller's runs (auth)
-- `GET /api/backtest/:id` — run status + summary metrics (auth, owner-only)
-- `GET /api/backtest/:id/setups?cursor=` — paginated setup list (auth, owner-only)
+- `GET /api/backtest/:id` — run summary and its setups (auth, owner-only)
 
 **Admin** (auth, role=ADMIN)
 
@@ -209,7 +209,6 @@ All routes under `/app/api`. "Auth" = required session unless noted.
 **Jobs/ops**
 
 - `POST /api/cron/refresh-candles` — cron-secret protected
-- `POST /api/cron/process-backtests` — cron-secret / QStash-signature protected
 - `GET /api/health` — public, for uptime checks
 
 ## External services & integrations
@@ -217,7 +216,7 @@ All routes under `/app/api`. "Auth" = required session unless noted.
 - **Binance public REST + WebSocket API** — sole market data source at launch, accessed only through `MarketDataProvider` so a second provider can be added without touching engine/UI code.
 - **Neon** — managed Postgres, branch-per-environment (dev/staging/prod).
 - **Upstash Redis** — rate limiting counters.
-- **Upstash QStash** — async job dispatch for backtest runs and scheduled candle backfills (works within serverless function limits).
+- **Upstash QStash** — not used. Backtests run synchronously and the scanner is a local process, so no job dispatch is needed.
 - **Vercel Cron** — triggers `/api/cron/*` on schedule (e.g. every 1–5 min for active-pair candle refresh).
 - **NextAuth OAuth provider:** Google (email/password also supported via Credentials).
 - **Resend** — transactional email (verification, password reset, backtest-complete).

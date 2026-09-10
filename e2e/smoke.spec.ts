@@ -280,16 +280,29 @@ test("backtesting requires an account and states its disclaimer", async ({ page 
   await expect(page.getByRole("link", { name: "Sign in" }).first()).toBeVisible();
 });
 
-test("the backtest API rejects anonymous callers and bad ranges", async ({ request }) => {
+test("the backtest API rejects anonymous callers before reading the body", async ({ request }) => {
+  // The current request shape, so this test cannot quietly document a contract
+  // that no longer exists. It is deliberately well-formed: the point is that an
+  // anonymous caller is turned away *before* the body is parsed, so the 401
+  // here proves the ordering rather than the schema.
+  //
+  // The schema itself is exercised by the signed-in journey, which can actually
+  // reach it.
   const anonymous = await request.post("/api/backtest/run", {
     data: {
-      tradingPairId: "00000000-0000-4000-8000-000000000000",
-      timeframe: "H4",
+      tradingPairIds: ["00000000-0000-4000-8000-000000000000"],
+      timeframes: ["H4"],
       startDate: "2024-01-01",
       endDate: "2024-03-01",
     },
   });
   expect(anonymous.status()).toBe(401);
+
+  // A malformed body from the same anonymous caller must also be 401, never a
+  // 400: a validation error would leak the shape of the API to someone who has
+  // not authenticated.
+  const malformed = await request.post("/api/backtest/run", { data: { nonsense: true } });
+  expect(malformed.status()).toBe(401);
 
   expect((await request.get("/api/backtest")).status()).toBe(401);
 });

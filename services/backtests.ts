@@ -1,63 +1,79 @@
 import { defaultHigherTimeframe } from "@/lib/analysis";
 import {
   DEFAULT_WARMUP_BARS,
+  breakdownBy,
+  checkIntegrity,
   computeMetrics,
   runBacktest,
+  scoreBand,
+  type BacktestAssumptions,
   type BacktestSetupResult,
+  type DataCoverage,
+  type IntegrityIssue,
 } from "@/lib/backtesting";
 import { prisma } from "@/lib/db/prisma";
-import { MAX_CANDLES_PER_REQUEST } from "@/lib/market-data/binance";
 import { TIMEFRAME_MS, type Timeframe } from "@/lib/market-data/provider";
-import { getCandles } from "@/services/candles";
+import { mapWithConcurrency } from "@/lib/scanner";
+import { loadCandleHistory, MAX_HISTORY_CANDLES } from "@/services/candle-history";
+import { findMarketByPairId } from "@/services/markets";
 
 /**
- * Hard ceiling on candles per run.
+ * Backtest orchestration.
  *
- * Backtests execute synchronously rather than through a job queue — the
- * architecture's QStash path is deferred, so a run has to finish inside one
- * request. This cap is what makes that safe; raising it is the point at which
- * the async path becomes necessary rather than optional.
+ * Loads history, checks it, replays it through the same engine everything else
+ * uses, and measures the result. No analysis happens here — `runBacktest` calls
+ * `runAnalysis`, and this file only decides which data to hand it.
  */
-export const MAX_BACKTEST_CANDLES = 1000;
 
 /**
- * Candles of real history fetched *before* the requested range.
+ * Candles of real history read before the requested range.
  *
  * The engine needs roughly 260 bars before it can say anything, and those bars
- * have to come from before the period under test. Taking them out of the
- * requested range instead — which is what happened until this was added — meant
- * a run asked to cover January to December quietly began evaluating in March
- * and reported nothing about the months it had eaten.
+ * must come from before the period under test. This is charged separately from
+ * the evaluation window, which is now paged rather than sharing one request.
  */
 export const BACKTEST_PREROLL_BARS = DEFAULT_WARMUP_BARS;
 
 /**
- * Ceiling on the *evaluated* range, once pre-roll is accounted for.
+ * Ceiling on the evaluated range.
  *
- * Pre-roll and evaluation window share one provider request, so the range a
- * user may ask for is the request ceiling minus the history the engine needs
- * in front of it. Paginating to lift this is Phase G's job.
+ * Was 740 — one exchange page minus the warmup. Pagination removes that
+ * constraint, so the limit is now about how much work one local machine should
+ * do in a single request rather than about the provider's page size.
  */
-export const MAX_EVALUATED_CANDLES = Math.min(
-  MAX_BACKTEST_CANDLES,
-  MAX_CANDLES_PER_REQUEST - BACKTEST_PREROLL_BARS,
-);
+export const MAX_EVALUATED_CANDLES = MAX_HISTORY_CANDLES - BACKTEST_PREROLL_BARS;
+
+/** Markets in one run. Bounded so a single request cannot page forever. */
+export const MAX_MARKETS_PER_RUN = 10;
+
+/** Markets loaded at once, so a multi-market run is not a burst. */
+const MARKET_CONCURRENCY = 3;
 
 export interface RunBacktestInput {
   userId: string;
-  tradingPairId: string;
-  exchangeSymbol: string;
-  timeframe: Timeframe;
+  tradingPairIds: string[];
+  timeframes: Timeframe[];
   startDate: Date;
   endDate: Date;
+  feeRate?: number;
+  slippageRate?: number;
+}
+
+export interface MarketDataset {
+  symbol: string;
+  timeframe: Timeframe;
+  coverage: DataCoverage;
+  issues: IntegrityIssue[];
+  /** Set when the dataset was unusable and the market was skipped entirely. */
+  failure: string | null;
 }
 
 export async function executeBacktest(input: RunBacktestInput) {
   const run = await prisma.backtestRun.create({
     data: {
       userId: input.userId,
-      tradingPairId: input.tradingPairId,
-      timeframe: input.timeframe,
+      tradingPairId: input.tradingPairIds[0],
+      timeframe: input.timeframes[0],
       startDate: input.startDate,
       endDate: input.endDate,
       status: "RUNNING",
@@ -66,96 +82,36 @@ export async function executeBacktest(input: RunBacktestInput) {
   });
 
   try {
-    const step = TIMEFRAME_MS[input.timeframe];
-    const rangeStart = input.startDate.getTime();
-    const rangeEnd = input.endDate.getTime();
+    const jobs = input.tradingPairIds.flatMap((pairId) =>
+      input.timeframes.map((timeframe) => ({ pairId, timeframe })),
+    );
 
-    // Fetch from before the requested range so the warmup is history rather
-    // than a bite out of the period under test.
-    const prerollStart = rangeStart - BACKTEST_PREROLL_BARS * step;
-    const requestedBars = Math.ceil((rangeEnd - rangeStart) / step);
+    const outcomes = await mapWithConcurrency(jobs, MARKET_CONCURRENCY, (job) =>
+      replayOne(job.pairId, job.timeframe, input),
+    );
 
-    const { candles } = await getCandles({
-      pairId: input.tradingPairId,
-      exchangeSymbol: input.exchangeSymbol,
-      timeframe: input.timeframe,
-      limit: Math.min(MAX_CANDLES_PER_REQUEST, BACKTEST_PREROLL_BARS + requestedBars + 1),
-      from: prerollStart,
-      to: rangeEnd,
-    });
+    const setups = outcomes.flatMap((outcome) => outcome.setups);
+    const datasets = outcomes.map((outcome) => outcome.dataset);
+    const assumptions = outcomes.find((o) => o.assumptions)?.assumptions ?? null;
 
-    // The higher timeframe is fetched independently and reaches much further
-    // back for the same number of candles, so its own warmup costs nothing
-    // against the lower timeframe's budget. The runner slices it per bar so no
-    // candle that had not closed yet can reach the read.
-    const higherTimeframe = defaultHigherTimeframe(input.timeframe);
-    const higher = higherTimeframe
-      ? await getCandles({
-          pairId: input.tradingPairId,
-          exchangeSymbol: input.exchangeSymbol,
-          timeframe: higherTimeframe,
-          limit: MAX_CANDLES_PER_REQUEST,
-          from: rangeStart - BACKTEST_PREROLL_BARS * TIMEFRAME_MS[higherTimeframe],
-          to: rangeEnd,
-        }).catch(() => null)
-      : null;
-
-    const report = runBacktest(candles, {
-      evaluateFrom: rangeStart,
-      ...(higherTimeframe && higher && higher.candles.length > 0
-        ? {
-            mtf: {
-              candles: higher.candles,
-              lowerTimeframe: input.timeframe,
-              higherTimeframe,
-            },
-          }
-        : {}),
-    });
-
-    const setups = report.setups;
     const metrics = computeMetrics(setups);
 
-    await prisma.$transaction(async (tx) => {
-      if (setups.length > 0) {
-        await tx.backtestSetup.createMany({
-          data: setups.map((setup) => ({
-            backtestRunId: run.id,
-            triggeredAt: new Date(setup.triggeredAt),
-            entry: setup.entry.toString(),
-            stopLoss: setup.stopLoss.toString(),
-            takeProfits: setup.takeProfits,
-            outcome: setup.outcome,
-            realizedRR: setup.realizedRR?.toString() ?? null,
-            exitTime: setup.exitTime ? new Date(setup.exitTime) : null,
-            exitPrice: setup.exitPrice?.toString() ?? null,
-          })),
-        });
-      }
-
-      await tx.backtestRun.update({
-        where: { id: run.id },
-        data: {
-          status: "COMPLETED",
-          numSetups: metrics.numSetups,
-          winRate: metrics.winRate.toFixed(2),
-          avgRealizedRR: metrics.avgRealizedRR.toFixed(2),
-          maxDrawdownPct: metrics.maxDrawdownPct.toFixed(2),
-          completedAt: new Date(),
-        },
-      });
-    });
+    await persist(run.id, setups, metrics);
 
     return {
       runId: run.id,
       metrics,
       setups,
-      candlesUsed: report.candlesUsed,
-      warmupBars: report.warmupBars,
-      evaluatedBars: report.evaluatedBars,
-      evaluatedFrom: report.evaluatedFrom,
-      evaluatedTo: report.evaluatedTo,
-      higherTimeframe: report.higherTimeframe,
+      datasets,
+      assumptions,
+      // Ordered deterministically inside `breakdownBy`, so two identical runs
+      // produce identical tables.
+      bySymbol: breakdownBy(setups, (s) => s.symbol),
+      byTimeframe: breakdownBy(setups, (s) => s.timeframe),
+      byScoreBand: breakdownBy(setups, (s) => scoreBand(s.setupScore)),
+      byTargetKind: breakdownBy(setups, (s) =>
+        s.entryRiskRewardIsSynthetic ? "unmeasured reward" : "structural target",
+      ),
     };
   } catch (err) {
     await prisma.backtestRun
@@ -173,12 +129,190 @@ export async function executeBacktest(input: RunBacktestInput) {
   }
 }
 
+interface ReplayOutcome {
+  setups: BacktestSetupResult[];
+  dataset: MarketDataset;
+  assumptions: BacktestAssumptions | null;
+}
+
 /**
- * Candles a date range implies, used to reject ranges that cannot be served.
+ * One market on one timeframe.
  *
- * This counts the bars that will actually be *evaluated*. The pre-roll the
- * engine needs in front of them is charged separately, against
- * `MAX_EVALUATED_CANDLES`.
+ * A market whose data is corrupt is skipped and reported rather than replayed:
+ * a duplicated or out-of-order candle breaks the assumption every loop in the
+ * runner makes, and the resulting numbers would be indistinguishable from real
+ * ones.
+ */
+async function replayOne(
+  pairId: string,
+  timeframe: Timeframe,
+  input: RunBacktestInput,
+): Promise<ReplayOutcome> {
+  const market = await findMarketByPairId(pairId);
+
+  const emptyCoverage = (): DataCoverage => ({
+    requestedFrom: input.startDate.getTime(),
+    requestedTo: input.endDate.getTime(),
+    actualFrom: null,
+    actualTo: null,
+    warmupBars: 0,
+    evaluatedBars: 0,
+    candlesUsed: 0,
+    requests: 0,
+    incomplete: true,
+    notes: [],
+  });
+
+  if (!market) {
+    return {
+      setups: [],
+      assumptions: null,
+      dataset: {
+        symbol: pairId,
+        timeframe,
+        coverage: emptyCoverage(),
+        issues: [],
+        failure: "Unknown trading pair.",
+      },
+    };
+  }
+
+  const step = TIMEFRAME_MS[timeframe];
+  const rangeStart = input.startDate.getTime();
+  const rangeEnd = input.endDate.getTime();
+
+  const history = await loadCandleHistory({
+    exchangeSymbol: market.exchangeSymbol,
+    timeframe,
+    from: rangeStart - BACKTEST_PREROLL_BARS * step,
+    to: rangeEnd,
+  });
+
+  const integrity = checkIntegrity(history.candles, timeframe);
+
+  const coverage: DataCoverage = {
+    requestedFrom: rangeStart,
+    requestedTo: rangeEnd,
+    actualFrom: history.candles[0]?.openTime ?? null,
+    actualTo: history.candles.at(-1)?.openTime ?? null,
+    warmupBars: 0,
+    evaluatedBars: 0,
+    candlesUsed: history.candles.length,
+    requests: history.requests,
+    incomplete: history.incomplete || integrity.missingCandles > 0,
+    notes: [
+      ...history.notes,
+      ...(integrity.missingCandles > 0
+        ? [`${integrity.missingCandles} candles are missing from the exchange's own history.`]
+        : []),
+    ],
+  };
+
+  if (integrity.fatal) {
+    return {
+      setups: [],
+      assumptions: null,
+      dataset: {
+        symbol: market.exchangeSymbol,
+        timeframe,
+        coverage,
+        issues: integrity.issues,
+        failure:
+          "The historical data failed an integrity check, so this market was not replayed. Replaying it would have produced numbers indistinguishable from correct ones.",
+      },
+    };
+  }
+
+  // The higher timeframe is loaded independently and reaches much further back
+  // for the same number of candles, so its warmup costs nothing against the
+  // entry timeframe's budget. The runner slices it per bar, so no candle that
+  // had not closed yet can reach a decision.
+  const higherTimeframe = defaultHigherTimeframe(timeframe);
+  const higher = higherTimeframe
+    ? await loadCandleHistory({
+        exchangeSymbol: market.exchangeSymbol,
+        timeframe: higherTimeframe,
+        from: rangeStart - BACKTEST_PREROLL_BARS * TIMEFRAME_MS[higherTimeframe],
+        to: rangeEnd,
+      }).catch(() => null)
+    : null;
+
+  const report = runBacktest(history.candles, {
+    evaluateFrom: rangeStart,
+    symbol: market.exchangeSymbol,
+    timeframe,
+    feeRate: input.feeRate,
+    slippageRate: input.slippageRate,
+    ...(higherTimeframe && higher && higher.candles.length > 0
+      ? {
+          mtf: {
+            candles: higher.candles,
+            lowerTimeframe: timeframe,
+            higherTimeframe,
+          },
+        }
+      : {}),
+  });
+
+  return {
+    setups: report.setups,
+    assumptions: report.assumptions,
+    dataset: {
+      symbol: market.exchangeSymbol,
+      timeframe,
+      coverage: {
+        ...coverage,
+        warmupBars: report.warmupBars,
+        evaluatedBars: report.evaluatedBars,
+      },
+      issues: integrity.issues,
+      failure: null,
+    },
+  };
+}
+
+async function persist(
+  runId: string,
+  setups: BacktestSetupResult[],
+  metrics: ReturnType<typeof computeMetrics>,
+): Promise<void> {
+  await prisma.$transaction(async (tx) => {
+    if (setups.length > 0) {
+      await tx.backtestSetup.createMany({
+        data: setups.map((setup) => ({
+          backtestRunId: runId,
+          triggeredAt: new Date(setup.triggeredAt),
+          entry: setup.entry.toString(),
+          stopLoss: setup.stopLoss.toString(),
+          takeProfits: setup.takeProfits,
+          outcome: setup.outcome,
+          realizedRR: setup.realizedRR?.toString() ?? null,
+          exitTime: setup.exitTime ? new Date(setup.exitTime) : null,
+          exitPrice: setup.exitPrice?.toString() ?? null,
+        })),
+      });
+    }
+
+    await tx.backtestRun.update({
+      where: { id: runId },
+      data: {
+        status: "COMPLETED",
+        numSetups: metrics.totalSetups,
+        winRate: metrics.winRate.toFixed(2),
+        avgRealizedRR: metrics.averageR.toFixed(2),
+        // Stored in R, which is the unit the strategy is actually measured in.
+        maxDrawdownPct: metrics.maxDrawdownR.toFixed(2),
+        completedAt: new Date(),
+      },
+    });
+  });
+}
+
+/**
+ * Candles a date range implies.
+ *
+ * Counts the bars that will be *evaluated*. The pre-roll the engine needs in
+ * front of them is charged separately.
  */
 export function estimateCandles(from: Date, to: Date, timeframe: Timeframe): number {
   return Math.ceil((to.getTime() - from.getTime()) / TIMEFRAME_MS[timeframe]);
