@@ -321,7 +321,3 @@ async function persist(
 export function estimateCandles(from: Date, to: Date, timeframe: Timeframe): number {
   return Math.ceil((to.getTime() - from.getTime()) / TIMEFRAME_MS[timeframe]);
 }
-
-export function loadSetups(setups: BacktestSetupResult[]) {
-  return setups;
-}

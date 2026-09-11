@@ -38,11 +38,6 @@ export async function listMarkets(): Promise<MarketSummary[]> {
   return loadMarkets();
 }
 
-/** Test seam, and the hook a future admin edit would call. */
-export function invalidateMarketsCache() {
-  loadMarkets.invalidate();
-}
-
 export async function findMarketByPairId(pairId: string): Promise<MarketSummary | undefined> {
   const markets = await listMarkets();
   return markets.find((m) => m.pairId === pairId);

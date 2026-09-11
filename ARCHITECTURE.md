@@ -385,7 +385,7 @@ _Milestone: the product teaches, and the curated list is maintainable without a 
 
 1. `BacktestRun`/`BacktestSetup` schema + historical candle storage strategy (reuse `Candle` cache, backfill deep history for requested ranges). (3 days)
 2. Bar-by-bar replay runner reusing Phase 2/3 engine, with explicit test coverage proving no look-ahead bias (engine only sees candles ≤ current index). (5 days)
-3. Async job wiring: `POST /api/backtest/run` enqueues via QStash, `/api/cron/process-backtests` (or QStash callback) executes and updates run status. (3 days)
+3. ~~Async job wiring via QStash and a cron callback.~~ **Not built.** Backtests run synchronously inside the request, which the candle ceiling keeps safe, and there is no queue, worker or cron route in the codebase. See "Upstash QStash" above.
 4. Metrics computation: win rate, avg realized R:R, max drawdown, best/worst setup. (2 days)
 5. Backtest report UI: summary + setup-by-setup outcome list + prominent "no guarantee" disclaimer. (3 days)
 

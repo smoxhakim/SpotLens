@@ -11,8 +11,3 @@ export function warnOnce(key: string, message: string, detail?: unknown) {
   if (detail === undefined) console.warn(message);
   else console.warn(message, detail instanceof Error ? detail.message : detail);
 }
-
-/** Test seam. */
-export function resetWarnOnce() {
-  seen.clear();
-}

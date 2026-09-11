@@ -13,11 +13,6 @@ export function getMarketDataProvider(): MarketDataProvider {
   return provider;
 }
 
-/** Test seam: inject a fake provider. */
-export function setMarketDataProvider(next: MarketDataProvider | undefined) {
-  provider = next;
-}
-
 export * from "./provider";
 export { BinanceProvider } from "./binance";
 export { CURATED_ASSETS, findCuratedAsset, toExchangeSymbol } from "./curated-assets";

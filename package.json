@@ -29,7 +29,6 @@
     "@radix-ui/react-slot": "^1.1.0",
     "@radix-ui/react-tabs": "^1.1.0",
     "@tanstack/react-query": "^5.45.0",
-    "@upstash/qstash": "^2.6.0",
     "@upstash/ratelimit": "^1.2.1",
     "@upstash/redis": "^1.31.0",
     "bcryptjs": "^2.4.3",

@@ -410,8 +410,8 @@ than no channel.
 ## Testing
 
 ```bash
-npm run test        # 741 Vitest unit tests — the analysis math is the priority surface
-npm run e2e         # Playwright: a smoke suite and the full signed-in journey (port 3100)
+npm run test        # 769 Vitest unit tests — the analysis math is the priority surface
+npm run e2e         # Playwright: 30 specs — smoke, signed-in journey, journal (port 3100)
 npm run lint
 npm run typecheck
 ```

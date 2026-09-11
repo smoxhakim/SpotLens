@@ -1,7 +1,7 @@
 # SpotLens Development Roadmap
 
-**Phases A–H are shipped and merged to `main`; Phase I is on its branch,
-awaiting review.** What follows is the original roadmap with its outcomes;
+**Phases A–H are shipped and merged to `main`. Phase I and Phase J are on
+their branches, awaiting review.** What follows is the original roadmap with its outcomes;
 open items are collected here.
 
 ## Where we left off
@@ -411,6 +411,57 @@ one closed position contributed R.
 
 127 new tests (633 → 760). Six defect injections confirmed the no-lookahead
 and immutability tests fail when the bug is reintroduced.
+
+## Phase J — final hardening and release audit (done, awaiting review)
+
+Branch `feat/phase-j-hardening`, on top of Phase I.
+
+An audit phase, not a feature phase. Most of it confirmed existing behaviour;
+what follows is only what actually changed.
+
+- [x] **Owner scoping moved into the query.** `GET/DELETE /api/analysis/:id`,
+      `GET /api/backtest/:id` and `DELETE /api/watchlist/:id` fetched the row
+      and _then_ compared `userId`. Responses were already correct (404, never 403) but the backtest route loaded another account's entire run —
+      every setup in it — into memory before refusing it, and both deletes ran
+      unscoped after a separate check. All four are now single scoped
+      statements. Behaviour identical; 8 contract tests pin it.
+- [x] **The missing no-lookahead proof.** Of the seven the phase brief lists,
+      six had tests. Regime did not: the backtest lookahead test compared only
+      `triggeredAt` and `entry`, so a regime classified from the full series
+      would have passed. Now asserted, and defect-injection confirms it fails
+      when regime is classified with hindsight.
+- [x] Amendment history is visible in the journal UI — the superseded values
+      and the time they were replaced, shown under the amendment that replaced
+      them. Phase I stored them; nothing displayed them.
+- [x] Removed `@upstash/qstash` (unused; QStash was never built) and five
+      proven-dead symbols: `PhaseStub`, `loadSetups`, `setMarketDataProvider`,
+      `resetWarnOnce`, `invalidateMarketsCache`.
+- [x] Documentation corrected against reality: CLAUDE.md claimed Next.js 14
+      and listed the 21 advisories as outstanding when the Next 16 upgrade
+      cleared them; ARCHITECTURE.md still described QStash job wiring as the
+      backtest plan; `.env.example` documented seven variables nothing reads.
+
+### Audited and deliberately left alone
+
+- **Scanner cadence.** The brief asked whether H4 runs unnecessarily on every
+  H1 cycle. It does not: `nextScanWindow` groups by the _minimum_ next close,
+  so a 24-hour walk produces 24 wake-ups of which exactly 6 include H4, at
+  00/04/08/12/16/20 UTC. No change made.
+- **Determinism.** Zero clock, randomness or I/O in any of the eleven pure
+  libraries. Every multi-row query is explicitly ordered; the one unordered
+  `findFirst` is on a unique key. Every ordering-critical sort already has a
+  tie-breaker. `lib/format.ts` pins `en-US`, so formatting cannot drift.
+- **The trading boundary.** Two Binance endpoints are reachable in the whole
+  codebase — `exchangeInfo` (filtered to `permissions: SPOT` and
+  `isSpotTradingAllowed`) and `klines`. No API key, no signature, no order,
+  futures, margin or leverage path exists.
+- **`resolveInvalidated`'s N+1** in `services/notification-events.ts`: one
+  indexed query per invalidated event, bounded by scan size, inside a local
+  process that already makes ~180 HTTP requests per pass. Restructuring it
+  would add complexity for no measurable gain.
+- **Exported types unused outside their own file** (~35 of them). Removing
+  them is style churn, not dead-code removal.
+- **The E2E host mismatch** is documented, not papered over — see README.
 
 ## Phase 1 — Chart Foundation ✅
 
