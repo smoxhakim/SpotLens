@@ -18,12 +18,15 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
 
     const { id } = paramsSchema.parse(await params);
 
-    const run = await prisma.backtestRun.findUnique({
-      where: { id },
+    // Scoped in the `where`. Checking ownership afterwards would mean loading
+    // another account's entire run — every setup it contains — into memory
+    // before deciding not to return it.
+    const run = await prisma.backtestRun.findFirst({
+      where: { id, userId: guard.userId },
       include: { setups: { orderBy: { triggeredAt: "asc" } } },
     });
 
-    if (!run || run.userId !== guard.userId) {
+    if (!run) {
       return apiError("NOT_FOUND", "That backtest does not exist.", 404);
     }
 

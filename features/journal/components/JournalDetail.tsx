@@ -21,6 +21,22 @@ import { cn } from "@/lib/utils";
 
 import { DECISION_META, type JournalEntrySummary } from "./JournalList";
 
+/** A previous version of the trade, exactly as `lib/journal` preserved it. */
+interface SupersededOutcome {
+  actualEntry: number | null;
+  actualStopLoss: number | null;
+  actualTakeProfit: number | null;
+  actualExit: number | null;
+  quantity: number | null;
+  fees: number | null;
+  slippage: number | null;
+  exitReason: string | null;
+  openedAt: number | null;
+  closedAt: number | null;
+  realizedR: number | null;
+  supersededAt: number;
+}
+
 interface JournalEntryDetail extends JournalEntrySummary {
   setupEvents: {
     id: string;
@@ -37,6 +53,8 @@ interface JournalEntryDetail extends JournalEntrySummary {
     toDecision: string;
     detail: string;
     createdAt: string;
+    /** The values this event replaced, when it replaced any. */
+    supersededOutcome: SupersededOutcome | null;
   }[];
   trade: {
     actualEntry: number;
@@ -403,12 +421,49 @@ function Timeline({ entry }: { entry: JournalEntryDetail }) {
                 </span>
                 <br />
                 {event.detail}
+                {event.supersededOutcome && <Superseded previous={event.supersededOutcome} />}
               </li>
             ))}
           </ul>
         </div>
       </CardContent>
     </Card>
+  );
+}
+
+/**
+ * What a correction replaced.
+ *
+ * Shown inline under the amendment rather than as a separate history view: the
+ * question a reader has is "what did this change?", and the answer belongs
+ * next to the change. The current numbers stay in `Your trade` above — this is
+ * only ever the superseded version.
+ */
+function Superseded({ previous }: { previous: SupersededOutcome }) {
+  const fields: [string, string][] = [
+    ["Entry", formatPrice(previous.actualEntry)],
+    ["Stop", formatPrice(previous.actualStopLoss)],
+    ["Exit", formatPrice(previous.actualExit)],
+    ["Quantity", previous.quantity === null ? "—" : String(previous.quantity)],
+    ["Fees", previous.fees === null ? "—" : formatPrice(previous.fees)],
+    ["Result", previous.realizedR === null ? "no R recorded" : `${previous.realizedR.toFixed(2)}R`],
+  ];
+
+  return (
+    <div className="mt-1 rounded border border-dashed border-border/70 p-1.5">
+      <p className="text-[10px] text-muted-foreground">
+        Replaced these values, recorded until{" "}
+        <span className="tabular">{new Date(previous.supersededAt).toLocaleString()}</span>:
+      </p>
+      <dl className="mt-1 grid grid-cols-3 gap-x-2 gap-y-0.5 text-[10px]">
+        {fields.map(([label, value]) => (
+          <div key={label}>
+            <dt className="text-muted-foreground">{label}</dt>
+            <dd className="tabular">{value}</dd>
+          </div>
+        ))}
+      </dl>
+    </div>
   );
 }
 

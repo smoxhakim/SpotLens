@@ -17,14 +17,18 @@ export async function DELETE(_req: Request, { params }: { params: Promise<{ id: 
 
     const { id } = paramsSchema.parse(await params);
 
-    const existing = await prisma.watchlist.findUnique({ where: { id } });
-    // Same 404 whether the row is missing or belongs to someone else, so this
-    // cannot be used to probe for other users' rows.
-    if (!existing || existing.userId !== guard.userId) {
+    // One scoped statement: the ownership condition is part of the delete
+    // rather than a separate check before an unscoped one. Same 404 whether
+    // the row is missing or belongs to someone else, so this cannot be used to
+    // probe for other users' rows.
+    const { count } = await prisma.watchlist.deleteMany({
+      where: { id, userId: guard.userId },
+    });
+
+    if (count === 0) {
       return apiError("NOT_FOUND", "That watchlist entry does not exist.", 404);
     }
 
-    await prisma.watchlist.delete({ where: { id } });
     return NextResponse.json({ ok: true });
   } catch (err) {
     return handleRouteError(err, "DELETE /api/watchlist/:id");

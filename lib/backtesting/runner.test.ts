@@ -54,6 +54,33 @@ describe("look-ahead bias", () => {
     expect(changedTriggers).toEqual(originalTriggers);
   });
 
+  it("records a regime that future candles cannot change", () => {
+    // Phase H attaches a regime to every backtest row as context. It is
+    // classified from the same no-lookahead `MarketRead` the engine decided
+    // on, so it inherits the guarantee rather than re-arguing it — but nothing
+    // asserted that until now, and the trigger-time assertion above compares
+    // only `triggeredAt` and `entry`.
+    const candles = repeatedPullbacks(80);
+    const altered = candles.map((c, i) =>
+      i < 320 ? c : { ...c, close: c.close * 4, high: c.high * 4.5, low: c.low / 2 },
+    );
+
+    const cutoff = candles[319].openTime;
+    const regimeOf = (series: typeof candles) =>
+      runBacktest(series, { warmupBars: 260 })
+        .setups.filter((r) => r.triggeredAt <= cutoff)
+        .map((r) => [r.triggeredAt, r.regimeDirection, r.regimeVolatility]);
+
+    const original = regimeOf(candles);
+
+    // Guard against passing because nothing triggered, or because regime was
+    // never populated at all.
+    expect(original.length).toBeGreaterThan(0);
+    expect(original.every(([, direction]) => direction !== null)).toBe(true);
+
+    expect(regimeOf(altered)).toEqual(original);
+  });
+
   it("never simulates a trade using the candle it entered on", () => {
     const candles = repeatedPullbacks(80);
     const results = runBacktest(candles, { warmupBars: 260 }).setups;

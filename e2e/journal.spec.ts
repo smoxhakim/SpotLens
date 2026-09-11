@@ -231,6 +231,15 @@ test.describe("journal, replay and research", () => {
     // And the decision is still closed.
     expect(detail.decision).toBe("CLOSED");
 
+    // The history is visible, not merely stored: a reader can see what the
+    // correction replaced without querying the API themselves.
+    await page.goto(`/journal/${entryId}`);
+    await expect(page.getByText(/Replaced these values/i)).toBeVisible({ timeout: 30_000 });
+    // The superseded fill, shown under the amendment that replaced it.
+    await expect(page.getByText("60,200.00").first()).toBeVisible();
+    // While the current trade above shows the corrected one.
+    await expect(page.getByText("Your trade").first()).toBeVisible();
+
     // --- the entry, with both records side by side ------------------------
     await page.goto(`/journal/${entryId}`);
     // Both records, labelled as whose they are.

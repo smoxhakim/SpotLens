@@ -4,8 +4,9 @@ Educational crypto **spot trading** analysis app. A deterministic engine reads
 market structure and produces entry / stop / targets / score / status, with a
 plain-language reason attached to every number.
 
-Phases A–H are shipped and merged to `main`; Phase I (journal, replay,
-research) is on `feat/phase-i-journal-replay-research`. **Open items and where
+Phases A–H are shipped and merged to `main`. Phase I (journal, replay,
+research) is on `feat/phase-i-journal-replay-research`, and Phase J (final
+hardening) builds on it in `feat/phase-j-hardening`. **Open items and where
 work stopped are at the top of `TODO.md`** — start there.
 
 Full spec in `PRD.md`, design in `ARCHITECTURE.md`, security posture in
@@ -130,9 +131,11 @@ WAITING_CONFIRMATION` is price arriving somewhere, not structure changing,
 
 ## Stack
 
-Next.js 14 App Router · TypeScript · Tailwind · TradingView Lightweight Charts ·
-TanStack Query · Postgres (Neon) + Prisma · Auth.js v5 (credentials only) ·
-Vitest · Playwright.
+Next.js 16 App Router · React 19 · TypeScript · Tailwind · TradingView
+Lightweight Charts · TanStack Query · Postgres (Neon) + Prisma · Auth.js v5
+(credentials only) · Vitest 4 · Playwright.
+
+Dynamic `params` are Promises and must be awaited — Next 15+ behaviour.
 
 ## Layout
 
@@ -214,8 +217,9 @@ async jobs (backtests run synchronously under the candle ceiling).
 Sessions are JWT rather than database sessions — a library constraint, since
 Auth.js v5's Credentials provider does not support the database strategy.
 
-Outstanding and needing a decision: 21 Next.js advisories fixable only by
-upgrading Next 14 → 16, which `ARCHITECTURE.md` pins. See `SECURITY.md`.
+Nothing is outstanding on the security side: the 21 advisories recorded here
+were against Next 14 and were cleared by the Next 16 upgrade. `npm audit`
+reports zero across the whole tree. See `SECURITY.md`.
 
 ## Git workflow
 
