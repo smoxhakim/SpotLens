@@ -1,6 +1,8 @@
 import { PrismaClient } from "@prisma/client";
 import { expect, test } from "@playwright/test";
 
+import { signIn } from "./support/session";
+
 /**
  * The full signed-in journey: sign up, analyze, save to the watchlist, and run
  * a backtest.
@@ -77,8 +79,13 @@ test.describe("signed-in journey", () => {
     // thousands — six months of 4h candles now runs rather than being
     // rejected. Reaching the limit takes a much finer timeframe.
     await page.selectOption("#tf", "M1");
-    await page.getByLabel("From").fill("2025-01-01");
-    await page.getByLabel("To").fill("2025-06-30");
+    // Exact, because `getByLabel` matches a substring by default and Playwright
+    // pierces shadow roots: in dev, "To" also matches the Next.js dev overlay's
+    // "Open Next.js Dev Tools" button, and the spec fails on two matches for a
+    // field there is only one of. Production has no overlay, so this failed in
+    // dev only — which reads like a regression and is not one.
+    await page.getByLabel("From", { exact: true }).fill("2025-01-01");
+    await page.getByLabel("To", { exact: true }).fill("2025-06-30");
     await page.getByRole("button", { name: /Run backtest/ }).click();
     await expect(page.getByText(/needs about \d+ candles to evaluate/i)).toBeVisible({
       timeout: 30_000,
@@ -86,7 +93,7 @@ test.describe("signed-in journey", () => {
 
     // ~120 days of 4h candles is comfortably inside it.
     await page.selectOption("#tf", "H4");
-    await page.getByLabel("To").fill("2025-05-01");
+    await page.getByLabel("To", { exact: true }).fill("2025-05-01");
     await page.getByRole("button", { name: /Run backtest/ }).click();
 
     // --- the API contract itself ------------------------------------------
@@ -128,11 +135,12 @@ test.describe("signed-in journey", () => {
   });
 
   test("settings persist across a reload", async ({ page }) => {
-    await page.goto("/login");
-    await page.getByLabel("Email").fill(email);
-    await page.getByLabel("Password").fill(password);
-    await page.getByRole("button", { name: "Sign in" }).click();
-    await expect(page.getByRole("heading", { name: "Dashboard" })).toBeVisible({ timeout: 30_000 });
+    // Signing in is not what this test is about — the test above already
+    // registers through the real form, and this one only needs to arrive at
+    // Settings as that account. Driving the login form here made the result
+    // depend on the page hydrating first, which under a parallel suite it
+    // sometimes had not.
+    await signIn(page, email, password);
 
     await page.goto("/settings");
     await page.getByLabel("Default risk per trade (%)").fill("2.5");

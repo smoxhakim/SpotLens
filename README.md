@@ -420,23 +420,30 @@ CI runs lint, typecheck and the unit tests on every push. E2E is manual — it
 drives the live exchange API, which is unreachable from GitHub's US-based
 runners, so run it locally or trigger it from the Actions tab.
 
-**Stop `npm run dev` before running E2E.** Next 16 refuses to start a second
-dev server in the same directory, and `npm run e2e` starts its own on 3100.
-A dev server left running from before a migration is worse than an obstacle:
-its Prisma client predates the new tables, so routes touching them 500 with
-`Cannot read properties of undefined`. Restart it after every migration.
-Alternatively run the suite against a production build, which is what CI does
-and what the signed-in journey needs:
+Bare `npm run e2e` starts its own dev server on 3100, and Next 16 refuses a
+second dev server in the same directory — so with `npm run dev` already
+running, either stop it or point the suite at the one you have:
 
 ```bash
-npm run build
-CI=1 AUTH_TRUST_HOST=true NEXTAUTH_URL=http://127.0.0.1:3100 npm run e2e
+PORT=3000 npm run e2e          # reuse the dev server already on 3000
+npm run build && CI=1 npm run e2e   # production build on 3100, what CI does
 ```
 
-`AUTH_TRUST_HOST` is required because Auth.js only trusts the host in
-`NEXTAUTH_URL` when running a production build; without it sign-in returns
-"There is a problem with the server configuration" and the journey spec fails
-while every other spec passes.
+Both pass the whole suite. Neither needs `NEXTAUTH_URL` or `AUTH_TRUST_HOST`
+spelled out: `playwright.config.ts` derives them from the port it chose, because
+Auth.js only trusts the host it was told about and a mismatch fails sign-in with
+"There is a problem with the server configuration" — an error that names nothing
+to do with a port.
+
+Two things that will waste an afternoon otherwise:
+
+- **Restart `npm run dev` after a migration.** A server started before one holds
+  a Prisma client that predates the new tables, so routes touching them 500 with
+  `Cannot read properties of undefined`.
+- **Signup is limited to five an hour** and the suite spends two of them per run.
+  A third run inside the hour fails at registration, and the failure surfaces as
+  a missing Dashboard heading rather than as a rate limit. Restarting the server
+  clears the counter when no Redis is configured.
 
 The engine's tests are written as behaviour, not arithmetic: a failure says
 "it offered a long in a downtrend", not "expected 1.42 to be 1.41". The

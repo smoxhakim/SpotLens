@@ -1,6 +1,10 @@
 import { PrismaClient } from "@prisma/client";
 import { expect, test } from "@playwright/test";
 
+import { hashPassword } from "@/lib/auth/password";
+
+import { signIn } from "./support/session";
+
 /**
  * Journal, replay and research end to end.
  *
@@ -25,6 +29,29 @@ let pairId = "";
 let userId = "";
 
 const prisma = new PrismaClient();
+
+/**
+ * An account, written straight to the table rather than registered.
+ *
+ * Signup is rate limited to five an hour per caller, deliberately, and that
+ * allowance is shared by the whole suite. This spec needs a session, not a
+ * signup — registration has its own test in `journey.spec.ts` — and spending
+ * two attempts here to reach the journal meant a third run inside the hour
+ * failed at the register page, reported as a missing Dashboard heading rather
+ * than as a rate limit.
+ *
+ * The row is identical to one the register route would write: the same hashing
+ * function, so sign-in, the session and every guard behave exactly as they do
+ * for a registered account.
+ */
+async function createAccount(address: string): Promise<string> {
+  const user = await prisma.user.create({
+    data: { email: address, passwordHash: await hashPassword(password) },
+    select: { id: true },
+  });
+
+  return user.id;
+}
 
 test.describe("journal, replay and research", () => {
   test.skip(!DATABASE_URL, "needs DATABASE_URL");
@@ -70,16 +97,8 @@ test.describe("journal, replay and research", () => {
     test.setTimeout(180_000);
 
     // --- an account -------------------------------------------------------
-    await page.goto("/register");
-    await page.getByLabel("Email").fill(email);
-    await page.getByLabel("Password").fill(password);
-    await page.getByRole("button", { name: "Create account" }).click();
-    await expect(page.getByRole("heading", { name: "Dashboard" })).toBeVisible({
-      timeout: 30_000,
-    });
-
-    const user = await prisma.user.findUnique({ where: { email }, select: { id: true } });
-    userId = user!.id;
+    userId = await createAccount(email);
+    await signIn(page, email, password);
 
     // --- a setup, and the history to replay it against --------------------
     const setup = await prisma.trackedSetup.create({
@@ -287,13 +306,8 @@ test.describe("journal, replay and research", () => {
   test("another account cannot reach the entry", async ({ page }) => {
     const other = `e2e-journal-b-${Date.now()}@spotlens.test`;
 
-    await page.goto("/register");
-    await page.getByLabel("Email").fill(other);
-    await page.getByLabel("Password").fill(password);
-    await page.getByRole("button", { name: "Create account" }).click();
-    await expect(page.getByRole("heading", { name: "Dashboard" })).toBeVisible({
-      timeout: 30_000,
-    });
+    await createAccount(other);
+    await signIn(page, other, password);
 
     try {
       // 404 rather than 403 throughout: the endpoints must not double as a way
