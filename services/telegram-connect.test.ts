@@ -167,6 +167,93 @@ describe("claiming a connection", () => {
     expect(writes.some((w) => "chatId" in w)).toBe(false);
   });
 
+  /**
+   * The regression that made the connection flow unusable.
+   *
+   * Settings polls this every three seconds while the code is on screen. When
+   * every poll counted as an attempt, the ten-attempt allowance ran out thirty
+   * seconds into a ten-minute window — before a user could realistically
+   * switch to Telegram and send the code — and the panel reported the fresh
+   * code as invalid.
+   */
+  it("does not spend an attempt on a poll that found nothing", async () => {
+    db.telegramConnection.findUnique.mockResolvedValue({
+      pendingCodeHash: hash("ABCD2345"),
+      pendingExpires: future(),
+      claimAttempts: 0,
+      lastUpdateId: null,
+    });
+    getTelegramUpdates.mockResolvedValue({ ok: true, error: null, updates: [] });
+
+    for (let poll = 0; poll < MAX_CLAIM_ATTEMPTS * 3; poll += 1) {
+      expect((await claimTelegramConnection("user-1")).status).toBe("PENDING");
+    }
+
+    const writes = db.telegramConnection.update.mock.calls.map((c) => c[0].data);
+    expect(writes.some((w) => "claimAttempts" in w)).toBe(false);
+    expect(writes.some((w) => w.pendingCodeHash === null)).toBe(false);
+  });
+
+  it("spends an attempt on a message that carried a wrong code", async () => {
+    db.telegramConnection.findUnique.mockResolvedValue({
+      pendingCodeHash: hash("ABCD2345"),
+      pendingExpires: future(),
+      claimAttempts: 0,
+      lastUpdateId: null,
+    });
+    getTelegramUpdates.mockResolvedValue({
+      ok: true,
+      error: null,
+      updates: [
+        { updateId: 1, chatId: "99", chatLabel: null, text: "ZZZZ9999" },
+        { updateId: 2, chatId: "99", chatLabel: null, text: "/start YYYY8888" },
+      ],
+    });
+
+    expect((await claimTelegramConnection("user-1")).status).toBe("PENDING");
+
+    const write = db.telegramConnection.update.mock.calls.at(-1)![0].data;
+    expect(write.claimAttempts).toEqual({ increment: 2 });
+  });
+
+  it("ignores chat that could not be a code at all", async () => {
+    db.telegramConnection.findUnique.mockResolvedValue({
+      pendingCodeHash: hash("ABCD2345"),
+      pendingExpires: future(),
+      claimAttempts: 0,
+      lastUpdateId: null,
+    });
+    getTelegramUpdates.mockResolvedValue({
+      ok: true,
+      error: null,
+      updates: [{ updateId: 1, chatId: "99", chatLabel: null, text: "/start" }],
+    });
+
+    await claimTelegramConnection("user-1");
+
+    const writes = db.telegramConnection.update.mock.calls.map((c) => c[0].data);
+    expect(writes.some((w) => "claimAttempts" in w)).toBe(false);
+  });
+
+  it("burns the code on the guess that reaches the ceiling", async () => {
+    db.telegramConnection.findUnique.mockResolvedValue({
+      pendingCodeHash: hash("ABCD2345"),
+      pendingExpires: future(),
+      claimAttempts: MAX_CLAIM_ATTEMPTS - 1,
+      lastUpdateId: null,
+    });
+    getTelegramUpdates.mockResolvedValue({
+      ok: true,
+      error: null,
+      updates: [{ updateId: 1, chatId: "99", chatLabel: null, text: "ZZZZ9999" }],
+    });
+
+    expect(await claimTelegramConnection("user-1")).toEqual({ status: "TOO_MANY_ATTEMPTS" });
+
+    const writes = db.telegramConnection.update.mock.calls.map((c) => c[0].data);
+    expect(writes.some((w) => w.pendingCodeHash === null)).toBe(true);
+  });
+
   it("advances the update cursor so an old message cannot be re-read", async () => {
     db.telegramConnection.findUnique.mockResolvedValue({
       pendingCodeHash: hash("ABCD2345"),

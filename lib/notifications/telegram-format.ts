@@ -39,6 +39,19 @@ function price(value: number | null): string {
   return escape(value.toFixed(decimals).replace(/\.?0+$/, ""));
 }
 
+/**
+ * A timestamp, escaped, as a person reads one.
+ *
+ * The ISO string these replaced is unambiguous and unreadable on a phone —
+ * `2026-09-11T12:00:00.000Z` is ten characters of machine punctuation around
+ * the two facts that matter. The zone is named rather than implied, because a
+ * notification is read wherever the reader happens to be.
+ */
+function when(timestamp: number): string {
+  const iso = new Date(timestamp).toISOString();
+  return escape(`${iso.slice(0, 10)} ${iso.slice(11, 16)} UTC`);
+}
+
 /** A heading that is already escaped, so callers cannot forget. */
 function bold(text: string): string {
   return `*${escape(text)}*`;
@@ -173,7 +186,7 @@ export function formatInvalidation(event: NotificationEvent): string {
     `${bold("Reason")}: ${escape(setup.invalidationReason ?? setup.statusReason)}`,
     `${bold("Level")}: ${price(setup.supportLow)} – ${price(setup.supportHigh)}`,
     "",
-    `${bold("Seen at")}: ${escape(new Date(event.timestamp).toISOString())}`,
+    `${bold("Seen at")}: ${when(event.timestamp)}`,
     "",
     footer(),
   ].join("\n");
@@ -262,7 +275,7 @@ export function formatSystemError(event: NotificationEvent): string {
     // here as well, because a formatter should not depend on its caller.
     escape(e.message),
     "",
-    `${bold("At")}: ${escape(new Date(event.timestamp).toISOString())}`,
+    `${bold("At")}: ${when(event.timestamp)}`,
   ].join("\n");
 }
 

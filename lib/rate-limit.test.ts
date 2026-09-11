@@ -76,4 +76,20 @@ describe("configured limits", () => {
   it("limits account creation over a long window", () => {
     expect(RATE_LIMITS.register.windowMs).toBeGreaterThanOrEqual(60 * 60_000);
   });
+
+  /**
+   * Settings polls the claim route every three seconds while a connection code
+   * is on screen. Sharing the issue-a-code bucket meant the poll exhausted it
+   * in half a minute and the connection flow died silently on a 429.
+   */
+  it("allows the connection poll to run for a full minute", () => {
+    const pollsPerMinute = 60_000 / 3_000;
+
+    expect(RATE_LIMITS.telegramClaim.name).not.toBe(RATE_LIMITS.telegramConnect.name);
+    expect(RATE_LIMITS.telegramClaim.limit).toBeGreaterThan(pollsPerMinute);
+  });
+
+  it("keeps issuing codes tighter than polling for one", () => {
+    expect(RATE_LIMITS.telegramConnect.limit).toBeLessThan(RATE_LIMITS.telegramClaim.limit);
+  });
 });

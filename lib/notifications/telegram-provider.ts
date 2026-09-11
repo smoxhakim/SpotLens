@@ -9,7 +9,8 @@ import { sleep } from "@/lib/scanner";
  * backup of it, and one that reaches a log is a token in every log shipper.
  *
  * There are no trading commands here and no way to add one: this module can
- * send a message and read updates, and that is the whole surface.
+ * send a message, read updates, and ask the bot its own name — that is the
+ * whole surface.
  */
 
 const API_BASE = "https://api.telegram.org";
@@ -18,6 +19,17 @@ const REQUEST_TIMEOUT_MS = 10_000;
 /** One attempt, then two more. Enough for a blip, short of a retry storm. */
 export const MAX_SEND_ATTEMPTS = 3;
 export const SEND_RETRY_BASE_MS = 500;
+/**
+ * Ceiling on a flood wait Telegram asks for.
+ *
+ * Telegram answers a 429 with `parameters.retry_after` in seconds, and
+ * ignoring it means retrying into a wait that is still running — two wasted
+ * attempts and a message that is then dropped for good, because the dedupe
+ * index stops the layer ever trying that event again. Waiting is therefore the
+ * right answer, but not without a bound: this runs inside a sequential scanner
+ * pass, so a long wait stalls the messages queued behind it.
+ */
+export const MAX_RETRY_AFTER_MS = 15_000;
 
 export interface TelegramSendResult {
   ok: boolean;
@@ -26,6 +38,8 @@ export interface TelegramSendResult {
   /** Whether trying again could plausibly work. */
   retryable: boolean;
   attempts: number;
+  /** How long Telegram asked the caller to wait, when it said so. */
+  retryAfterMs?: number;
 }
 
 export interface TelegramUpdate {
@@ -38,6 +52,60 @@ export interface TelegramUpdate {
 /** Present only when a token is configured. Never reveals the token itself. */
 export function isTelegramConfigured(): boolean {
   return Boolean(process.env.TELEGRAM_BOT_TOKEN);
+}
+
+/**
+ * The bot's public @username, or null when it cannot be established.
+ *
+ * Used to build the link that opens the right chat, so the user is not asked to
+ * find a bot by name. A bot's username is public — anyone can message it — so
+ * unlike the token it is safe to hand to the browser.
+ *
+ * Cached after the first success: it cannot change while the process is
+ * running, and Settings would otherwise make this call on every load. Failures
+ * are not cached, so a machine that was offline recovers on its own.
+ */
+let cachedUsername: string | null = null;
+
+export async function getTelegramBotUsername(input?: {
+  fetchImpl?: typeof fetch;
+}): Promise<string | null> {
+  if (cachedUsername) return cachedUsername;
+
+  const token = process.env.TELEGRAM_BOT_TOKEN;
+  if (!token) return null;
+
+  const doFetch = input?.fetchImpl ?? fetch;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+
+  try {
+    const response = await doFetch(`${API_BASE}/bot${token}/getMe`, { signal: controller.signal });
+    const body = (await response.json().catch(() => null)) as {
+      ok?: boolean;
+      result?: { username?: unknown };
+    } | null;
+
+    if (!response.ok || !body?.ok) return null;
+
+    const username = body.result?.username;
+    if (typeof username !== "string" || username.length === 0) return null;
+
+    cachedUsername = username;
+    return username;
+  } catch {
+    // Deliberately silent and deliberately not carrying the error: the caller
+    // only needs to know whether a link can be built, and the error text here
+    // is the one place a request URL could surface.
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** Test seam — the cache is process-wide and would otherwise leak across tests. */
+export function resetTelegramIdentityCache(): void {
+  cachedUsername = null;
 }
 
 /**
@@ -73,7 +141,10 @@ export async function sendTelegramMessage(input: {
 
     if (last.ok || !last.retryable || attempt === MAX_SEND_ATTEMPTS) return last;
 
-    await sleep(SEND_RETRY_BASE_MS * 2 ** (attempt - 1));
+    // Telegram's own number wins where it gave one: backing off for less than
+    // it asked for is a retry that cannot succeed.
+    const backoff = SEND_RETRY_BASE_MS * 2 ** (attempt - 1);
+    await sleep(Math.max(backoff, Math.min(last.retryAfterMs ?? 0, MAX_RETRY_AFTER_MS)));
   }
 
   return last;
@@ -104,6 +175,7 @@ async function attemptSend(
       ok?: boolean;
       description?: string;
       error_code?: number;
+      parameters?: { retry_after?: unknown };
     } | null;
 
     if (response.ok && body?.ok) return { ok: true, error: null, retryable: false };
@@ -113,10 +185,15 @@ async function attemptSend(
     const status = response.status;
     const retryable = status === 429 || status >= 500;
 
+    const retryAfter = body?.parameters?.retry_after;
+
     return {
       ok: false,
       error: sanitise(`Telegram ${status}: ${body?.description ?? "no description"}`, token),
       retryable,
+      ...(typeof retryAfter === "number" && retryAfter > 0
+        ? { retryAfterMs: retryAfter * 1000 }
+        : {}),
     };
   } catch (error) {
     const aborted = error instanceof Error && error.name === "AbortError";

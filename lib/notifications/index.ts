@@ -44,10 +44,13 @@ export {
 } from "./telegram-format";
 
 export {
+  MAX_RETRY_AFTER_MS,
   MAX_SEND_ATTEMPTS,
   SEND_RETRY_BASE_MS,
+  getTelegramBotUsername,
   getTelegramUpdates,
   isTelegramConfigured,
+  resetTelegramIdentityCache,
   parseUpdates,
   sendTelegramMessage,
   type TelegramSendResult,
