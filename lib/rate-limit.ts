@@ -141,6 +141,15 @@ export const RATE_LIMITS = {
    * something worth guessing.
    */
   telegramConnect: { name: "telegram-connect", limit: 10, windowMs: 60_000 },
+  /**
+   * Polling for the code the user sent the bot. Separate from issuing one, and
+   * deliberately roomier: Settings polls every three seconds for as long as the
+   * code is on screen, so a limit sized for issuing codes would cut the
+   * connection flow off half a minute into its ten-minute window. Guessing is
+   * bounded where it actually happens — `MAX_CLAIM_ATTEMPTS`, counted against
+   * messages sent to the bot — not here.
+   */
+  telegramClaim: { name: "telegram-claim", limit: 40, windowMs: 60_000 },
   /** Outbound test messages, so the button cannot be used to spam a chat. */
   telegramTest: { name: "telegram-test", limit: 5, windowMs: 60_000 },
 } as const satisfies Record<string, RateLimitRule>;

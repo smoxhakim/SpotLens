@@ -15,8 +15,10 @@ export const dynamic = "force-dynamic";
  * webhook because SpotLens is local-only: a webhook would mean exposing this
  * machine to the internet to receive a message the user is about to send.
  *
- * Claim attempts are counted server-side and the code is burned after ten, so
- * the short code cannot be brute-forced inside its ten-minute window.
+ * Wrong codes are counted server-side and the code is burned after ten, so the
+ * short code cannot be brute-forced inside its ten-minute window. The counter
+ * tracks guesses sent to the bot rather than polls, which is why this route has
+ * its own, roomier rate limit: a poll that finds nothing is not an attempt.
  */
 export async function POST(req: NextRequest) {
   try {
@@ -27,7 +29,7 @@ export async function POST(req: NextRequest) {
     const guard = await requireUser();
     if (isDenied(guard)) return guard.response;
 
-    const limited = await enforceRateLimit(req, RATE_LIMITS.telegramConnect, guard.userId);
+    const limited = await enforceRateLimit(req, RATE_LIMITS.telegramClaim, guard.userId);
     if (limited) return limited;
 
     return NextResponse.json({ result: await claimTelegramConnection(guard.userId) });

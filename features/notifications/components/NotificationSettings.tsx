@@ -15,6 +15,8 @@ import type { NotificationPreferences } from "@/lib/notifications";
 
 interface TelegramStatus {
   configured: boolean;
+  /** The bot's public @username, when the server could ask Telegram for it. */
+  botUsername: string | null;
   connected: boolean;
   chatLabel: string | null;
   connectedAt: string | null;
@@ -196,8 +198,16 @@ function TelegramSection({
       } else if (data.result.status === "EXPIRED" || data.result.status === "TOO_MANY_ATTEMPTS") {
         setCode(null);
         setMessage("That code is no longer valid. Generate a new one.");
+      } else if (data.result.status === "UNAVAILABLE") {
+        // Said out loud rather than swallowed. Without this the panel sits on
+        // "waiting for the bot" forever while every poll is failing, which
+        // looks identical to a user who has simply not sent the code yet.
+        setMessage(data.result.error ?? "Telegram could not be reached.");
+      } else {
+        setMessage(null);
       }
     },
+    onError: (err: Error) => setMessage(err.message),
   });
 
   const disconnect = useMutation({
@@ -287,6 +297,20 @@ function TelegramSection({
               <p className="tabular rounded-md bg-muted px-3 py-2 text-lg font-semibold tracking-widest">
                 {code}
               </p>
+              {status?.botUsername && (
+                // The link carries the code as Telegram's own start parameter,
+                // so the user taps Start and the bot receives it — no retyping
+                // on a phone, and no chat ID to copy by hand anywhere.
+                <Button asChild size="sm">
+                  <a
+                    href={`https://t.me/${status.botUsername}?start=${code}`}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    Open @{status.botUsername}
+                  </a>
+                </Button>
+              )}
               <p className="text-[11px] text-muted-foreground">
                 Waiting for the bot to receive it…
               </p>
