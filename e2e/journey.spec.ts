@@ -77,8 +77,13 @@ test.describe("signed-in journey", () => {
     // thousands — six months of 4h candles now runs rather than being
     // rejected. Reaching the limit takes a much finer timeframe.
     await page.selectOption("#tf", "M1");
-    await page.getByLabel("From").fill("2025-01-01");
-    await page.getByLabel("To").fill("2025-06-30");
+    // Exact, because `getByLabel` matches a substring by default and Playwright
+    // pierces shadow roots: in dev, "To" also matches the Next.js dev overlay's
+    // "Open Next.js Dev Tools" button, and the spec fails on two matches for a
+    // field there is only one of. Production has no overlay, so this failed in
+    // dev only — which reads like a regression and is not one.
+    await page.getByLabel("From", { exact: true }).fill("2025-01-01");
+    await page.getByLabel("To", { exact: true }).fill("2025-06-30");
     await page.getByRole("button", { name: /Run backtest/ }).click();
     await expect(page.getByText(/needs about \d+ candles to evaluate/i)).toBeVisible({
       timeout: 30_000,
@@ -86,7 +91,7 @@ test.describe("signed-in journey", () => {
 
     // ~120 days of 4h candles is comfortably inside it.
     await page.selectOption("#tf", "H4");
-    await page.getByLabel("To").fill("2025-05-01");
+    await page.getByLabel("To", { exact: true }).fill("2025-05-01");
     await page.getByRole("button", { name: /Run backtest/ }).click();
 
     // --- the API contract itself ------------------------------------------

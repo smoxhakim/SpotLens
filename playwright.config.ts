@@ -22,6 +22,19 @@ export default defineConfig({
   webServer: {
     command: process.env.CI ? `npm run start -- -p ${PORT}` : `npm run dev -- -p ${PORT}`,
     url: baseURL,
+    // Derived rather than documented. Auth.js only trusts the host named in
+    // NEXTAUTH_URL, and a production build refuses one it was not told about —
+    // so a suite on 3100 against a `.env` pointing at 3000 renders "There is a
+    // problem with the server configuration" on sign-in, and every spec that
+    // signs in fails for a reason that looks nothing like the cause. These
+    // follow the port the config already chose, so there is no second place to
+    // keep in step. Only applied to a server Playwright starts: a reused one is
+    // already running on the port its own environment names.
+    env: {
+      NEXTAUTH_URL: baseURL,
+      AUTH_URL: baseURL,
+      AUTH_TRUST_HOST: "true",
+    },
     reuseExistingServer: !process.env.CI,
     timeout: 120_000,
   },
