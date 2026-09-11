@@ -1,7 +1,9 @@
 import { PrismaClient } from "@prisma/client";
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test } from "@playwright/test";
 
 import { hashPassword } from "@/lib/auth/password";
+
+import { signIn } from "./support/session";
 
 /**
  * Journal, replay and research end to end.
@@ -51,36 +53,6 @@ async function createAccount(address: string): Promise<string> {
   return user.id;
 }
 
-/**
- * Signs in through Auth.js's own credentials endpoint.
- *
- * The same provider, the same callback and the same session cookie the form
- * produces — `page.request` shares the browser context's cookie jar, so every
- * guard afterwards sees exactly what it would see for a person who typed it.
- * What it does not depend on is the login form having hydrated, which under a
- * parallel suite against a dev server is a timing question and an intermittent
- * one. The form is `journey.spec.ts`'s subject and is tested there; this spec
- * only needs to be signed in.
- */
-async function signIn(page: Page, address: string) {
-  const csrf = await page.request.get("/api/auth/csrf");
-  const { csrfToken } = (await csrf.json()) as { csrfToken: string };
-
-  const response = await page.request.post("/api/auth/callback/credentials", {
-    form: { email: address, password, csrfToken, callbackUrl: "/" },
-    maxRedirects: 0,
-  });
-
-  // Auth.js answers a good credential with a redirect and a bad one with a
-  // redirect to /login?error=. Asserting here means a broken session fails on
-  // the sign-in rather than fifty lines later on a missing heading.
-  expect(response.status(), "sign-in did not redirect").toBe(302);
-  expect(response.headers()["location"] ?? "", "sign-in was rejected").not.toContain("error=");
-
-  await page.goto("/");
-  await expect(page.getByRole("heading", { name: "Dashboard" })).toBeVisible({ timeout: 30_000 });
-}
-
 test.describe("journal, replay and research", () => {
   test.skip(!DATABASE_URL, "needs DATABASE_URL");
   test.describe.configure({ mode: "serial" });
@@ -126,7 +98,7 @@ test.describe("journal, replay and research", () => {
 
     // --- an account -------------------------------------------------------
     userId = await createAccount(email);
-    await signIn(page, email);
+    await signIn(page, email, password);
 
     // --- a setup, and the history to replay it against --------------------
     const setup = await prisma.trackedSetup.create({
@@ -335,7 +307,7 @@ test.describe("journal, replay and research", () => {
     const other = `e2e-journal-b-${Date.now()}@spotlens.test`;
 
     await createAccount(other);
-    await signIn(page, other);
+    await signIn(page, other, password);
 
     try {
       // 404 rather than 403 throughout: the endpoints must not double as a way

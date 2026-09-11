@@ -1,6 +1,8 @@
 import { PrismaClient } from "@prisma/client";
 import { expect, test } from "@playwright/test";
 
+import { signIn } from "./support/session";
+
 /**
  * The full signed-in journey: sign up, analyze, save to the watchlist, and run
  * a backtest.
@@ -133,11 +135,12 @@ test.describe("signed-in journey", () => {
   });
 
   test("settings persist across a reload", async ({ page }) => {
-    await page.goto("/login");
-    await page.getByLabel("Email").fill(email);
-    await page.getByLabel("Password").fill(password);
-    await page.getByRole("button", { name: "Sign in" }).click();
-    await expect(page.getByRole("heading", { name: "Dashboard" })).toBeVisible({ timeout: 30_000 });
+    // Signing in is not what this test is about — the test above already
+    // registers through the real form, and this one only needs to arrive at
+    // Settings as that account. Driving the login form here made the result
+    // depend on the page hydrating first, which under a parallel suite it
+    // sometimes had not.
+    await signIn(page, email, password);
 
     await page.goto("/settings");
     await page.getByLabel("Default risk per trade (%)").fill("2.5");

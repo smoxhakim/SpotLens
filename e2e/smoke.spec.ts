@@ -61,18 +61,34 @@ test("health endpoint responds", async ({ request }) => {
 test("the market read panel explains its verdict", async ({ page }) => {
   await page.goto("/market-analysis?pair=BTCUSDT&tf=H4");
 
-  const panel = page.getByText("Market Read");
+  // The panel titles both its loading state and its loaded state, and React can
+  // hold the two in the DOM together for an instant while it swaps them — one
+  // of them hidden. Filtering to the visible one says which is meant; indexing
+  // into the pair would only be picking whichever arrived first.
+  const panel = page.getByText("Market Read", { exact: true }).filter({ visible: true });
   await expect(panel).toBeVisible({ timeout: 30_000 });
 
   // A trend verdict is shown, and the reasoning is one click away.
-  await expect(page.getByText(/^(Bullish|Bearish|Sideways)$/).first()).toBeVisible({
-    timeout: 30_000,
-  });
+  //
+  // Read inside the Trend section, found by its own heading. The panel has a
+  // "Why?" under several of its sections, so asking the page for the first one
+  // was asking for whichever section happens to be rendered first — and the
+  // page-wide search for the reasoning could be satisfied by the "Moving
+  // averages" heading further down, without the disclosure having opened at
+  // all. Scoped here, each assertion can only be met by the section under test.
+  const trend = page
+    .locator("section")
+    .filter({ has: page.getByRole("heading", { name: "Trend", exact: true }) })
+    .filter({ visible: true });
 
-  const why = page.getByRole("button", { name: "Why?" }).first();
+  await expect(trend.getByText(/^(Bullish|Bearish|Sideways)$/)).toBeVisible({ timeout: 30_000 });
+
+  const why = trend.getByRole("button", { name: "Why?" });
   await expect(why).toBeVisible();
   await why.click();
-  await expect(page.getByText(/moving averages|swing|structure/i).first()).toBeVisible();
+  // Every branch of `explainTrend` names the moving averages, the swing points
+  // or the structure, so this holds whatever the market is doing today.
+  await expect(trend.getByText(/moving averages|swing|structure/i)).toBeVisible();
 });
 
 test("chart overlays can be toggled", async ({ page }) => {
@@ -233,7 +249,12 @@ test("analysis fields link into the relevant article", async ({ page }) => {
   await expect(link).toBeVisible({ timeout: 30_000 });
   await link.click();
 
-  await expect(page).toHaveURL(/\/learn\/trend/);
+  // The same thirty seconds every other wait on the dev server gets. This one
+  // was left on the fifteen-second default and was the odd one out: the article
+  // route is compiled on demand, and the URL only changes once its payload
+  // arrives, so under a parallel suite the budget ran out mid-compile. A link
+  // that genuinely goes nowhere still fails — fifteen seconds later than it did.
+  await expect(page).toHaveURL(/\/learn\/trend/, { timeout: 30_000 });
 });
 
 test("the asset research page shows the ethical checklist with its disclaimer", async ({
