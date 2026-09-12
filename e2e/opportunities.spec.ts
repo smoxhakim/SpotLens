@@ -208,24 +208,67 @@ test.describe("top opportunities", () => {
       .getByRole("link", { name: /Ask Coach about BTCUSDT/ })
       .first()
       .click();
-    await expect(page.getByRole("heading", { name: "Coach" })).toBeVisible({ timeout: 30_000 });
-    await expect(page.getByText(/arrives in the next phase/)).toBeVisible();
-    await expect(page.getByText(/No analysis has been sent anywhere/)).toBeVisible();
-
-    // Validated server-side and echoed back, so the review knows which pass.
-    await expect(page.getByText(runId)).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Coach", exact: true })).toBeVisible({
+      timeout: 30_000,
+    });
 
     expect(page.url()).toContain("symbol=BTCUSDT");
     expect(page.url()).toContain("tf=H1");
     expect(page.url()).toContain(`runId=${runId}`);
 
-    // A parameter that is not shaped like one is dropped rather than echoed.
+    // --- the review reads the numbers SpotLens recorded ---------------------
+    // This candidate was scored but never tracked, so the scanner recorded no
+    // levels for it — and the Coach says so instead of reconstructing them.
+    await expect(page.getByText("90/100 · strong")).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByText(/deterministic SpotLens score/)).toBeVisible();
+    await expect(page.getByText(/Insufficient data/)).toBeVisible();
+    await expect(page.getByText(/No levels were recorded/)).toBeVisible();
+    await expect(page.getByText(/will not reconstruct/)).toBeVisible();
+
+    // Provenance: a review of a past pass says which pass, and says nothing
+    // later was read.
+    await expect(page.getByText(/Nothing later than that was used/)).toBeVisible();
+
+    // --- and never talks like a trade signal --------------------------------
+    // The shared disclaimer legitimately contains "guaranteed", in the sentence
+    // denying that anything is. It is removed before the scan for the same
+    // reason the Telegram suite removes it: a naive word list would flag the
+    // very copy that makes the page honest.
+    const coachText = (await page.locator("main").innerText())
+      .toLowerCase()
+      .split("no trade outcome is guaranteed")
+      .join(" ");
+    for (const banned of [
+      "guaranteed",
+      "buy now",
+      "sell now",
+      "act now",
+      "don't miss",
+      "risk-free",
+      "probability",
+      "chance of success",
+    ]) {
+      expect(coachText, `Coach said "${banned}"`).not.toContain(banned);
+    }
+
+    for (const banned of ["Buy", "Sell", "Execute", "Approve", "Place order"]) {
+      await expect(page.getByRole("button", { name: banned, exact: true })).toHaveCount(0);
+      await expect(page.getByRole("link", { name: banned, exact: true })).toHaveCount(0);
+    }
+
+    // --- malformed references are refused server-side -----------------------
     await page.goto(`/coach?symbol=%3Cscript%3E&tf=NOPE&runId=not-a-uuid&setupId=../../etc`);
-    await expect(page.getByText(/No candidate was passed/)).toBeVisible({ timeout: 30_000 });
-    const coachBody = await page.locator("main").innerText();
-    expect(coachBody).not.toContain("script");
-    expect(coachBody).not.toContain("NOPE");
-    expect(coachBody).not.toContain("etc");
+    await expect(page.getByText(/Nothing to review yet/)).toBeVisible({ timeout: 30_000 });
+    const rejected = await page.locator("main").innerText();
+    expect(rejected).not.toContain("script");
+    expect(rejected).not.toContain("NOPE");
+    expect(rejected).not.toContain("etc");
+
+    // --- a run that does not exist is a miss, not a leak --------------------
+    await page.goto(`/coach?symbol=BTCUSDT&tf=H1&runId=99999999-9999-4999-8999-999999999999`);
+    await expect(page.getByText(/No recorded analysis matches that reference/)).toBeVisible({
+      timeout: 30_000,
+    });
 
     await page.goto("/opportunities");
     await expect(page.getByRole("heading", { name: /Top opportunities/ })).toBeVisible({
