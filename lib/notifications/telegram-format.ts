@@ -137,6 +137,11 @@ const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "
 /**
  * When something happened, as a person would say it.
  *
+ * The ISO string this replaced is unambiguous and unreadable on a phone —
+ * `2026-09-11T12:00:00.000Z` is ten characters of machine punctuation around
+ * the two facts that matter. The zone is named rather than implied, because a
+ * notification is read wherever the reader happens to be.
+ *
  * Built by hand from the UTC parts rather than through `toLocaleString`, for
  * two reasons: a locale-dependent string would make the same event render
  * differently on two machines, and the scanner's whole vocabulary is UTC

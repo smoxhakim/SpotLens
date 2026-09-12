@@ -9,6 +9,7 @@ import {
   PREFERENCE_FOR_EVENT,
   formatConnectionTest,
   formatForTelegram,
+  getTelegramBotUsername,
   getTelegramUpdates,
   isTelegramConfigured,
   isTelegramWorthy,
@@ -244,7 +245,16 @@ export async function updatePreferences(
 
 /** How long a connection code is good for. Long enough to open Telegram. */
 export const CONNECTION_CODE_TTL_MS = 10 * 60_000;
-/** Claim attempts before the code is burned, so guessing is bounded. */
+/**
+ * Wrong codes before the current one is burned, so guessing is bounded.
+ *
+ * Counted per *guess* — a message sent to the bot that carried something
+ * code-shaped and wrong — and never per poll. Settings polls this flow every
+ * few seconds while the code is on screen, and counting those would burn the
+ * code roughly thirty seconds into a ten-minute window, before the user has
+ * finished switching to Telegram. The bound that matters is on what an
+ * attacker can send the bot, which is what this counts.
+ */
 export const MAX_CLAIM_ATTEMPTS = 10;
 
 /**
@@ -319,11 +329,6 @@ export async function claimTelegramConnection(userId: string): Promise<ClaimResu
   if (!updates.ok)
     return { status: "UNAVAILABLE", error: updates.error ?? "Telegram unavailable." };
 
-  await prisma.telegramConnection.update({
-    where: { userId },
-    data: { claimAttempts: { increment: 1 } },
-  });
-
   const match = updates.updates.find((update) =>
     matchesCode(update.text, connection.pendingCodeHash!),
   );
@@ -334,12 +339,29 @@ export async function claimTelegramConnection(userId: string): Promise<ClaimResu
   );
 
   if (!match) {
-    if (highestUpdateId >= 0) {
+    // Only messages that actually carried something code-shaped count against
+    // the allowance. A poll that found nothing — the common case, several
+    // times a minute — must cost the user nothing.
+    const wrongGuesses = updates.updates.reduce(
+      (total, update) => total + codeCandidates(update.text).length,
+      0,
+    );
+
+    if (highestUpdateId >= 0 || wrongGuesses > 0) {
       await prisma.telegramConnection.update({
         where: { userId },
-        data: { lastUpdateId: BigInt(highestUpdateId) },
+        data: {
+          ...(highestUpdateId >= 0 ? { lastUpdateId: BigInt(highestUpdateId) } : {}),
+          ...(wrongGuesses > 0 ? { claimAttempts: { increment: wrongGuesses } } : {}),
+        },
       });
     }
+
+    if (connection.claimAttempts + wrongGuesses >= MAX_CLAIM_ATTEMPTS) {
+      await clearPendingCode(userId);
+      return { status: "TOO_MANY_ATTEMPTS" };
+    }
+
     return { status: "PENDING" };
   }
 
@@ -364,12 +386,24 @@ export async function claimTelegramConnection(userId: string): Promise<ClaimResu
   return { status: "CONNECTED", chatLabel: match.chatLabel };
 }
 
+/**
+ * The code-shaped tokens in a message.
+ *
+ * One place decides what counts as an attempt, so the matcher and the counter
+ * can never disagree about what a guess is.
+ */
+function codeCandidates(text: string): string[] {
+  return text
+    .toUpperCase()
+    .split(/[^A-Z0-9]+/)
+    .filter((token) => token.length === 8);
+}
+
 /** Finds the code anywhere in the message, so `/start ABC` works too. */
 function matchesCode(text: string, expectedHash: string): boolean {
   const expected = Buffer.from(expectedHash, "hex");
 
-  for (const token of text.toUpperCase().split(/[^A-Z0-9]+/)) {
-    if (token.length !== 8) continue;
+  for (const token of codeCandidates(text)) {
     const candidate = Buffer.from(hash(token), "hex");
     if (candidate.length === expected.length && timingSafeEqual(candidate, expected)) return true;
   }
@@ -403,6 +437,10 @@ export async function getTelegramStatus(userId: string) {
 
   return {
     configured: isTelegramConfigured(),
+    // Public, unlike the token: this is the name anyone would see in the bot's
+    // profile, and it is what lets Settings link straight to the right chat
+    // instead of asking the user to go and find it.
+    botUsername: await getTelegramBotUsername(),
     connected: Boolean(connection?.chatId),
     chatLabel: connection?.chatLabel ?? null,
     connectedAt: connection?.connectedAt?.toISOString() ?? null,

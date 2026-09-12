@@ -19,7 +19,14 @@ import {
   formatForTelegram,
 } from "./telegram-format";
 import { IN_APP_MARKERS, renderInApp, toneForNotification } from "./render";
-import { MAX_SEND_ATTEMPTS, parseUpdates, sendTelegramMessage } from "./telegram-provider";
+import {
+  MAX_RETRY_AFTER_MS,
+  MAX_SEND_ATTEMPTS,
+  getTelegramBotUsername,
+  parseUpdates,
+  resetTelegramIdentityCache,
+  sendTelegramMessage,
+} from "./telegram-provider";
 import {
   DEFAULT_PREFERENCES,
   EVENT_PRIORITY,
@@ -361,6 +368,25 @@ describe("Telegram messages", () => {
     expect(text.includes(escape(ANALYSIS_DISCLAIMER))).toBe(isMarketFacing);
   });
 
+  it("gives a time a reader can parse at a glance, and names the zone", () => {
+    const text = formatForTelegram(
+      event({
+        type: "SETUP_INVALIDATED",
+        timestamp: Date.parse("2026-09-11T12:34:56.000Z"),
+        setup: setupFacts({ invalidationReason: "Support lost on a closed candle." }),
+      }),
+    );
+
+    // The requirement is the same one this test was written for — a readable
+    // time with the zone named, not machine punctuation. Phase K shortened the
+    // spelling for a phone: "11 Sep, 12:34 UTC" rather than a leading
+    // `2026-09-11`, which reads as an ISO date even once the T is gone.
+    expect(text).toContain("11 Sep, 12:34 UTC");
+    expect(text).toContain("UTC");
+    expect(text).not.toContain("T12:34:56");
+    expect(text).not.toMatch(/\d{4}\\-\d{2}\\-\d{2}/);
+  });
+
   it("calls the score quality, never a probability", () => {
     for (const type of ["SETUP_DETECTED", "CONFIRMATION_DETECTED"] as const) {
       const text = formatForTelegram(event({ type }));
@@ -482,6 +508,77 @@ describe("Telegram provider", () => {
     expect(result.ok).toBe(false);
   });
 
+  /**
+   * Telegram answers a flood wait with the number of seconds to wait. Retrying
+   * inside that window cannot succeed, and since the dedupe index stops the
+   * layer ever trying this event again, the two wasted attempts lose the
+   * message outright.
+   */
+  it("waits as long as Telegram asked before retrying a 429", async () => {
+    vi.useFakeTimers();
+    withToken("123:FAKE");
+
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 429,
+        json: async () => ({
+          ok: false,
+          description: "Too Many Requests: retry after 4",
+          parameters: { retry_after: 4 },
+        }),
+      } as unknown as Response)
+      .mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => ({ ok: true }),
+      } as unknown as Response);
+
+    const pending = sendTelegramMessage({ chatId: "1", text: "hi", fetchImpl });
+
+    // The old backoff would have fired here and hit the same flood wait.
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(3_000);
+    const result = await pending;
+
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(result.ok).toBe(true);
+    expect(result.attempts).toBe(2);
+
+    restore();
+    vi.useRealTimers();
+  });
+
+  it("bounds a flood wait, because the scanner is waiting behind it", async () => {
+    vi.useFakeTimers();
+    withToken("123:FAKE");
+
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 429,
+        json: async () => ({ ok: false, description: "flood", parameters: { retry_after: 3_600 } }),
+      } as unknown as Response)
+      .mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => ({ ok: true }),
+      } as unknown as Response);
+
+    const pending = sendTelegramMessage({ chatId: "1", text: "hi", fetchImpl });
+
+    await vi.advanceTimersByTimeAsync(MAX_RETRY_AFTER_MS);
+    const result = await pending;
+
+    expect(result.ok).toBe(true);
+    restore();
+    vi.useRealTimers();
+  });
+
   it("does not retry a 400, which is a message that will always be rejected", async () => {
     withToken("123:FAKE");
     const fetchImpl = vi.fn().mockResolvedValue({
@@ -544,6 +641,71 @@ describe("Telegram provider", () => {
     expect(result.error).not.toContain(token);
     expect(result.error).not.toContain("superSecret");
     expect(result.error).toContain("[redacted]");
+  });
+});
+
+describe("bot identity", () => {
+  const originalToken = process.env.TELEGRAM_BOT_TOKEN;
+
+  function restore() {
+    resetTelegramIdentityCache();
+    if (originalToken === undefined) delete process.env.TELEGRAM_BOT_TOKEN;
+    else process.env.TELEGRAM_BOT_TOKEN = originalToken;
+  }
+
+  it("reports no username when no token is configured", async () => {
+    resetTelegramIdentityCache();
+    delete process.env.TELEGRAM_BOT_TOKEN;
+    const fetchImpl = vi.fn();
+
+    expect(await getTelegramBotUsername({ fetchImpl })).toBeNull();
+    // Nothing is asked of Telegram when there is nothing to ask with.
+    expect(fetchImpl).not.toHaveBeenCalled();
+    restore();
+  });
+
+  it("reads the username and asks Telegram only once for it", async () => {
+    resetTelegramIdentityCache();
+    process.env.TELEGRAM_BOT_TOKEN = "123:token";
+    const fetchImpl = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ ok: true, result: { username: "SpotLensBot" } }),
+    } as unknown as Response);
+
+    expect(await getTelegramBotUsername({ fetchImpl })).toBe("SpotLensBot");
+    expect(await getTelegramBotUsername({ fetchImpl })).toBe("SpotLensBot");
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    restore();
+  });
+
+  it("does not cache a failure, so a machine that was offline recovers", async () => {
+    resetTelegramIdentityCache();
+    process.env.TELEGRAM_BOT_TOKEN = "123:token";
+    const fetchImpl = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("offline"))
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({ ok: true, result: { username: "SpotLensBot" } }),
+      } as unknown as Response);
+
+    expect(await getTelegramBotUsername({ fetchImpl })).toBeNull();
+    expect(await getTelegramBotUsername({ fetchImpl })).toBe("SpotLensBot");
+    restore();
+  });
+
+  it("never lets an identity failure carry the token", async () => {
+    resetTelegramIdentityCache();
+    process.env.TELEGRAM_BOT_TOKEN = "123:super-secret";
+    const fetchImpl = vi
+      .fn()
+      .mockRejectedValue(new Error("failed to fetch https://x/bot123:super-secret/getMe"));
+
+    // The contract is stronger than sanitising: nothing is returned at all.
+    expect(await getTelegramBotUsername({ fetchImpl })).toBeNull();
+    restore();
   });
 });
 
