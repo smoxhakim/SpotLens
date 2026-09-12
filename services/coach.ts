@@ -66,7 +66,21 @@ export async function buildCoachReview(
       where: { id: request.setupId, userId: request.userId },
       include: {
         tradingPair: { select: { exchangeSymbol: true } },
-        events: { orderBy: { createdAt: "desc" }, take: 1 },
+        // The *first* event, not the latest: the one written with the setup,
+        // carrying confirmation as it stood when the snapshot was frozen.
+        //
+        // Reading the latest was lookahead, and the kind that is easy to miss
+        // because it looks like freshness. Every other field here is the
+        // immutable snapshot from creation, so pairing it with a confirmation
+        // recorded days later describes a moment that never existed — levels
+        // from then, evidence from now — which is the same mistake the
+        // notification layer made once with a frozen status line.
+        //
+        // Ordering by ascending time rather than filtering on the setup's own
+        // `createdAt` avoids a race: the row and its first event are written in
+        // one statement and their timestamps can differ by microseconds either
+        // way. The earliest event is the creation event by construction.
+        events: { orderBy: { createdAt: "asc" }, take: 1 },
       },
     });
 

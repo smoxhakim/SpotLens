@@ -177,11 +177,47 @@ describe("no lookahead", () => {
     });
   });
 
-  it("reads one lifecycle event, the latest at the time the row was written", async () => {
+  it("reads the event written with the setup, not the most recent one", async () => {
     await buildCoachReview(request());
 
+    // Ascending: the creation event, whose confirmation payload belongs to the
+    // same moment as the frozen snapshot. Descending would read a transition
+    // recorded days later and pair it with levels from creation — a moment
+    // that never existed. A real future event proved this against the database.
     const include = db.trackedSetup.findFirst.mock.calls[0][0].include;
-    expect(include.events).toEqual({ orderBy: { createdAt: "desc" }, take: 1 });
+    expect(include.events).toEqual({ orderBy: { createdAt: "asc" }, take: 1 });
+  });
+
+  it("uses the earliest event even if the query hands back more than one", async () => {
+    // Belt as well as braces: the query orders ascending and takes one, and the
+    // code takes the first of what comes back. If someone widens the `take`,
+    // the confirmation still belongs to the snapshot's own moment.
+    db.trackedSetup.findFirst.mockResolvedValue(
+      setupRow({
+        events: [
+          {
+            payload: {
+              status: "NOT_PRESENT",
+              explanation: "At creation.",
+              evaluatedAt: 1,
+              signals: [],
+            },
+            createdAt: new Date(1_700_000_100_000),
+          },
+          {
+            payload: { status: "PRESENT", explanation: "Days later.", evaluatedAt: 2, signals: [] },
+            createdAt: new Date(1_800_000_000_000),
+          },
+        ],
+      }),
+    );
+
+    const result = await buildCoachReview(request());
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    expect(result.result.context.confirmation.status).toBe("NOT_PRESENT");
+    expect(result.result.context.confirmation.explanation).toBe("At creation.");
   });
 
   it("produces the identical review when later rows exist that it cannot see", async () => {
