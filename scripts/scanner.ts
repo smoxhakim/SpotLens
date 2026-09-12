@@ -121,10 +121,18 @@ async function notify(
 
     const outcome = await deliverEvents(events);
 
-    if (outcome.created > 0 || outcome.duplicates > 0 || outcome.suppressed > 0) {
+    if (
+      outcome.created > 0 ||
+      outcome.duplicates > 0 ||
+      outcome.suppressed > 0 ||
+      outcome.telegramWithheld > 0
+    ) {
       log(
         `   notifications: ${outcome.sent} sent · ${outcome.failed} failed · ` +
-          `${outcome.duplicates} already seen · ${outcome.suppressed} not subscribed`,
+          `${outcome.duplicates} already seen · ${outcome.suppressed} not subscribed · ` +
+          // Recorded and in the app, deliberately not pushed. Reported so the
+          // difference between "quiet" and "broken" stays visible from the log.
+          `${outcome.telegramWithheld} in-app only`,
       );
     }
   } catch (err) {
@@ -171,6 +179,10 @@ async function main() {
 
   if (once) {
     await scan("MANUAL", timeframes, userId);
+    // Reachable from a single pass too. The dedupe key is the UTC date, so
+    // running `scanner:once` five times in an afternoon still produces exactly
+    // one summary — the unique index rejects the rest.
+    await maybeSendDailySummary(userId);
     return;
   }
 

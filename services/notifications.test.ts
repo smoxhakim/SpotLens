@@ -68,6 +68,10 @@ function event(overrides: Partial<NotificationEvent> = {}): NotificationEvent {
       confirmationExplanation: null,
       invalidationReason: null,
       regime: null,
+      isReplacement: false,
+      replacementZoneLow: null,
+      replacementZoneHigh: null,
+      everConfirmed: false,
     },
     summary: null,
     systemError: null,
@@ -140,11 +144,22 @@ describe("preferences decide what is delivered", () => {
     expect((await deliverEvents([event()])).suppressed).toBe(1);
   });
 
-  it("falls back to the conservative defaults for a user with no row", async () => {
+  it("falls back to the defaults for a user with no row", async () => {
     db.notificationPreference.findUnique.mockResolvedValue(null);
 
-    // SETUP_DETECTED is off by default, so nothing is written.
+    // In-app is on and Telegram is off until a chat is bound, so a potential
+    // setup is recorded on exactly one channel.
     const outcome = await deliverEvents([event({ type: "SETUP_DETECTED" })]);
+
+    expect(outcome.suppressed).toBe(0);
+    expect(db.notification.create).toHaveBeenCalledTimes(1);
+    expect(db.notification.create.mock.calls[0][0].data.channel).toBe("IN_APP");
+  });
+
+  it("still suppresses an event the defaults leave off", async () => {
+    db.notificationPreference.findUnique.mockResolvedValue(null);
+
+    const outcome = await deliverEvents([event({ type: "STRUCTURE_CHANGED" })]);
 
     expect(outcome.suppressed).toBe(1);
     expect(db.notification.create).not.toHaveBeenCalled();
@@ -311,5 +326,106 @@ describe("a setup replaced by one on a different level", () => {
     const created = db.notification.create.mock.calls[0][0].data;
     expect(created.type).toBe("SETUP_INVALIDATED");
     expect(created.dedupeKey).toBe("setup-event:old-1");
+  });
+});
+
+/**
+ * Phase K: Telegram receives a subset, the record receives everything.
+ *
+ * The distinction these tests exist to protect: withholding a push is not
+ * suppressing an event. A user who turns a switch on gets the row, the in-app
+ * copy and the history regardless of what the routing rules decide about their
+ * phone.
+ */
+describe("channel routing", () => {
+  const quiet = [
+    [
+      "a re-anchored setup",
+      event({
+        type: "SETUP_INVALIDATED",
+        setup: { ...event().setup!, isReplacement: true },
+      }),
+    ],
+    [
+      "a confirmation on a high-risk setup",
+      event({
+        type: "CONFIRMATION_DETECTED",
+        setup: { ...event().setup!, analysisStatus: "HIGH_RISK" },
+      }),
+    ],
+    [
+      "a confirmation whose reward was never measurable",
+      event({
+        type: "CONFIRMATION_DETECTED",
+        setup: { ...event().setup!, riskRewardIsSynthetic: true },
+      }),
+    ],
+    ["a structure signal", event({ type: "STRUCTURE_CHANGED" })],
+  ] as const;
+
+  it.each(quiet)("records %s in-app and withholds the push", async (_name, e) => {
+    const outcome = await deliverEvents([e]);
+
+    expect(db.notification.create).toHaveBeenCalledTimes(1);
+    expect(db.notification.create.mock.calls[0][0].data.channel).toBe("IN_APP");
+    expect(sendTelegramMessage).not.toHaveBeenCalled();
+
+    // Nothing was suppressed — the event exists and the user can read it.
+    expect(outcome.suppressed).toBe(0);
+    expect(outcome.created).toBe(1);
+    expect(outcome.telegramWithheld).toBe(1);
+  });
+
+  const loud = [
+    ["a potential setup", event({ type: "SETUP_DETECTED" })],
+    ["a measured confirmation", event()],
+    [
+      "a genuine invalidation of a level that had confirmed",
+      event({
+        type: "SETUP_INVALIDATED",
+        setup: { ...event().setup!, everConfirmed: true },
+      }),
+    ],
+  ] as const;
+
+  it.each(loud)("pushes %s to both channels", async (_name, e) => {
+    const outcome = await deliverEvents([e]);
+
+    expect(db.notification.create).toHaveBeenCalledTimes(2);
+    expect(sendTelegramMessage).toHaveBeenCalledTimes(1);
+    expect(outcome.telegramWithheld).toBe(0);
+    expect(outcome.created).toBe(2);
+  });
+
+  it("keeps the in-app copy when Telegram is not connected at all", async () => {
+    db.notificationPreference.findUnique.mockResolvedValue({ ...PREFS, telegramEnabled: false });
+
+    const outcome = await deliverEvents([event({ type: "STRUCTURE_CHANGED" })]);
+
+    expect(outcome.created).toBe(1);
+    // Nothing was withheld: there was no push to withhold.
+    expect(outcome.telegramWithheld).toBe(0);
+  });
+
+  it("still honours the per-event switch ahead of the routing rules", async () => {
+    db.notificationPreference.findUnique.mockResolvedValue({ ...PREFS, structureChanged: false });
+
+    const outcome = await deliverEvents([event({ type: "STRUCTURE_CHANGED" })]);
+
+    expect(outcome.suppressed).toBe(1);
+    expect(db.notification.create).not.toHaveBeenCalled();
+  });
+
+  it("writes the Telegram row only for what it actually sends", async () => {
+    await deliverEvents([
+      event({ type: "SETUP_DETECTED", dedupeKey: "a" }),
+      event({ type: "STRUCTURE_CHANGED", dedupeKey: "b" }),
+    ]);
+
+    const channels = db.notification.create.mock.calls.map(
+      (call) => (call[0] as { data: { channel: string } }).data.channel,
+    );
+
+    expect(channels).toEqual(["IN_APP", "TELEGRAM", "IN_APP"]);
   });
 });

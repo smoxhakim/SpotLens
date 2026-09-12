@@ -7,9 +7,9 @@ import bcrypt from "bcryptjs";
  *
  * Nothing here sends a Telegram message. What it proves is everything around
  * the send: that a preference survives a round trip, that the connection panel
- * is owner-scoped, that an unauthenticated caller is refused, and — the
- * regression this file exists for — that the panel's own polling does not burn
- * the connection code it is waiting on.
+ * is owner-scoped, that an unauthenticated caller is refused, that the panel's
+ * own polling does not burn the connection code it is waiting on, and that the
+ * page describes its own behaviour accurately.
  *
  * Real delivery is verified by hand against the live bot, because a test that
  * asserts a message arrived in someone's phone cannot run in CI.
@@ -117,25 +117,30 @@ test.describe("notification settings", () => {
     // Clicked rather than checked: the box is controlled by the server's copy
     // of the preferences, so it only flips once the write has come back — which
     // is the thing worth asserting anyway.
+    //
+    // It starts *on*. A potential setup is the rarest event the engine produces
+    // and the only one that says every deterministic condition now holds, so it
+    // is what a fresh account gets by default; the round trip here is therefore
+    // off and back on rather than on and back off.
     const potentialSetup = page.getByRole("checkbox", { name: /Potential setup/i });
-    await expect(potentialSetup).not.toBeChecked();
-    await potentialSetup.click();
-
-    await expect
-      .poll(async () => {
-        const row = await prisma.notificationPreference.findUnique({ where: { userId } });
-        return row?.setupDetected ?? null;
-      })
-      .toBe(true);
-
     await expect(potentialSetup).toBeChecked();
     await potentialSetup.click();
+
     await expect
       .poll(async () => {
         const row = await prisma.notificationPreference.findUnique({ where: { userId } });
         return row?.setupDetected ?? null;
       })
       .toBe(false);
+
+    await expect(potentialSetup).not.toBeChecked();
+    await potentialSetup.click();
+    await expect
+      .poll(async () => {
+        const row = await prisma.notificationPreference.findUnique({ where: { userId } });
+        return row?.setupDetected ?? null;
+      })
+      .toBe(true);
 
     // --- Telegram cannot be switched on before a chat is bound -------------
     await expect(page.getByRole("checkbox", { name: /^Telegram/ })).toBeDisabled();
@@ -184,5 +189,42 @@ test.describe("notification settings", () => {
     expect(end.claimAttempts).toBe(halfway.claimAttempts);
     expect(end.claimAttempts).toBeLessThan(10);
     expect(end.pendingCodeHash).toBe(before?.pendingCodeHash);
+  });
+
+  /**
+   * The switches are the only place a person can see what will and will not
+   * reach their phone, and an earlier version of this copy described the rarest
+   * event as a firehose and the noisiest as routine. A page that lies about its
+   * own behaviour is worse than one carrying no copy at all, so the wording is
+   * asserted rather than left to drift.
+   */
+  test("describes what it sends, and leaks no secret", async ({ page }) => {
+    test.setTimeout(120_000);
+
+    await signIn(page);
+    await page.goto("/settings");
+    await expect(page.getByText("What to send")).toBeVisible({ timeout: 30_000 });
+
+    // "Evidence", not "detected": reaching that state means the evidence was
+    // found *and* the analysis was not promoted, and a label that says only the
+    // first half reads as an approval the engine never gave.
+    await expect(page.getByRole("checkbox", { name: /Confirmation evidence/ })).toBeVisible();
+
+    // Marked in-app only, because the routing rules never push it — a switch
+    // promising a message that cannot arrive is worse than no switch.
+    await expect(page.getByText(/Structure signal \(in-app only\)/)).toBeVisible();
+    await expect(page.getByRole("checkbox", { name: /Structure signal/ })).not.toBeChecked();
+
+    // --- the copy tells the truth about the two channels -------------------
+    await expect(page.getByText(/Telegram receives a deliberate subset/)).toBeVisible();
+    await expect(page.getByText(/shown here as 're-anchored' and never pushed/)).toBeVisible();
+
+    // --- nothing about the token reaches the browser -----------------------
+    const html = await page.content();
+    const token = process.env.TELEGRAM_BOT_TOKEN;
+
+    if (token) expect(html).not.toContain(token);
+    // The bot-token URL shape, in case a value ever arrives by another route.
+    expect(html).not.toMatch(/bot\d{6,}:[A-Za-z0-9_-]{20,}/);
   });
 });

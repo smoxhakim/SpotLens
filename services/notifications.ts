@@ -12,6 +12,7 @@ import {
   getTelegramBotUsername,
   getTelegramUpdates,
   isTelegramConfigured,
+  isTelegramWorthy,
   renderInApp,
   sendTelegramMessage,
   type NotificationChannel,
@@ -36,6 +37,13 @@ export interface DeliveryOutcome {
   failed: number;
   suppressed: number;
   duplicates: number;
+  /**
+   * Events recorded and delivered in-app, but deliberately not pushed to
+   * Telegram. Counted separately from `suppressed` because nothing was
+   * suppressed — the event exists, the row exists, the user can read it. Only
+   * the interruption was withheld.
+   */
+  telegramWithheld: number;
 }
 
 const NOTHING: DeliveryOutcome = {
@@ -44,6 +52,7 @@ const NOTHING: DeliveryOutcome = {
   failed: 0,
   suppressed: 0,
   duplicates: 0,
+  telegramWithheld: 0,
 };
 
 /**
@@ -65,6 +74,7 @@ export async function deliverEvents(events: NotificationEvent[]): Promise<Delive
     totals.failed += outcome.failed;
     totals.suppressed += outcome.suppressed;
     totals.duplicates += outcome.duplicates;
+    totals.telegramWithheld += outcome.telegramWithheld;
   }
 
   return totals;
@@ -82,11 +92,19 @@ async function deliverOne(event: NotificationEvent): Promise<DeliveryOutcome> {
 
     const channels: NotificationChannel[] = [];
     if (prefs.inAppEnabled) channels.push("IN_APP");
-    if (prefs.telegramEnabled) channels.push("TELEGRAM");
 
-    if (channels.length === 0) return { ...NOTHING, suppressed: 1 };
+    // The second gate, and the only one that is per-channel: in-app keeps the
+    // whole stream, Telegram gets the subset worth interrupting a phone for.
+    // Whatever is withheld here is still recorded and still readable in the
+    // app — this decides delivery, never recording.
+    const worthPushing = isTelegramWorthy(event);
+    if (prefs.telegramEnabled && worthPushing) channels.push("TELEGRAM");
 
-    const totals = { ...NOTHING };
+    const withheld = prefs.telegramEnabled && !worthPushing ? 1 : 0;
+
+    if (channels.length === 0) return { ...NOTHING, suppressed: 1, telegramWithheld: withheld };
+
+    const totals = { ...NOTHING, telegramWithheld: withheld };
 
     for (const channel of channels) {
       const outcome = await deliverToChannel(event, channel);
