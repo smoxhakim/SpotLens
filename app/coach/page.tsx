@@ -1,7 +1,7 @@
 import { MessageCircleQuestion } from "lucide-react";
 import { z } from "zod";
 
-import { CoachHandoff } from "@/features/opportunities/components/CoachHandoff";
+import { CoachReviewView } from "@/features/coach/components/CoachReviewView";
 import { timeframeSchema } from "@/lib/market-data/schema";
 
 export const metadata = { title: "Coach — SpotLens" };
@@ -48,12 +48,13 @@ export default async function CoachPage({
           Coach
         </h1>
         <p className="text-sm text-muted-foreground">
-          A second opinion on an analysis you are reviewing — an explanation of what the setup rests
-          on and what would undo it, never an instruction.
+          A second reading of an analysis SpotLens already made — what the setup rests on, what
+          argues against it, and what would undo it. The numbers are SpotLens&apos;s; this explains
+          them, and the decision stays yours.
         </p>
       </header>
 
-      <CoachHandoff
+      <CoachReviewView
         symbol={parse(symbolSchema, params.symbol)}
         timeframe={parse(timeframeSchema, params.tf)}
         setupId={parse(uuidSchema, params.setupId)}

@@ -34,7 +34,6 @@ vi.mock("next/link", () => ({
 }));
 
 const { OpportunitiesView } = await import("./components/OpportunitiesView");
-const { CoachHandoff } = await import("./components/CoachHandoff");
 
 function candidate(overrides: Partial<ShortlistCandidate> = {}): ShortlistCandidate {
   return {
@@ -421,45 +420,6 @@ describe("the candidate card", () => {
     ]) {
       expect(text, `card contained "${banned}"`).not.toContain(banned);
     }
-  });
-});
-
-describe("the Coach handoff", () => {
-  const RUN = "22222222-2222-4222-8222-222222222222";
-  const SETUP = "11111111-1111-4111-8111-111111111111";
-
-  it("says the review is not built yet rather than implying one happened", () => {
-    render(<CoachHandoff symbol="ETHUSDT" timeframe="H4" setupId={null} runId={RUN} />);
-
-    expect(screen.getByText(/Coach review arrives in the next phase/)).toBeInTheDocument();
-    expect(screen.getByText(/No analysis has been sent anywhere/)).toBeInTheDocument();
-
-    const text = (document.body.textContent ?? "").toLowerCase();
-    expect(text).not.toContain("reviewed this");
-    expect(text).not.toContain("the coach says");
-  });
-
-  it("echoes every reference it was given", () => {
-    render(<CoachHandoff symbol="ETHUSDT" timeframe="H4" setupId={SETUP} runId={RUN} />);
-
-    expect(screen.getByText("ETHUSDT")).toBeInTheDocument();
-    expect(screen.getByText("4h")).toBeInTheDocument();
-    expect(screen.getByText(SETUP)).toBeInTheDocument();
-    // The pass that ranked it, so a review can reconstruct the same context.
-    expect(screen.getByText(RUN)).toBeInTheDocument();
-  });
-
-  it("says plainly when a reference is missing rather than leaving a blank", () => {
-    render(<CoachHandoff symbol="ETHUSDT" timeframe="H4" setupId={null} runId={null} />);
-
-    expect(screen.getByText(/not being tracked yet/)).toBeInTheDocument();
-    expect(screen.getByText(/opened outside a scan/)).toBeInTheDocument();
-    expect(document.body.textContent).not.toContain("null");
-  });
-
-  it("explains itself when no candidate was passed", () => {
-    render(<CoachHandoff symbol={null} timeframe={null} setupId={null} runId={null} />);
-    expect(screen.getByText(/No candidate was passed/)).toBeInTheDocument();
   });
 });
 

@@ -82,6 +82,26 @@ make that unnecessary most of the time.
   handoff destination and a placeholder until Phase N — it carries references
   (symbol, timeframe, setup id), never a copy of the analysis, calls no model,
   and says plainly that no review has happened.
+- **The Coach reads; SpotLens decides.** `lib/coach` turns a stored record into
+  an educational reading — strengths, concerns, confirmation, reward,
+  invalidation, what to check on the chart — and owns no number. Every figure a
+  reader sees is rendered from `CoachContext`, which travels _alongside_ the
+  prose rather than through it, so a review can discuss an entry and can never
+  become the source of one. Target levels come from the `Decimal(24,8)` columns
+  and their reasons from the snapshot JSON: the JSON keeps the original float,
+  and quoting it would show a different number than every other surface.
+  A `setupId` resolves to the immutable snapshot; without one the scanner result
+  is used, which carries **no levels** — and none are reconstructed, because
+  working them out now means running the engine against candles that closed
+  after the run being reviewed. Owner scoping is in the `where`, and a setup
+  belonging to someone else is indistinguishable from one that does not exist.
+- **No model is called.** `CoachProvider` is a seam with one shipped
+  implementation, the deterministic reviewer. Every section is derived from
+  facts the engine already recorded, so a network round trip and a third-party
+  secret would buy fluency and cost determinism and reviewability. A foreign
+  provider, if one is ever added, cannot change a number and has its prose
+  checked against `FORBIDDEN_PHRASES` before it is shown; failure or a refused
+  reading degrades to the deterministic one.
 - **A shortlist belongs to one scanner run.** `getShortlist` reads the rows of a
   single `scannerRunId`, so yesterday's BTC cannot appear beside this morning's
   ETH. The daily summary is the one deliberate exception — it is a day-scoped
@@ -184,6 +204,7 @@ lib/
   research/     engine funnel vs decision counts, kept apart (pure)
   risk/         position sizing, caps, costs (pure; one source of the formula)
   regime/       market environment classifier (pure; outside the engine)
+  coach/        educational reading of a recorded analysis (pure; owns no number)
 scripts/        the local scanner process (npm run scanner)
   market-data/  provider abstraction + Binance
 services/       DB-backed services (markets, candles, snapshots, backtests)
