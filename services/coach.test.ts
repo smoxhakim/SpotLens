@@ -18,7 +18,20 @@ const db = {
 
 vi.mock("@/lib/db/prisma", () => ({ isDatabaseConfigured: true, prisma: db }));
 
-const { buildCoachReview } = await import("./coach");
+const { buildCoachReview: resolveAndReview } = await import("./coach");
+const { deterministicProvider } = await import("@/lib/coach");
+
+/**
+ * Always with an explicit provider.
+ *
+ * `buildCoachReview` falls back to whatever the environment configures, so a
+ * developer with OPENAI_API_KEY set would have had these tests quietly calling
+ * ChatGPT — slow, billable, and dependent on a third party being up. Naming the
+ * provider here makes the suite independent of the environment by construction
+ * rather than by luck.
+ */
+const buildCoachReview: typeof resolveAndReview = (request, provider = deterministicProvider) =>
+  resolveAndReview(request, provider);
 
 const USER = "11111111-1111-4111-8111-111111111111";
 const STRANGER = "22222222-2222-4222-8222-222222222222";
