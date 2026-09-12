@@ -25,6 +25,16 @@ export const STATUS_RANK: Record<TradeStatus, number> = {
 
 export interface RankableResult {
   symbol: string;
+  /**
+   * Which timeframe this result is for.
+   *
+   * Part of identity, not decoration: one pass produces every market on every
+   * scheduled timeframe, so `BTCUSDT` appears twice and the two entries can tie
+   * on every other field. Without this the order of such a pair fell out of the
+   * sort's stability and therefore out of the order the jobs happened to be
+   * built in — deterministic by accident rather than by rule.
+   */
+  timeframe: string;
   analysisStatus: TradeStatus | null;
   score: number | null;
   riskReward: number | null;
@@ -51,8 +61,13 @@ export function effectiveRiskReward(result: RankableResult): number {
  *   1. status — POTENTIAL_SETUP, then WAIT, then HIGH_RISK, then AVOID
  *   2. setup quality score, highest first
  *   3. measured risk/reward, highest first (an unmeasured one counts as zero)
- *   4. symbol, alphabetically — a stable tie-breaker so equal setups keep a
- *      fixed order instead of depending on which request finished first
+ *   4. symbol, alphabetically
+ *   5. timeframe, alphabetically — because a market appears once per scanned
+ *      timeframe and those two entries can be equal on everything above
+ *
+ * The last two together are a total tie-break: one pass contains each
+ * (symbol, timeframe) at most once, so no two entries can compare equal and the
+ * order never depends on the order the results arrived in.
  *
  * The score is a quality measure and is used here only to order a list. It is
  * not a probability, and nothing in the scanner presents it as one.
@@ -73,6 +88,13 @@ export function rankResults<T extends RankableResult>(results: readonly T[]): T[
     const rrB = effectiveRiskReward(b);
     if (rrA !== rrB) return rrB - rrA;
 
-    return a.symbol.localeCompare(b.symbol);
+    // `localeCompare` without a locale argument follows the runtime's default
+    // collation, which is why both of these are compared as plain code points
+    // instead: a symbol list and a timeframe list are ASCII, and an ordering
+    // that changes with the host's locale is not deterministic.
+    if (a.symbol !== b.symbol) return a.symbol < b.symbol ? -1 : 1;
+    if (a.timeframe !== b.timeframe) return a.timeframe < b.timeframe ? -1 : 1;
+
+    return 0;
   });
 }

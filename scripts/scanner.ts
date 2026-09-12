@@ -91,16 +91,32 @@ async function scan(triggeredBy: "SCHEDULE" | "MANUAL", due: Timeframe[], userId
   // is the only place that knows both halves.
   await notify(summary.events, userId);
 
-  const top = summary.results.filter((r) => r.ok).slice(0, 3);
-  if (top.length > 0) {
-    log("   best ranked:");
-    for (const r of top) {
+  // The shortlist, not the first three of everything: ninety analyses is more
+  // than anyone reads, and the counts either side of it are what say how much
+  // was looked at and refused.
+  const { shortlist } = summary;
+  // Every bucket, so the numbers add up to the total on the line above. An
+  // earlier version omitted the failures and the arithmetic silently stopped
+  // balancing, which is how a miscategorised exclusion went unnoticed.
+  const { excluded } = shortlist;
+  log(
+    `   shortlist: ${shortlist.totalEligible} of ${shortlist.totalAnalysed} eligible · ` +
+      `excluded ${excluded.AVOID} avoid, ${excluded.HIGH_RISK} high risk, ` +
+      `${excluded.BELOW_QUALITY_BAR} below the quality bar, ` +
+      `${excluded.REWARD_NOT_MEASURED} unmeasured reward, ${excluded.FAILED} failed`,
+  );
+
+  if (shortlist.top5.length > 0) {
+    log("   top opportunities to review:");
+    for (const c of shortlist.top5) {
       // "Quality", never "probability" — the score orders a list and nothing more.
       log(
-        `     ${r.symbol} ${r.timeframe} ${r.analysisStatus}` +
-          (r.score === null ? "" : ` · quality ${r.score}/100`),
+        `     ${c.rank}. ${c.symbol} ${c.timeframe} ${c.analysisStatus} · quality ${c.score}/100` +
+          (c.riskRewardIsMeasured ? ` · R:R 1:${c.riskReward!.toFixed(1)}` : " · R:R not measured"),
       );
     }
+  } else {
+    log("   nothing met the shortlist bar this pass. That is a normal outcome.");
   }
 }
 

@@ -27,6 +27,21 @@ export {
 } from "./failures";
 export { STATUS_RANK, effectiveRiskReward, rankResults, type RankableResult } from "./ranking";
 export {
+  SHORTLIST_RANKING_VERSION,
+  SHORTLIST_SIZES,
+  buildShortlist,
+  exclusionFor,
+  isShortlistEligible,
+  reasonsFor,
+  spreadAcrossMarkets,
+  viewOf,
+  type ExclusionReason,
+  type Shortlist,
+  type ShortlistCandidate,
+  type ShortlistInput,
+  type ShortlistSize,
+} from "./shortlist";
+export {
   eventsForOutcome,
   failureEvent,
   type LifecycleOutcome,

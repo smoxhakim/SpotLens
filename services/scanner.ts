@@ -8,6 +8,7 @@ import { isDatabaseConfigured, prisma } from "@/lib/db/prisma";
 import type { Candle, Timeframe } from "@/lib/market-data/provider";
 import {
   DEFAULT_SCAN_TIMEFRAMES,
+  buildShortlist,
   closedCandlesOnly,
   eventsForOutcome,
   failureEvent,
@@ -16,7 +17,9 @@ import {
   withRetries,
   type ClassifiedFailure,
   type ScannerEvent,
+  type Shortlist,
 } from "@/lib/scanner";
+import { classifyRegime } from "@/lib/regime";
 import type { MarketSummary } from "@/types/market";
 import { getCandles } from "@/services/candles";
 import { listMarkets } from "@/services/markets";
@@ -63,6 +66,10 @@ export interface MarketScanOutcome {
   analysedAtCandle: number | null;
   setupId: string | null;
   lifecycleStatus: string | null;
+  /** Context for the shortlist's explanation, as this pass saw it. */
+  trend: string | null;
+  mtfAgreement: string | null;
+  regimeDirection: string | null;
   failure: ClassifiedFailure | null;
   attempts: number;
   durationMs: number;
@@ -87,6 +94,15 @@ export interface ScanSummary {
   events: ScannerEvent[];
   /** Every market, ranked. Losers included — a scan is mostly no-trades. */
   results: MarketScanOutcome[];
+  /**
+   * The few worth reviewing, from this pass and this pass only.
+   *
+   * A prioritisation of the results above, built by the same pure function the
+   * API and any UI use. The full list stays in `results` and every row is still
+   * written to the database — this decides what to put in front of a person,
+   * never what to keep.
+   */
+  shortlist: Shortlist;
 }
 
 /**
@@ -123,7 +139,34 @@ export async function runScan(options: ScanOptions): Promise<ScanSummary> {
 
   await finishRun(runId, summary, results);
 
-  return { ...summary, runId, results: rankResults(results) };
+  // Built from this pass's own results, in memory, by the same pure function
+  // the stored-run path uses. One pass in, one shortlist out — nothing from a
+  // previous run can reach it.
+  return {
+    ...summary,
+    runId,
+    results: rankResults(results),
+    shortlist: buildShortlist(results.map(toShortlistInput)),
+  };
+}
+
+/** One scan outcome, projected onto what the shortlist reads. */
+function toShortlistInput(result: MarketScanOutcome) {
+  return {
+    symbol: result.symbol,
+    timeframe: result.timeframe as string,
+    analysisStatus: result.analysisStatus,
+    score: result.score,
+    riskReward: result.riskReward,
+    riskRewardIsSynthetic: result.riskRewardIsSynthetic,
+    ok: result.ok,
+    lifecycleStatus: result.lifecycleStatus,
+    trackedSetupId: result.setupId,
+    analysedAtCandle: result.analysedAtCandle,
+    trend: result.trend,
+    mtfAgreement: result.mtfAgreement,
+    regimeDirection: result.regimeDirection,
+  };
 }
 
 interface OneOutcome {
@@ -193,6 +236,9 @@ async function scanOne(
         analysedAtCandle: null,
         setupId: null,
         lifecycleStatus: null,
+        trend: null,
+        mtfAgreement: null,
+        regimeDirection: null,
         failure,
         attempts: attempt.attempts,
         durationMs: Date.now() - started,
@@ -239,6 +285,12 @@ async function scanOne(
       analysedAtCandle: closed.at(-1)?.openTime ?? null,
       setupId: outcome.setupId,
       lifecycleStatus: outcome.status,
+      // Straight off the analysis this pass just ran. `classifyRegime` reads a
+      // finished MarketRead and costs arithmetic, no data — and the engine
+      // never receives what it returns, exactly as Phase H established.
+      trend: result.read.trend.trend,
+      mtfAgreement: result.mtf?.agreement ?? null,
+      regimeDirection: classifyRegime(result.read).direction,
       failure: null,
       attempts: attempt.attempts,
       durationMs: Date.now() - started,
@@ -299,6 +351,9 @@ function abortedOutcome(market: MarketSummary, timeframe: Timeframe): OneOutcome
       analysedAtCandle: null,
       setupId: null,
       lifecycleStatus: null,
+      trend: null,
+      mtfAgreement: null,
+      regimeDirection: null,
       failure: { category: "UNKNOWN", message: "The scan was stopped.", retryable: false },
       attempts: 0,
       durationMs: 0,
@@ -313,7 +368,7 @@ function summarise(
   timeframes: Timeframe[],
   marketCount: number,
   durationMs: number,
-): Omit<ScanSummary, "runId" | "results"> {
+): Omit<ScanSummary, "runId" | "results" | "shortlist"> {
   const succeeded = results.filter((r) => r.ok).length;
   const failed = results.length - succeeded;
 
@@ -360,7 +415,7 @@ async function createRun(
 
 async function finishRun(
   runId: string | null,
-  summary: Omit<ScanSummary, "runId" | "results">,
+  summary: Omit<ScanSummary, "runId" | "results" | "shortlist">,
   results: MarketScanOutcome[],
 ): Promise<void> {
   if (!runId || !isDatabaseConfigured) return;
@@ -380,6 +435,9 @@ async function finishRun(
           analysedAtCandle: r.analysedAtCandle,
           trackedSetupId: r.setupId,
           lifecycleStatus: r.lifecycleStatus as never,
+          trend: r.trend,
+          mtfAgreement: r.mtfAgreement,
+          regimeDirection: r.regimeDirection,
           failureCategory: r.failure?.category,
           failureMessage: r.failure?.message,
           attempts: r.attempts,
@@ -424,6 +482,60 @@ export async function resolveScannerUserId(email?: string): Promise<string | nul
     : await prisma.user.findFirst({ orderBy: { createdAt: "asc" }, select: { id: true } });
 
   return user?.id ?? null;
+}
+
+/**
+ * The shortlist for one stored pass.
+ *
+ * Run-scoped by construction: every row comes from a single `scannerRunId`, so
+ * a candidate from yesterday cannot appear beside one from this morning. The
+ * ranking itself is the same pure function the live scan used — the API, the
+ * scanner process and any UI all read one list rather than three that agree
+ * today.
+ *
+ * `runId` omitted means the most recent run, which is what a dashboard wants.
+ */
+export async function getShortlist(input: { runId?: string; limit?: number } = {}) {
+  const run = input.runId
+    ? await prisma.scannerRun.findUnique({ where: { id: input.runId } })
+    : await prisma.scannerRun.findFirst({ orderBy: { startedAt: "desc" } });
+
+  if (!run) return null;
+
+  const rows = await prisma.scannerResult.findMany({
+    where: { scannerRunId: run.id },
+    include: { tradingPair: { select: { exchangeSymbol: true } } },
+  });
+
+  const shortlist = buildShortlist(
+    rows.map((row) => ({
+      symbol: row.tradingPair.exchangeSymbol,
+      timeframe: row.timeframe as string,
+      analysisStatus: row.analysisStatus,
+      score: row.score,
+      riskReward: row.riskReward === null ? null : Number(row.riskReward),
+      riskRewardIsSynthetic: row.riskRewardIsSynthetic,
+      ok: row.status === "OK",
+      lifecycleStatus: row.lifecycleStatus,
+      trackedSetupId: row.trackedSetupId,
+      analysedAtCandle: row.analysedAtCandle === null ? null : Number(row.analysedAtCandle),
+      trend: row.trend,
+      mtfAgreement: row.mtfAgreement,
+      regimeDirection: row.regimeDirection,
+    })),
+  );
+
+  return {
+    run: {
+      id: run.id,
+      startedAt: run.startedAt.toISOString(),
+      completedAt: run.completedAt?.toISOString() ?? null,
+      status: run.status,
+      timeframes: run.timeframes,
+      triggeredBy: run.triggeredBy,
+    },
+    shortlist,
+  };
 }
 
 export async function listScannerRuns(limit: number) {
