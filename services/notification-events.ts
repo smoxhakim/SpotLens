@@ -44,9 +44,20 @@ export async function eventsFromScan(input: {
   // most important thing this layer says: the level you were waiting on is
   // gone. Resolved here from what Phase D already stored, so neither the
   // scanner nor the lifecycle needs changing.
-  const orphaned = input.scannerEvents.filter(
-    (event) => event.type === "SETUP_INVALIDATED" && event.setupId === null,
-  );
+  //
+  // That missing id is also how a replacement is *identified*. It is the
+  // scanner's own REPLACE signal — `eventsForOutcome` emits the closing half
+  // with `setupId: null` and the opening half with the new setup's id — so
+  // nothing here has to re-derive replacement semantics from prices, or match
+  // on the wording of a reason string.
+  const orphaned = input.scannerEvents
+    .filter((event) => event.type === "SETUP_INVALIDATED" && event.setupId === null)
+    .map((event) => ({
+      symbol: event.symbol,
+      timeframe: event.timeframe,
+      replacementSetupId: replacementFor(input.scannerEvents, event.symbol, event.timeframe),
+    }));
+
   const resolved = orphaned.length > 0 ? await resolveInvalidated(orphaned) : new Map();
 
   const transitions =
@@ -102,6 +113,31 @@ function orphanKey(symbol: string, timeframe: string): string {
 }
 
 /**
+ * The other half of a REPLACE.
+ *
+ * `eventsForOutcome` emits the pair together for one market, so the creation
+ * that accompanies an id-less invalidation is the replacement setup. Returns
+ * null when the invalidation stands alone, which is the case the lifecycle
+ * produces when the level moved *and* confirmation was contradicted — nothing
+ * replaced that setup, and it is a genuine invalidation.
+ */
+function replacementFor(
+  scannerEvents: ScannerEvent[],
+  symbol: string,
+  timeframe: string,
+): string | null {
+  const created = scannerEvents.find(
+    (event) =>
+      event.type === "SETUP_CREATED" &&
+      event.symbol === symbol &&
+      event.timeframe === timeframe &&
+      event.setupId !== null,
+  );
+
+  return created?.setupId ?? null;
+}
+
+/**
  * Finds the setup behind an invalidation the scanner could not name.
  *
  * Matched on the market and timeframe, taking the most recently invalidated
@@ -109,7 +145,7 @@ function orphanKey(symbol: string, timeframe: string): string {
  * identity is still the `SetupEvent` id, so this cannot produce a duplicate.
  */
 async function resolveInvalidated(
-  scannerEvents: { symbol: string; timeframe: string }[],
+  scannerEvents: { symbol: string; timeframe: string; replacementSetupId: string | null }[],
 ): Promise<Map<string, LoadedTransition>> {
   const map = new Map<string, LoadedTransition>();
 
@@ -124,7 +160,24 @@ async function resolveInvalidated(
       include: { events: { orderBy: { createdAt: "desc" }, take: 1 } },
     });
 
-    const loaded = setup ? toTransition(setup) : null;
+    if (!setup) continue;
+
+    // The zone the replacement anchored to, read from the row Phase D just
+    // wrote. Shown to the reader so "re-anchored" names both levels rather
+    // than asking them to go and look.
+    const replacement = scannerEvent.replacementSetupId
+      ? await prisma.trackedSetup.findUnique({
+          where: { id: scannerEvent.replacementSetupId },
+          select: { originZoneLow: true, originZoneHigh: true },
+        })
+      : null;
+
+    const loaded = toTransition(setup, {
+      isReplacement: scannerEvent.replacementSetupId !== null,
+      replacementZoneLow: replacement === null ? null : Number(replacement.originZoneLow),
+      replacementZoneHigh: replacement === null ? null : Number(replacement.originZoneHigh),
+    });
+
     if (loaded) map.set(orphanKey(scannerEvent.symbol, scannerEvent.timeframe), loaded);
   }
 
@@ -165,8 +218,24 @@ type SetupWithLatestEvent = Awaited<
   ReturnType<typeof prisma.trackedSetup.findFirst<{ include: { events: true } }>>
 >;
 
+/** What the caller knows that the stored row does not say on its own. */
+interface ReplacementContext {
+  isReplacement: boolean;
+  replacementZoneLow: number | null;
+  replacementZoneHigh: number | null;
+}
+
+const NOT_A_REPLACEMENT: ReplacementContext = {
+  isReplacement: false,
+  replacementZoneLow: null,
+  replacementZoneHigh: null,
+};
+
 /** Reads one stored setup and its latest transition into notification facts. */
-function toTransition(setup: NonNullable<SetupWithLatestEvent>): LoadedTransition | null {
+function toTransition(
+  setup: NonNullable<SetupWithLatestEvent>,
+  replacement: ReplacementContext = NOT_A_REPLACEMENT,
+): LoadedTransition | null {
   {
     const event = setup.events[0];
     if (!event) return null;
@@ -212,6 +281,13 @@ function toTransition(setup: NonNullable<SetupWithLatestEvent>): LoadedTransitio
         confirmationExplanation: payload?.explanation ?? null,
         invalidationReason: setup.invalidationReason,
         regime: snapshot.regime ?? null,
+        isReplacement: replacement.isReplacement,
+        replacementZoneLow: replacement.replacementZoneLow,
+        replacementZoneHigh: replacement.replacementZoneHigh,
+        // Phase D stamps `confirmedAt` the first time a setup reaches
+        // CONFIRMATION_DETECTED or POTENTIAL_SETUP and never clears it, so this
+        // is "did this level ever get going" read straight off the record.
+        everConfirmed: setup.confirmedAt !== null,
       },
     };
   }
@@ -277,16 +353,33 @@ export async function buildDailySummary(input: {
     }
   }
 
-  const topRows = await prisma.scannerResult.findMany({
+  // Over-fetched and then deduplicated by market, because a day contains
+  // several passes and the same market appears once per pass — the first real
+  // summary listed VETUSDT H1 three times out of five places. The order is
+  // untouched: the first row for a market is already its best-ranked one under
+  // Phase E's ordering, so keeping it and dropping the repeats re-ranks
+  // nothing.
+  const topCandidates = await prisma.scannerResult.findMany({
     where: {
       scannerRun: { startedAt: { gte: from, lt: to } },
       status: "OK",
       analysisStatus: { in: ["POTENTIAL_SETUP", "WAIT_FOR_CONFIRMATION"] },
     },
     orderBy: [{ analysisStatus: "asc" }, { score: "desc" }],
-    take: 5,
+    take: 100,
     include: { tradingPair: { select: { exchangeSymbol: true } } },
   });
+
+  const seenMarkets = new Set<string>();
+  const topRows: typeof topCandidates = [];
+
+  for (const row of topCandidates) {
+    const market = `${row.tradingPair.exchangeSymbol}:${row.timeframe}`;
+    if (seenMarkets.has(market)) continue;
+    seenMarkets.add(market);
+    topRows.push(row);
+    if (topRows.length === 5) break;
+  }
 
   const summary: DailySummaryFacts = {
     date,

@@ -67,6 +67,29 @@ export interface SetupFacts {
   invalidationReason: string | null;
   /** Environment the setup was seen in. Context on the message, never a claim. */
   regime: { direction: string; volatility: string } | null;
+  /**
+   * True when this invalidation is the closing half of a scanner REPLACE — the
+   * engine re-anchored to a different support zone and created a replacement in
+   * the same pass.
+   *
+   * Taken from the scanner's own REPLACE signal, not re-derived from prices: a
+   * replacement invalidation arrives with no setup id, because the lifecycle
+   * hands back the *new* setup's id. The distinction matters because a
+   * re-anchored level is bookkeeping, while a lost level is a market event, and
+   * the two should not arrive on a phone wearing the same face.
+   */
+  isReplacement: boolean;
+  /** The zone the replacement setup anchored to, when there is one. */
+  replacementZoneLow: number | null;
+  replacementZoneHigh: number | null;
+  /**
+   * Whether this setup ever reached CONFIRMATION_DETECTED or POTENTIAL_SETUP.
+   *
+   * Read from `TrackedSetup.confirmedAt`, which Phase D stamps once and never
+   * clears. It is what separates "a level you were actually waiting on has
+   * failed" from "a level that never got going has failed".
+   */
+  everConfirmed: boolean;
 }
 
 export interface DailySummaryFacts {
@@ -148,14 +171,19 @@ export interface NotificationPreferences {
 /**
  * What a fresh install does before anyone touches Settings.
  *
- * Quiet on purpose. The three that default on are the ones that describe
- * something having changed at a level already being tracked; the three that
- * default off are the ones that fire often enough to become wallpaper.
+ * `setupDetected` defaults on: it is the rarest event the engine produces — one
+ * message in sixty-nine across the recorded history — and the only one that
+ * says every deterministic condition now holds. Defaulting the most valuable
+ * message off while the noisiest defaulted on was backwards.
+ *
+ * `structureChanged` stays off and is in-app only regardless (see
+ * `telegramPriorityFor`), because it cannot carry bad news and has fired on
+ * setups that were being seen for the first time.
  */
 export const DEFAULT_PREFERENCES: NotificationPreferences = {
   inAppEnabled: true,
   telegramEnabled: false,
-  setupDetected: false,
+  setupDetected: true,
   confirmationDetected: true,
   setupInvalidated: true,
   structureChanged: false,

@@ -28,10 +28,16 @@ export {
   dedupeKeyForSystemError,
   eventTypeForTransition,
   isStructuralChange,
+  isTelegramWorthy,
+  telegramPriorityFor,
+  type RoutingFacts,
+  type TelegramPriority,
   type TransitionFacts,
 } from "./mapping";
 
 export {
+  REPLACEMENT_TITLE,
+  TELEGRAM_TITLES,
   escape,
   formatConfirmation,
   formatConnectionTest,
@@ -39,6 +45,7 @@ export {
   formatForTelegram,
   formatInvalidation,
   formatPotentialSetup,
+  formatReplacement,
   formatStructureChange,
   formatSystemError,
 } from "./telegram-format";

@@ -718,7 +718,7 @@ model NotificationPreference {
   inAppEnabled    Boolean @default(true)
   telegramEnabled Boolean @default(false)
 
-  setupDetected        Boolean @default(false)
+  setupDetected        Boolean @default(true)
   confirmationDetected Boolean @default(true)
   setupInvalidated     Boolean @default(true)
   structureChanged     Boolean @default(false)

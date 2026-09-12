@@ -24,31 +24,40 @@ interface TelegramStatus {
 /**
  * Each toggle names the event and says plainly how often it fires, because
  * "how noisy is this?" is the only question that matters when choosing.
+ *
+ * The frequencies here are measured, not guessed. An earlier version described
+ * the rarest event as a firehose and the noisiest as routine, which is a worse
+ * failure than saying nothing: someone choosing on those hints chose backwards.
+ *
+ * `inApp` marks the events that are recorded and shown here but never pushed to
+ * Telegram, so the switch does not promise a message that will not arrive.
  */
 const EVENT_TOGGLES: {
   key: keyof NotificationPreferences;
   label: string;
   hint: string;
+  inApp?: boolean;
 }[] = [
   {
+    key: "setupDetected",
+    label: "Potential setup",
+    hint: "Every deterministic condition now holds. The rarest thing the engine says — roughly one in every seventy notifications — and the one most worth reading.",
+  },
+  {
     key: "confirmationDetected",
-    label: "Confirmation detected",
-    hint: "The confirmation layer found its required evidence at a tracked level. Not an approval to trade.",
+    label: "Confirmation evidence",
+    hint: "The confirmation layer found its evidence at a tracked level, without the analysis being promoted. Evidence, not approval. Telegram gets these only when the setup is not high risk and the reward is measurable; the rest stay here.",
   },
   {
     key: "setupInvalidated",
     label: "Setup invalidated",
-    hint: "A tracked setup's premise failed — support lost, or structure gave way.",
-  },
-  {
-    key: "setupDetected",
-    label: "Potential setup",
-    hint: "Every deterministic condition now holds. Off by default: several can appear in a busy session.",
+    hint: "A tracked setup's premise failed — support lost, or structure gave way. The most common event by a wide margin. A setup the engine merely re-anchored to a neighbouring zone is shown here as 're-anchored' and never pushed.",
   },
   {
     key: "structureChanged",
-    label: "Structure changed",
-    hint: "A level actually broke or was reclaimed. Off by default; fires more often than the others.",
+    label: "Structure signal",
+    inApp: true,
+    hint: "One piece of structural evidence at a tracked level — a break upward, or a zone reclaimed. Rare, and always in the setup's favour, since an adverse break arrives as an invalidation instead.",
   },
   {
     key: "dailySummary",
@@ -137,13 +146,14 @@ export function NotificationSettings() {
         <section>
           <SectionLabel>What to send</SectionLabel>
           <p className="mb-2 text-[11px] leading-relaxed text-muted-foreground">
-            Defaults are deliberately quiet. A single scan can create dozens of setups, and a
-            channel that announces all of them stops being read.
+            These switches decide what is recorded and shown in the app. Telegram receives a
+            deliberate subset of it — the quiet events stay here rather than reaching your phone,
+            and nothing is ever dropped from the record.
           </p>
           {EVENT_TOGGLES.map((toggle) => (
             <Toggle
               key={toggle.key}
-              label={toggle.label}
+              label={toggle.inApp ? `${toggle.label} (in-app only)` : toggle.label}
               hint={toggle.hint}
               checked={Boolean(p[toggle.key])}
               onChange={(v) => save.mutate({ [toggle.key]: v })}
