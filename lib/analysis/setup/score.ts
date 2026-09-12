@@ -321,7 +321,15 @@ function scoreRiskReward(riskReward: RiskReward): ScoreCategory {
   };
 }
 
-function gradeFor(total: number): SetupGrade {
+/**
+ * The grade for a total, exported so nothing has to restate the thresholds.
+ *
+ * The scanner's shortlist needs "is this at least moderate?" and the stored
+ * scanner result keeps only the number. Re-deriving the grade through this
+ * function rather than writing `>= 60` somewhere else means the two can never
+ * drift apart — there is one place that decides what a score is worth.
+ */
+export function gradeFor(total: number): SetupGrade {
   if (total >= 75) return "STRONG";
   if (total >= 60) return "MODERATE";
   if (total >= 45) return "WEAK";

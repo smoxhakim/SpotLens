@@ -10,7 +10,7 @@ import {
   type NotificationEvent,
   type SetupFacts,
 } from "@/lib/notifications";
-import type { ScannerEvent } from "@/lib/scanner";
+import { buildShortlist, type ScannerEvent } from "@/lib/scanner";
 import type { SetupLifecycleStatus } from "@/lib/setups";
 
 /**
@@ -353,33 +353,48 @@ export async function buildDailySummary(input: {
     }
   }
 
-  // Over-fetched and then deduplicated by market, because a day contains
-  // several passes and the same market appears once per pass — the first real
-  // summary listed VETUSDT H1 three times out of five places. The order is
-  // untouched: the first row for a market is already its best-ranked one under
-  // Phase E's ordering, so keeping it and dropping the repeats re-ranks
-  // nothing.
-  const topCandidates = await prisma.scannerResult.findMany({
-    where: {
-      scannerRun: { startedAt: { gte: from, lt: to } },
-      status: "OK",
-      analysisStatus: { in: ["POTENTIAL_SETUP", "WAIT_FOR_CONFIRMATION"] },
-    },
-    orderBy: [{ analysisStatus: "asc" }, { score: "desc" }],
-    take: 100,
+  // Ranked by the shortlist's own rules rather than by a second ordering in
+  // SQL. The query that used to do this sorted on status and score alone, so a
+  // setup whose reward was never measured could outrank one measured against
+  // structure — the exact distortion Phase A removed from the engine. Ordering
+  // lives in `buildShortlist` now, and this reads it.
+  //
+  // Day-scoped on purpose: a daily summary is an aggregate over the day's
+  // passes, not a single pass. The same market appearing once per pass is
+  // collapsed here, which is why the first real summary listed one symbol three
+  // times out of five places.
+  const dayRows = await prisma.scannerResult.findMany({
+    where: { scannerRun: { startedAt: { gte: from, lt: to } }, status: "OK" },
     include: { tradingPair: { select: { exchangeSymbol: true } } },
+    orderBy: { createdAt: "desc" },
   });
 
-  const seenMarkets = new Set<string>();
-  const topRows: typeof topCandidates = [];
-
-  for (const row of topCandidates) {
+  const latestPerMarket = new Map<string, (typeof dayRows)[number]>();
+  for (const row of dayRows) {
+    // Newest first, so the first row seen for a market is its most recent read.
     const market = `${row.tradingPair.exchangeSymbol}:${row.timeframe}`;
-    if (seenMarkets.has(market)) continue;
-    seenMarkets.add(market);
-    topRows.push(row);
-    if (topRows.length === 5) break;
+    if (!latestPerMarket.has(market)) latestPerMarket.set(market, row);
   }
+
+  const daily = buildShortlist(
+    [...latestPerMarket.values()].map((row) => ({
+      symbol: row.tradingPair.exchangeSymbol,
+      timeframe: row.timeframe as string,
+      analysisStatus: row.analysisStatus,
+      score: row.score,
+      riskReward: row.riskReward === null ? null : Number(row.riskReward),
+      riskRewardIsSynthetic: row.riskRewardIsSynthetic,
+      ok: true,
+      lifecycleStatus: row.lifecycleStatus,
+      trackedSetupId: row.trackedSetupId,
+      analysedAtCandle: row.analysedAtCandle === null ? null : Number(row.analysedAtCandle),
+      trend: row.trend,
+      mtfAgreement: row.mtfAgreement,
+      regimeDirection: row.regimeDirection,
+    })),
+  );
+
+  const topRows = daily.top5;
 
   const summary: DailySummaryFacts = {
     date,
@@ -397,11 +412,11 @@ export async function buildDailySummary(input: {
     setupsCreated: sum((r) => r.setupsCreated),
     confirmations: sum((r) => r.stateChanges),
     invalidations: sum((r) => r.invalidations),
-    topRanked: topRows.map((row) => ({
-      symbol: row.tradingPair.exchangeSymbol,
-      timeframe: row.timeframe,
-      analysisStatus: row.analysisStatus ?? "UNKNOWN",
-      score: row.score,
+    topRanked: topRows.map((candidate) => ({
+      symbol: candidate.symbol,
+      timeframe: candidate.timeframe,
+      analysisStatus: candidate.analysisStatus,
+      score: candidate.score,
     })),
   };
 

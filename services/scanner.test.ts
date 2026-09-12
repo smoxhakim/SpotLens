@@ -299,3 +299,90 @@ describe("aborting", () => {
     expect(summary.analysed).toBe(45);
   });
 });
+
+/**
+ * Phase L: a pass produces its own shortlist.
+ *
+ * The shortlist is a view of the results the pass just produced — it adds no
+ * analysis and can see nothing the pass did not. These tests pin the boundary:
+ * the full result set is still returned, and the shortlist is a subset of it.
+ */
+describe("shortlist", () => {
+  it("comes back with every pass, built from that pass alone", async () => {
+    const summary = await runScan({
+      userId: "u1",
+      markets: universe(6),
+      timeframes: ["H1"],
+      now: AFTER_CLOSE,
+    });
+
+    expect(summary.shortlist.totalAnalysed).toBe(summary.results.length);
+    expect(summary.shortlist.rankingVersion).toBeGreaterThan(0);
+
+    // Every candidate is one of this pass's own results.
+    const passed = new Set(summary.results.map((r) => `${r.symbol}:${r.timeframe}`));
+    for (const c of summary.shortlist.allEligible) {
+      expect(passed.has(`${c.symbol}:${c.timeframe}`)).toBe(true);
+    }
+  });
+
+  it("never shortlists more than the pass analysed", async () => {
+    const summary = await runScan({
+      userId: "u1",
+      markets: universe(8),
+      timeframes: ["H1", "H4"],
+      now: AFTER_CLOSE,
+    });
+
+    expect(summary.shortlist.totalEligible).toBeLessThanOrEqual(summary.results.length);
+    expect(summary.shortlist.top5.length).toBeLessThanOrEqual(5);
+    // The broad scan is untouched: every market is still analysed and returned.
+    expect(summary.results).toHaveLength(16);
+    expect(summary.analysed).toBe(16);
+  });
+
+  it("keeps the shortlist a prefix-consistent view of one ranking", async () => {
+    const summary = await runScan({
+      userId: "u1",
+      markets: universe(20),
+      timeframes: ["H1"],
+      now: AFTER_CLOSE,
+    });
+
+    const { shortlist } = summary;
+    expect(shortlist.top5).toEqual(shortlist.allEligible.slice(0, 5));
+    expect(shortlist.top10).toEqual(shortlist.allEligible.slice(0, 10));
+    expect(shortlist.top15).toEqual(shortlist.allEligible.slice(0, 15));
+  });
+
+  it("produces the identical shortlist for an identical pass", async () => {
+    const options = {
+      userId: "u1",
+      markets: universe(10),
+      timeframes: ["H1" as const],
+      now: AFTER_CLOSE,
+    };
+
+    const first = await runScan(options);
+    const second = await runScan(options);
+
+    expect(JSON.stringify(first.shortlist)).toBe(JSON.stringify(second.shortlist));
+  });
+
+  it("excludes a market that failed rather than ranking it", async () => {
+    getCandles.mockImplementation(async (q: { exchangeSymbol: string }) => {
+      if (q.exchangeSymbol === "SYM00USDT") throw new MarketDataError("TIMEOUT", "too slow");
+      return { candles: BULLISH };
+    });
+
+    const summary = await runScan({
+      userId: "u1",
+      markets: universe(4),
+      timeframes: ["H1"],
+      now: AFTER_CLOSE,
+    });
+
+    expect(summary.shortlist.excluded.FAILED).toBeGreaterThanOrEqual(1);
+    expect(summary.shortlist.allEligible.some((c) => c.symbol === "SYM00USDT")).toBe(false);
+  });
+});

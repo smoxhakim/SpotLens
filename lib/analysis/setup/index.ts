@@ -168,7 +168,7 @@ export { calculateTakeProfits } from "./take-profit";
 export { calculateRiskReward } from "./risk-reward";
 export { calculatePositionSize } from "./position-size";
 export type { PositionSizeInput, PositionSizeResult } from "./position-size";
-export { scoreSetup, SCORE_WEIGHTS } from "./score";
+export { scoreSetup, gradeFor, SCORE_WEIGHTS } from "./score";
 export type { SetupScore, SetupGrade, ScoreCategory } from "./score";
 export { determineStatus, STATUS_LABELS } from "./status";
 export { MIN_ACCEPTABLE_RR, GOOD_RR } from "./types";

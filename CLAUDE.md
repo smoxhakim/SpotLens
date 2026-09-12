@@ -57,6 +57,24 @@ make that unnecessary most of the time.
   `lib/scanner`. It reads **closed candles only** — the forming candle is
   dropped before the engine sees it, which is what makes a repeated scan
   idempotent. It knows nothing about notifications.
+- **The shortlist prioritises; it never analyses.** The scanner keeps covering
+  the whole curated universe — 45 markets on H1 and H4, 90 analyses — because
+  the problem was never coverage, it was that nobody reads ninety of anything.
+  `lib/scanner/shortlist.ts` filters and orders what the engine already decided:
+  `exclusionFor` admits POTENTIAL_SETUP outright and WAIT_FOR_CONFIRMATION only
+  at MODERATE or better with a **measured** reward, and refuses HIGH_RISK and
+  AVOID entirely. There is exactly **one canonical order** — rank, then spread
+  across markets — and `top5`/`top10`/`top15` are prefixes of it, so a candidate
+  cannot be fifth on one view and eleventh on another. Every eligible result
+  stays in `allEligible`, every result stays in the database, and a candidate
+  carries its `trackedSetupId` so it opens its own analysis. The shortlist
+  computes no indicator, reads no clock and adds no score: "Quality 88/100" is
+  the engine's number, and it is not a probability.
+- **A shortlist belongs to one scanner run.** `getShortlist` reads the rows of a
+  single `scannerRunId`, so yesterday's BTC cannot appear beside this morning's
+  ETH. The daily summary is the one deliberate exception — it is a day-scoped
+  aggregate — and it takes the most recent read per market and then ranks it
+  through the same `buildShortlist`, rather than ordering in SQL as it used to.
 - **The notification layer consumes truth, it never re-derives it.**
   `lib/notifications` maps Phase D lifecycle events onto messages; Phase D
   decides whether a setup moved and Phase C decides what the market did.
@@ -147,7 +165,7 @@ lib/
   indicators/   EMA, RSI, ATR, volume
   backtesting/  bar-by-bar replay
   setups/       setup identity + lifecycle planner (pure; no DB)
-  scanner/      scheduling, concurrency, retries, ranking (pure; no I/O)
+  scanner/      scheduling, concurrency, retries, ranking, shortlist (pure)
   notifications/ event mapping, dedupe keys, Telegram formatting (pure)
   journal/      decision states and their legal transitions (pure)
   replay/       the cutoff: what was knowable at a moment (pure)

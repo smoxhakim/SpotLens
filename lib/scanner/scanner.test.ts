@@ -277,7 +277,8 @@ describe("deterministic ranking", () => {
     score: number | null,
     riskReward: number | null = null,
     riskRewardIsSynthetic = false,
-  ) => ({ symbol, analysisStatus, score, riskReward, riskRewardIsSynthetic });
+    timeframe = "H1",
+  ) => ({ symbol, timeframe, analysisStatus, score, riskReward, riskRewardIsSynthetic });
 
   it("puts a potential setup above everything else", () => {
     const ranked = rankResults([
@@ -317,6 +318,18 @@ describe("deterministic ranking", () => {
     expect(rankResults([a, b]).map((r) => r.symbol)).toEqual(["AAA", "ZZZ"]);
     // And the same list sorts the same way whichever order it arrived in.
     expect(rankResults([b, a]).map((r) => r.symbol)).toEqual(["AAA", "ZZZ"]);
+  });
+
+  it("breaks a tie between one market's two timeframes", () => {
+    // A pass analyses every market on every scheduled timeframe, so this pair
+    // is equal on status, score and reward. Before the timeframe tie-break the
+    // order fell out of the sort's stability, which made it depend on the order
+    // the jobs were built in rather than on a rule.
+    const h1 = make("BTCUSDT", "WAIT_FOR_CONFIRMATION", 70, 2, false, "H1");
+    const h4 = make("BTCUSDT", "WAIT_FOR_CONFIRMATION", 70, 2, false, "H4");
+
+    expect(rankResults([h4, h1]).map((r) => r.timeframe)).toEqual(["H1", "H4"]);
+    expect(rankResults([h1, h4]).map((r) => r.timeframe)).toEqual(["H1", "H4"]);
   });
 
   it("sinks failed markets below every analysed one", () => {

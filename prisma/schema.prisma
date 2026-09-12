@@ -647,6 +647,15 @@ model ScannerResult {
   trackedSetupId  String?
   lifecycleStatus SetupLifecycleStatus?
 
+  // --- context for the shortlist's explanation, as it stood on this pass ----
+  /// Read off the analysis this pass produced rather than a stored setup's
+  /// snapshot: a snapshot is frozen at creation, and presenting a days-old
+  /// trend as current is the mistake the notification layer already made once.
+  /// Null on rows written before these columns existed.
+  trend           String?
+  mtfAgreement    String?
+  regimeDirection String?
+
   failureCategory ScannerFailureCategory?
   /// A short, sanitised message. Never a stack trace.
   failureMessage  String?
