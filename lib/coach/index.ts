@@ -27,6 +27,20 @@ export {
   type CoachProvider,
 } from "./provider";
 
+export { DEFAULT_COACH_MODEL, resolveCoachProvider, type CoachProviderChoice } from "./config";
+
+export { CoachProviderFailure, buildRequestBody, createOpenAiCoach } from "./openai";
+
+export {
+  COACH_JSON_SCHEMA,
+  COACH_SYSTEM_PROMPT,
+  coachResponseSchema,
+  serialiseContext,
+  type CoachModelResponse,
+} from "./prompt";
+
+export { cacheKeyFor, clearCoachCache, coachCacheSize } from "./cache";
+
 export {
   VERDICT_LABELS,
   type CoachContext,

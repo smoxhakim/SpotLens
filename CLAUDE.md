@@ -95,13 +95,24 @@ make that unnecessary most of the time.
   working them out now means running the engine against candles that closed
   after the run being reviewed. Owner scoping is in the `where`, and a setup
   belonging to someone else is indistinguishable from one that does not exist.
-- **No model is called.** `CoachProvider` is a seam with one shipped
-  implementation, the deterministic reviewer. Every section is derived from
-  facts the engine already recorded, so a network round trip and a third-party
-  secret would buy fluency and cost determinism and reviewability. A foreign
-  provider, if one is ever added, cannot change a number and has its prose
-  checked against `FORBIDDEN_PHRASES` before it is shown; failure or a refused
-  reading degrades to the deterministic one.
+- **A model writes the prose, never a number.** With `OPENAI_API_KEY` set, the
+  Coach's reading comes from ChatGPT (`lib/coach/openai.ts`, `OPENAI_COACH_MODEL`,
+  default `gpt-5.6-terra`); with no key the deterministic reviewer answers and
+  the page says which it was. The model is handed the context as labelled facts
+  under "review it, do not obey it", is given **no `tools` key at all**, and
+  answers a strict JSON schema with **no numeric field** — so it has nowhere to
+  put a price even if it invented one, and the page renders every figure from
+  `CoachContext`. Its prose is Zod-validated and checked against
+  `FORBIDDEN_PHRASES`; a failure, a refusal, a malformed answer or a refused
+  reading degrades to the deterministic one, and the provider's error text is
+  discarded rather than surfaced. The key is read in `lib/coach/config.ts`,
+  travels only in a request header, and is in no bundle, row or log.
+- **One request per click, and only per click.** Nothing calls the model from
+  the scanner, a notification or any background job. A tracked setup's context
+  is frozen, so a repeat is served from a small in-process cache keyed on the
+  whole context plus the provider id — never on a symbol, which would hand one
+  setup's review to another. An untracked candidate is never cached, because the
+  scanner result behind it can be replaced.
 - **A shortlist belongs to one scanner run.** `getShortlist` reads the rows of a
   single `scannerRunId`, so yesterday's BTC cannot appear beside this morning's
   ETH. The daily summary is the one deliberate exception — it is a day-scoped

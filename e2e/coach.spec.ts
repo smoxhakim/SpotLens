@@ -251,6 +251,57 @@ test.describe("coach review", () => {
     expect(text).not.toContain(strangerEmail);
   });
 
+  test("labels the reading, and never claims a model wrote one that did not", async ({ page }) => {
+    test.setTimeout(120_000);
+
+    await page.goto("/login");
+    await page.getByLabel("Email").fill(email);
+    await page.getByLabel("Password").fill(password);
+    await page.getByRole("button", { name: "Sign in" }).click();
+    await expect(page.getByRole("heading", { name: "Dashboard" })).toBeVisible({ timeout: 30_000 });
+
+    await page.goto(`/coach?symbol=XTZUSDT&tf=H1&runId=${runId}&setupId=${setupId}`);
+    await expect(page.getByRole("heading", { name: "Coach", exact: true })).toBeVisible({
+      timeout: 30_000,
+    });
+
+    // The suite runs with no OPENAI_API_KEY, so the deterministic reviewer
+    // answers — and the page says so rather than implying an AI wrote it. A key
+    // in the environment would show the "AI Coach review" banner instead;
+    // either way the page never leaves the reader guessing.
+    //
+    // Polled rather than read once: the heading is server-rendered and appears
+    // before the review has loaded, so a single innerText catches the skeleton.
+    await expect
+      .poll(
+        async () => {
+          const text = await page.locator("main").innerText();
+          return (
+            text.includes("SpotLens's own deterministic reading") ||
+            text.includes("AI Coach review") ||
+            text.includes("AI Coach was unavailable")
+          );
+        },
+        { timeout: 30_000, message: "the page did not say which kind of reading this is" },
+      )
+      .toBe(true);
+
+    // Whichever answered, no key and no provider detail reaches the browser.
+    const html = await page.content();
+    expect(html).not.toMatch(/sk-[A-Za-z0-9_-]{12,}/);
+    expect(html).not.toContain("api.openai.com");
+    expect(html).not.toContain("OPENAI_API_KEY");
+
+    // And the API does not hand the model id out either.
+    const api = await page.request.get(
+      `/api/coach?symbol=XTZUSDT&tf=H1&runId=${runId}&setupId=${setupId}`,
+    );
+    const payload = await api.json();
+    expect(["MODEL", "DETERMINISTIC"]).toContain(payload.source);
+    expect(JSON.stringify(payload)).not.toMatch(/sk-[A-Za-z0-9_-]{12,}/);
+    expect(JSON.stringify(payload)).not.toContain("api.openai.com");
+  });
+
   test("refuses an unauthenticated caller and a malformed reference", async ({ request }) => {
     const anonymous = await request.get(`/api/coach?symbol=XTZUSDT&tf=H1&runId=${runId}`);
     expect(anonymous.status()).toBe(401);

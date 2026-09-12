@@ -22,6 +22,13 @@ const schema = z.object({
   NEXTAUTH_URL: z.string().url().optional(),
   UPSTASH_REDIS_REST_URL: z.string().url().optional(),
   UPSTASH_REDIS_REST_TOKEN: z.string().optional(),
+  /**
+   * The Coach's provider key. Optional on purpose: with none configured the
+   * Coach answers with its own deterministic reading, so the feature works
+   * offline and the test suite never needs a key.
+   */
+  OPENAI_API_KEY: z.string().min(1).optional(),
+  OPENAI_COACH_MODEL: z.string().min(1).optional(),
 });
 
 export type Env = z.infer<typeof schema>;

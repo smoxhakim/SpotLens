@@ -37,6 +37,8 @@ interface CoachResponse {
   context: CoachContext;
   review: CoachReview;
   degraded: boolean;
+  /** Whether a model wrote the prose, or SpotLens's own reading did. */
+  source: "MODEL" | "DETERMINISTIC";
 }
 
 /** Restrained: a verdict is a reading of evidence, never a rating of a trade. */
@@ -152,19 +154,41 @@ export function CoachReviewView({
     );
   }
 
-  const { context, review, degraded } = query.data;
+  const { context, review, degraded, source } = query.data;
   const levels = context.levels;
 
   return (
     <div className="space-y-4">
-      {degraded && (
-        <Alert variant="muted">
-          <AlertDescription className="text-[11px] leading-relaxed">
-            The review below is SpotLens&apos;s own deterministic reading. Nothing is missing from
-            it — the numbers and the evidence are the same either way.
-          </AlertDescription>
-        </Alert>
-      )}
+      {/* Which reading this is, said plainly. A reader deciding how much weight
+          to give a paragraph deserves to know whether a model wrote it, and a
+          page that quietly swapped between the two would be the worse
+          failure — the numbers are identical either way, the prose is not. */}
+      <Alert variant="muted">
+        <AlertDescription className="space-y-1 text-[11px] leading-relaxed">
+          {degraded ? (
+            <p>
+              <span className="font-medium text-foreground">
+                The AI Coach was unavailable, so this is SpotLens&apos;s own reading.
+              </span>{" "}
+              Nothing is missing from it — the numbers and the evidence are the same either way.
+            </p>
+          ) : source === "MODEL" ? (
+            <p>
+              <span className="font-medium text-foreground">AI Coach review.</span> The
+              interpretation below is generated from the SpotLens analysis on this page. It does not
+              execute trades and does not replace SpotLens&apos;s deterministic levels — every
+              number here is SpotLens&apos;s, and the model was never asked for one.
+            </p>
+          ) : (
+            <p>
+              <span className="font-medium text-foreground">
+                SpotLens&apos;s own deterministic reading.
+              </span>{" "}
+              No AI Coach is configured, so this is the engine explaining its own analysis.
+            </p>
+          )}
+        </AlertDescription>
+      </Alert>
 
       {/* --- what this is, and how it reads ------------------------------- */}
       <Card>
