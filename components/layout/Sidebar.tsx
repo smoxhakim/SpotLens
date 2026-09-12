@@ -12,6 +12,7 @@ import {
   NotebookPen,
   Radar,
   Settings,
+  Target,
   type LucideIcon,
 } from "lucide-react";
 import Link from "next/link";
@@ -30,6 +31,9 @@ interface NavItem {
 
 const NAV: NavItem[] = [
   { href: "/", label: "Dashboard", icon: LayoutDashboard },
+  // The intended daily starting point: the scanner covers everything, this is
+  // the few worth reading. It sits above the detailed surfaces it leads into.
+  { href: "/opportunities", label: "Opportunities", icon: Target },
   { href: "/market-analysis", label: "Market Analysis", icon: LineChart },
   { href: "/watchlist", label: "Watchlist", icon: Eye },
   { href: "/setups", label: "Setups", icon: History },

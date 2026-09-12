@@ -70,6 +70,18 @@ make that unnecessary most of the time.
   carries its `trackedSetupId` so it opens its own analysis. The shortlist
   computes no indicator, reads no clock and adds no score: "Quality 88/100" is
   the engine's number, and it is not a probability.
+- **Top Opportunities renders the shortlist; it never produces one.**
+  `/opportunities` is the intended daily surface: the scanner covers everything,
+  this is the few worth reading. `features/opportunities` fetches the whole
+  eligible list once (`size=ALL`) and every view is a _prefix_ of it — Top 5 is
+  the default, and Top 10 and Top 15 extend the same order rather than replacing
+  it. The timeframe filter removes entries and never reorders them, and each
+  card shows its canonical rank so a filtered list still says where its entries
+  sit in the whole. There is no comparator anywhere in the UI: it imports label
+  constants and types from `lib/`, and nothing that computes. `/coach` is the
+  handoff destination and a placeholder until Phase N — it carries references
+  (symbol, timeframe, setup id), never a copy of the analysis, calls no model,
+  and says plainly that no review has happened.
 - **A shortlist belongs to one scanner run.** `getShortlist` reads the rows of a
   single `scannerRunId`, so yesterday's BTC cannot appear beside this morning's
   ETH. The daily summary is the one deliberate exception — it is a day-scoped
@@ -159,7 +171,7 @@ Dynamic `params` are Promises and must be awaited — Next 15+ behaviour.
 
 ```
 app/            routes + API handlers
-features/       UI per feature (market, analysis, watchlist, learning, ...)
+features/       UI per feature (market, analysis, opportunities, watchlist, ...)
 lib/
   analysis/     the engine — pure, deterministic, no I/O
   indicators/   EMA, RSI, ATR, volume

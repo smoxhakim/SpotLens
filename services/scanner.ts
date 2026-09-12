@@ -533,6 +533,9 @@ export async function getShortlist(input: { runId?: string; limit?: number } = {
       status: run.status,
       timeframes: run.timeframes,
       triggeredBy: run.triggeredBy,
+      /// How many markets the pass covered, so a reader can see the breadth the
+      /// shortlist was drawn from rather than only the few it kept.
+      marketCount: run.marketCount,
     },
     shortlist,
   };
