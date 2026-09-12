@@ -5,6 +5,7 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { AnalysisHistory } from "@/features/analysis/components/AnalysisHistory";
 import { MarketDirectory } from "@/features/market/components/MarketDirectory";
+import { OpportunitiesPreview } from "@/features/opportunities/components/OpportunitiesPreview";
 import { ANALYSIS_DISCLAIMER, SPOT_ONLY_NOTE } from "@/lib/constants/disclaimers";
 import { listMarkets } from "@/services/markets";
 
@@ -41,14 +42,16 @@ export default async function DashboardPage() {
           </CardHeader>
           <CardContent>
             <Link
-              href="/market-analysis?pair=BTCUSDT&tf=H1"
+              href="/opportunities"
               className="inline-flex items-center gap-1 text-sm text-primary underline underline-offset-2"
             >
-              Open BTC/USDT chart <ArrowRight className="h-3.5 w-3.5" />
+              Top opportunities <ArrowRight className="h-3.5 w-3.5" />
             </Link>
           </CardContent>
         </Card>
       </div>
+
+      <OpportunitiesPreview />
 
       <AnalysisHistory />
 
