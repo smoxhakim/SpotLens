@@ -78,6 +78,11 @@ export async function GET(req: NextRequest) {
       // True when a provider failed or answered with something the rules
       // refused, and the deterministic reading was shown instead.
       degraded: lookup.degraded,
+      // Which kind of reading this is, so the page can say so rather than
+      // letting the reader guess whether a model was involved. The model *id*
+      // is deliberately not returned — it is configuration, not something a
+      // browser needs, and the key it sits beside never leaves the server.
+      source: lookup.result.review.providerId.startsWith("openai:") ? "MODEL" : "DETERMINISTIC",
     });
   } catch (err) {
     return handleRouteError(err, "GET /api/coach");

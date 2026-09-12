@@ -1,3 +1,4 @@
+import { cachedReview, rememberReview } from "./cache";
 import { buildDeterministicReview } from "./review";
 import { FORBIDDEN_PHRASES, isSafeReview } from "./rules";
 import type { CoachContext, CoachReview } from "./types";
@@ -65,6 +66,11 @@ export async function reviewWith(
     return { review: await provider.review(context), degraded: false };
   }
 
+  // A frozen context asked twice is the same question. Only tracked setups are
+  // eligible, and the key covers every field — see `cache.ts`.
+  const remembered = cachedReview(context, provider.id);
+  if (remembered) return { review: remembered, degraded: false };
+
   try {
     const review = await provider.review(context);
 
@@ -76,8 +82,17 @@ export async function reviewWith(
     // them against — they are rendered from the context. What is checked is
     // that the provider did not put language in the review that the product
     // does not permit, which `isSafeReview` decides against FORBIDDEN_PHRASES.
+    //
+    // Only a reading that passed is remembered: caching a refused one would
+    // mean serving it without the check that refused it.
+    rememberReview(context, provider.id, review);
     return { review, degraded: false };
   } catch {
+    // A provider failing is not an error the reader needs to see. The
+    // deterministic reading needs nothing but the context already in hand, so
+    // the page degrades to it rather than to an error — and the analysis
+    // underneath is untouched either way. The provider's own message is
+    // discarded here rather than surfaced: it is the one place a key could be.
     return { review: buildDeterministicReview(context), degraded: true };
   }
 }

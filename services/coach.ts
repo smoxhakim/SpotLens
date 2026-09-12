@@ -5,7 +5,7 @@ import { prisma } from "@/lib/db/prisma";
 import {
   contextFromScannerCandidate,
   contextFromTrackedSetup,
-  deterministicProvider,
+  resolveCoachProvider,
   reviewWith,
   type CoachProvider,
   type CoachResult,
@@ -44,9 +44,16 @@ export interface CoachRequest {
   setupId?: string | null;
 }
 
+/**
+ * The provider a request uses.
+ *
+ * Resolved per call rather than at module load so a test can pass its own and
+ * the default is never a live one by accident. With no key configured this is
+ * the deterministic reviewer, which is what keeps the suite offline and free.
+ */
 export async function buildCoachReview(
   request: CoachRequest,
-  provider: CoachProvider = deterministicProvider,
+  provider: CoachProvider = resolveCoachProvider().provider,
 ): Promise<CoachLookup> {
   // The run is resolved first and always, even for a tracked setup: it is the
   // context the reader was looking at, and a review that silently accepted an

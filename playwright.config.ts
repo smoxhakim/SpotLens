@@ -31,6 +31,12 @@ export default defineConfig({
     // keep in step. Only applied to a server Playwright starts: a reused one is
     // already running on the port its own environment names.
     env: {
+      // The Coach answers with its deterministic reading for the suite, never
+      // ChatGPT. A key in `.env` would otherwise make every run billable, slow
+      // and dependent on a third party being up — and the review's wording
+      // would change between runs, which no assertion could survive. Live
+      // provider testing is done deliberately and by hand.
+      OPENAI_API_KEY: "",
       NEXTAUTH_URL: baseURL,
       AUTH_URL: baseURL,
       AUTH_TRUST_HOST: "true",
