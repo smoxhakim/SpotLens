@@ -12,7 +12,12 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { fetchApi } from "@/features/market/hooks/fetch-api";
 import { TIMEFRAME_LABELS, type Timeframe } from "@/lib/market-data/provider";
-import type { NotificationEventType, NotificationPriority } from "@/lib/notifications";
+import {
+  toneForNotification,
+  type NotificationEventType,
+  type NotificationPriority,
+  type NotificationTone,
+} from "@/lib/notifications";
 import { cn } from "@/lib/utils";
 
 interface NotificationRow {
@@ -28,14 +33,20 @@ interface NotificationRow {
   createdAt: string;
 }
 
-/** Presentation only — the meaning of each type is decided in `lib/notifications`. */
-const TYPE_TONE: Record<NotificationEventType, string> = {
-  SETUP_DETECTED: "text-bullish",
-  CONFIRMATION_DETECTED: "text-bullish",
-  SETUP_INVALIDATED: "text-bearish",
-  STRUCTURE_CHANGED: "text-amber-600 dark:text-amber-400",
-  DAILY_SUMMARY: "text-muted-foreground",
-  SYSTEM_ERROR: "text-bearish",
+/**
+ * Presentation only — which tone a row carries is decided in `lib/notifications`.
+ *
+ * Keyed by tone rather than by event type, because the two are not the same
+ * thing: a re-anchored setup and a failed one are both `SETUP_INVALIDATED`, and
+ * colouring a piece of bookkeeping in the failure colour tells the reader a
+ * level broke when none did.
+ */
+const TONE_CLASS: Record<NotificationTone, string> = {
+  POSITIVE: "text-bullish",
+  INFO: "text-sky-600 dark:text-sky-400",
+  NEGATIVE: "text-bearish",
+  WARNING: "text-amber-600 dark:text-amber-400",
+  NEUTRAL: "text-muted-foreground",
 };
 
 export function NotificationList() {
@@ -128,7 +139,9 @@ export function NotificationList() {
             <Card className={cn(!n.read && "border-primary/40")}>
               <CardContent className="space-y-1 p-3">
                 <div className="flex flex-wrap items-baseline gap-2">
-                  <span className={cn("text-xs font-semibold", TYPE_TONE[n.type])}>{n.title}</span>
+                  <span className={cn("text-xs font-semibold", TONE_CLASS[toneForNotification(n)])}>
+                    {n.title}
+                  </span>
                   {!n.read && (
                     <Badge variant="outline" className="text-[9px]">
                       new

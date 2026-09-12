@@ -18,7 +18,7 @@ import {
   formatConnectionTest,
   formatForTelegram,
 } from "./telegram-format";
-import { renderInApp } from "./render";
+import { IN_APP_MARKERS, renderInApp, toneForNotification } from "./render";
 import { MAX_SEND_ATTEMPTS, parseUpdates, sendTelegramMessage } from "./telegram-provider";
 import {
   DEFAULT_PREFERENCES,
@@ -957,5 +957,118 @@ describe("no database enum reaches a reader", () => {
 
     expect(message).not.toContain("SOMETHING_NEW");
     expect(message).toContain("Something new");
+  });
+});
+
+/**
+ * A re-anchored setup and a failed one are both SETUP_INVALIDATED, and the
+ * stored row carries no flag that separates them. The tone has to come from
+ * what the renderer wrote, or the list paints bookkeeping in the failure colour
+ * and tells the reader a level broke when none did.
+ */
+describe("in-app tone", () => {
+  const replacement = event({
+    type: "SETUP_INVALIDATED",
+    setup: setupFacts({
+      lifecycleStatus: "INVALIDATED",
+      isReplacement: true,
+      replacementZoneLow: 98.5,
+      replacementZoneHigh: 101.25,
+    }),
+  });
+
+  const genuine = event({
+    type: "SETUP_INVALIDATED",
+    setup: setupFacts({ lifecycleStatus: "INVALIDATED" }),
+  });
+
+  it("never gives a re-anchored setup the tone of a failed one", () => {
+    const row = { type: replacement.type, ...renderInApp(replacement) };
+
+    expect(toneForNotification(row)).toBe("NEUTRAL");
+    expect(toneForNotification(row)).not.toBe(
+      toneForNotification({
+        type: genuine.type,
+        ...renderInApp(genuine),
+      }),
+    );
+  });
+
+  it("still marks a genuine invalidation as one", () => {
+    expect(toneForNotification({ type: genuine.type, ...renderInApp(genuine) })).toBe("NEGATIVE");
+  });
+
+  it.each([
+    ["SETUP_DETECTED", "POSITIVE"],
+    ["CONFIRMATION_DETECTED", "INFO"],
+    ["STRUCTURE_CHANGED", "WARNING"],
+    ["DAILY_SUMMARY", "NEUTRAL"],
+    ["SYSTEM_ERROR", "NEGATIVE"],
+  ] as const)("gives %s the %s tone", (type, tone) => {
+    const e = event({
+      type,
+      setup: type === "DAILY_SUMMARY" || type === "SYSTEM_ERROR" ? null : setupFacts(),
+      summary:
+        type === "DAILY_SUMMARY"
+          ? {
+              date: "2026-09-12",
+              runs: 1,
+              marketsScanned: 45,
+              analysesByTimeframe: [],
+              potentialSetups: 0,
+              waiting: 0,
+              highRisk: 0,
+              avoided: 0,
+              failures: 0,
+              setupsCreated: 0,
+              confirmations: 0,
+              invalidations: 0,
+              topRanked: [],
+            }
+          : null,
+      systemError:
+        type === "SYSTEM_ERROR"
+          ? {
+              category: "MARKET_DATA_ERROR",
+              symbol: "BTCUSDT",
+              timeframe: "H1",
+              message: "TIMEOUT",
+              affectedMarkets: 1,
+            }
+          : null,
+    });
+
+    expect(toneForNotification({ type, ...renderInApp(e) })).toBe(tone);
+  });
+
+  it("falls back to the event type for a row written before the markers existed", () => {
+    // The 166 rows already in the database have no marker, and none of them was
+    // ever distinguished as a replacement, so the type is the right answer.
+    expect(
+      toneForNotification({ type: "SETUP_INVALIDATED", title: "Setup invalidated — BTCUSDT H1" }),
+    ).toBe("NEGATIVE");
+    expect(
+      toneForNotification({ type: "SETUP_DETECTED", title: "Potential setup — BTCUSDT H1" }),
+    ).toBe("POSITIVE");
+  });
+
+  it("opens every in-app title with a marker the tone lookup recognises", () => {
+    const markers = Object.values(IN_APP_MARKERS);
+
+    for (const type of [
+      "SETUP_DETECTED",
+      "CONFIRMATION_DETECTED",
+      "SETUP_INVALIDATED",
+      "STRUCTURE_CHANGED",
+    ] as const) {
+      const title = renderInApp(event({ type })).title;
+      expect(
+        markers.some((m) => title.startsWith(m)),
+        `${type}: ${title}`,
+      ).toBe(true);
+    }
+
+    // And the replacement, which is the one the type cannot express.
+    expect(renderInApp(replacement).title.startsWith(IN_APP_MARKERS.reAnchored)).toBe(true);
   });
 });
