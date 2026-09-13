@@ -20,11 +20,17 @@ import {
   DEFAULT_CLOSE_DELAY_MS,
   DEFAULT_SCAN_TIMEFRAMES,
   nextScanWindow,
+  settlementDelayMs,
   sleep,
 } from "@/lib/scanner";
 import { buildDailySummary, eventsFromScan } from "@/services/notification-events";
 import { deliverEvents } from "@/services/notifications";
-import { DEFAULT_MAX_CONCURRENCY, resolveScannerUserId, runScan } from "@/services/scanner";
+import {
+  DEFAULT_MAX_CONCURRENCY,
+  describeScannerUserFailure,
+  resolveScannerUser,
+  runScan,
+} from "@/services/scanner";
 import { timeframeSchema } from "@/lib/market-data/schema";
 
 const once = process.argv.includes("--once");
@@ -177,16 +183,18 @@ async function maybeSendDailySummary(userId: string) {
 }
 
 async function main() {
-  const userId = await resolveScannerUserId(process.env.SCANNER_USER_EMAIL);
+  const owner = await resolveScannerUser(process.env.SCANNER_USER_EMAIL);
 
-  if (!userId) {
-    log(
-      "No account found. The scanner tracks setups against an owner — create one at /register, " +
-        "or set SCANNER_USER_EMAIL to pick between several.",
-    );
+  // Refused before anything is scanned, because the owner decides who every
+  // setup, lifecycle event and notification belongs to. A pass that guessed
+  // would write all of it against the wrong account.
+  if (!owner.ok) {
+    log(describeScannerUserFailure(owner.failure));
     process.exitCode = 1;
     return;
   }
+
+  const userId = owner.userId;
 
   log(
     `Universe: every active curated market · timeframes ${timeframes.join(", ")} · ` +
@@ -194,6 +202,22 @@ async function main() {
   );
 
   if (once) {
+    // The same settlement policy the schedule uses. Zero almost always, and a
+    // short wait when this pass happens to land in the window just after a
+    // candle closed — where the exchange may not have finished settling the bar
+    // this scan is about to read. Analysing it early is what churned setups for
+    // markets that had not moved.
+    const settle = settlementDelayMs(timeframes, Date.now(), closeDelayMs);
+
+    if (settle > 0) {
+      log(
+        `A candle closed moments ago. Waiting ${Math.ceil(settle / 1000)}s for the exchange to ` +
+          "settle it — set SCANNER_CLOSE_DELAY_MS=0 to scan immediately instead.",
+      );
+      await sleep(settle, controller.signal);
+      if (controller.signal.aborted) return;
+    }
+
     await scan("MANUAL", timeframes, userId);
     // Reachable from a single pass too. The dedupe key is the UTC date, so
     // running `scanner:once` five times in an afternoon still produces exactly
