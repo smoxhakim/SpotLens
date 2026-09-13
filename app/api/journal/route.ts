@@ -47,7 +47,22 @@ export async function POST(req: NextRequest) {
     if (json === null) return apiError("INVALID_REQUEST", "A JSON body is required.", 400);
 
     const body = journalCreateSchema.parse(json);
-    const result = await createEntry({ userId: guard.userId, ...body });
+
+    const result = await createEntry({
+      userId: guard.userId,
+      target:
+        "trackedSetupId" in body
+          ? { kind: "TRACKED", trackedSetupId: body.trackedSetupId }
+          : {
+              kind: "UNTRACKED",
+              scannerRunId: body.runId,
+              symbol: body.symbol,
+              timeframe: body.timeframe,
+            },
+      decision: body.decision,
+      notes: body.notes,
+      coach: body.coach ?? null,
+    });
 
     if (!result.ok) {
       // A setup owned by someone else is reported exactly as a missing one, so

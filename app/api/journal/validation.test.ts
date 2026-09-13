@@ -132,3 +132,101 @@ describe("POST /api/journal/:id/outcome", () => {
     }
   });
 });
+
+/**
+ * Phase O: what a decision may reference.
+ *
+ * The contract is references only. Neither shape carries an entry, a stop, a
+ * target or a ratio, so an edited request can change *which* opportunity is
+ * journaled and never what SpotLens said about it.
+ */
+describe("journalCreateSchema — Phase O", () => {
+  it("accepts a tracked setup", () => {
+    const parsed = journalCreateSchema.safeParse({
+      trackedSetupId: "44444444-4444-4444-8444-444444444444",
+      decision: "TAKEN",
+    });
+
+    expect(parsed.success).toBe(true);
+  });
+
+  it("accepts an untracked opportunity by the pass it was scored in", () => {
+    const parsed = journalCreateSchema.safeParse({
+      runId: "33333333-3333-4333-8333-333333333333",
+      symbol: "ethusdt",
+      timeframe: "H4",
+    });
+
+    expect(parsed.success).toBe(true);
+    if (!parsed.success) return;
+    expect(parsed.data).toMatchObject({ symbol: "ETHUSDT" });
+  });
+
+  it("refuses a mixture of the two", () => {
+    // Half a reference resolves to nothing. Both shapes are `.strict()`, so a
+    // request that names a setup *and* a run matches neither.
+    expect(
+      journalCreateSchema.safeParse({
+        trackedSetupId: "44444444-4444-4444-8444-444444444444",
+        runId: "33333333-3333-4333-8333-333333333333",
+        symbol: "ETHUSDT",
+        timeframe: "H4",
+      }).success,
+    ).toBe(false);
+  });
+
+  it("refuses any number travelling with a decision", () => {
+    // Every figure on the record is read from the row the references resolve
+    // to. A caller that could supply an entry price could supply a different
+    // one, which is the whole reason this is a reference and not a payload.
+    for (const extra of [
+      { entry: 100 },
+      { stopLoss: 96 },
+      { score: 99 },
+      { riskReward: 5 },
+      { decidedAt: 1 },
+    ]) {
+      expect(
+        journalCreateSchema.safeParse({
+          trackedSetupId: "44444444-4444-4444-8444-444444444444",
+          ...extra,
+        }).success,
+      ).toBe(false);
+    }
+  });
+
+  it("refuses a coach verdict the Coach cannot produce", () => {
+    expect(
+      journalCreateSchema.safeParse({
+        trackedSetupId: "44444444-4444-4444-8444-444444444444",
+        coach: { providerId: "openai:gpt-5.6-terra", verdict: "DEFINITELY_BUY" },
+      }).success,
+    ).toBe(false);
+  });
+
+  it("refuses an approval field on the coach reference", () => {
+    // There is no such concept, and `.strict()` is what keeps it that way.
+    expect(
+      journalCreateSchema.safeParse({
+        trackedSetupId: "44444444-4444-4444-8444-444444444444",
+        coach: {
+          providerId: "deterministic",
+          verdict: "MIXED_EVIDENCE",
+          approved: true,
+        },
+      }).success,
+    ).toBe(false);
+  });
+
+  it("refuses a malformed reference outright", () => {
+    for (const body of [
+      {},
+      { trackedSetupId: "not-a-uuid" },
+      { runId: "33333333-3333-4333-8333-333333333333", symbol: "ETHUSDT" },
+      { runId: "33333333-3333-4333-8333-333333333333", symbol: "ETH/USDT", timeframe: "H4" },
+      { runId: "33333333-3333-4333-8333-333333333333", symbol: "ETHUSDT", timeframe: "H2" },
+    ]) {
+      expect(journalCreateSchema.safeParse(body).success).toBe(false);
+    }
+  });
+});

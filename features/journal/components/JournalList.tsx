@@ -22,8 +22,22 @@ export interface JournalEntrySummary {
   decision: JournalDecision;
   skipReason: string | null;
   notes: string | null;
-  setupStatusAtDecision: string;
+  setupStatusAtDecision: string | null;
   decidedAt: string;
+  /** Which kind of record the decision was made against. */
+  source: "TRACKED_SETUP" | "SCANNER_RESULT";
+  symbol: string | null;
+  timeframe: Timeframe | null;
+  /** Whether a Coach review had been read. Never whether one approved anything. */
+  coachReviewed: boolean;
+  /** The scanner's verdict, for a market that was scored but never tracked. */
+  opportunity: {
+    runId: string;
+    scannedAt: string | null;
+    analysisStatus: string | null;
+    score: number | null;
+    scoreGrade: string | null;
+  } | null;
   setup: {
     id: string;
     symbol: string;
@@ -37,7 +51,7 @@ export interface JournalEntrySummary {
     score: number;
     scoreGrade: string;
     analysisStatus: string;
-  };
+  } | null;
   trade: { realizedR: number | null; netPnl: number | null } | null;
 }
 
@@ -118,7 +132,11 @@ export function JournalList() {
           <CardContent className="space-y-2 p-6 text-sm text-muted-foreground">
             <p>Nothing journaled yet.</p>
             <p className="text-[11px] leading-relaxed">
-              Open a tracked setup from{" "}
+              Pick something from{" "}
+              <Link href="/opportunities" className="underline">
+                Opportunities
+              </Link>{" "}
+              or{" "}
               <Link href="/setups" className="underline">
                 Setups
               </Link>{" "}
@@ -142,6 +160,9 @@ export function JournalList() {
 
 function EntryCard({ entry }: { entry: JournalEntrySummary }) {
   const meta = DECISION_META[entry.decision];
+  const setup = entry.setup;
+  const symbol = setup?.symbol ?? entry.symbol ?? "Unknown market";
+  const timeframe = setup?.timeframe ?? entry.timeframe;
 
   return (
     <Card>
@@ -149,10 +170,10 @@ function EntryCard({ entry }: { entry: JournalEntrySummary }) {
         <div className="flex flex-wrap items-baseline gap-2">
           <NotebookPen className="h-3 w-3 shrink-0 text-muted-foreground" aria-hidden="true" />
           <Link href={`/journal/${entry.id}`} className="text-xs font-semibold hover:underline">
-            {entry.setup.symbol}
+            {symbol}
           </Link>
           <span className="text-[10px] text-muted-foreground">
-            {TIMEFRAME_LABELS[entry.setup.timeframe]}
+            {timeframe ? TIMEFRAME_LABELS[timeframe] : "—"}
           </span>
           <span className={cn("text-[11px] font-medium", meta.className)}>{meta.label}</span>
           {entry.trade?.realizedR !== null && entry.trade !== null && (
@@ -168,17 +189,49 @@ function EntryCard({ entry }: { entry: JournalEntrySummary }) {
           </span>
         </div>
 
-        <dl className="grid grid-cols-2 gap-x-4 gap-y-0.5 text-[10px] sm:grid-cols-4">
-          <Field label="SpotLens entry">
-            {formatPrice(entry.setup.entryLow)} – {formatPrice(entry.setup.entryHigh)}
-          </Field>
-          <Field label="Stop">{formatPrice(entry.setup.stopLoss)}</Field>
-          <Field label="Quality">{entry.setup.score}/100</Field>
-          <Field label="R:R">
-            1:{entry.setup.riskReward.toFixed(1)}
-            {entry.setup.riskRewardIsSynthetic && " (unmeasured)"}
-          </Field>
-        </dl>
+        {/* A tracked setup shows what SpotLens planned; an untracked one shows
+            the verdict and the score, which is all the scanner produced for it.
+            No entry, stop or ratio is displayed for the second kind, because
+            none exists — and a dash in those places would read as missing data
+            rather than as the honest answer. */}
+        {setup ? (
+          <dl className="grid grid-cols-2 gap-x-4 gap-y-0.5 text-[10px] sm:grid-cols-4">
+            <Field label="SpotLens entry">
+              {formatPrice(setup.entryLow)} – {formatPrice(setup.entryHigh)}
+            </Field>
+            <Field label="Stop">{formatPrice(setup.stopLoss)}</Field>
+            <Field label="Quality">{setup.score}/100</Field>
+            <Field label="R:R">
+              1:{setup.riskReward.toFixed(1)}
+              {setup.riskRewardIsSynthetic && " (unmeasured)"}
+            </Field>
+          </dl>
+        ) : (
+          <div className="space-y-1">
+            <dl className="grid grid-cols-2 gap-x-4 gap-y-0.5 text-[10px] sm:grid-cols-4">
+              <Field label="Quality">
+                {entry.opportunity?.score === null || entry.opportunity?.score === undefined
+                  ? "—"
+                  : `${entry.opportunity.score}/100`}
+              </Field>
+              <Field label="Verdict">
+                {entry.opportunity?.analysisStatus
+                  ? entry.opportunity.analysisStatus.toLowerCase().replace(/_/g, " ")
+                  : "—"}
+              </Field>
+            </dl>
+            <p className="text-[10px] leading-relaxed text-muted-foreground">
+              Untracked opportunity — SpotLens scored this market but never tracked a setup for it,
+              so there are no levels on the record.
+            </p>
+          </div>
+        )}
+
+        {entry.coachReviewed && (
+          <p className="text-[10px] text-muted-foreground">
+            A Coach review was read before deciding.
+          </p>
+        )}
 
         {entry.skipReason && (
           <p className="text-[10px] text-muted-foreground">

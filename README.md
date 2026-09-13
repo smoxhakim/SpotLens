@@ -134,7 +134,10 @@ prevent — and returns AVOID with no levels.
 | **Market analysis** | Candlestick chart with EMA and S/R overlays, the market read, and the full trade setup                         |
 | **Watchlist**       | Your own shortlist, toggleable on the chart                                                                    |
 | **Backtest**        | Bar-by-bar replay of the same engine over history, with win rate, average realised R, total R and max drawdown |
-| **Journal**         | What you decided about a tracked setup, kept beside what SpotLens said — including the setups you passed on    |
+| **Opportunities**   | The few markets from the last scan worth reading, ranked once — with Analyze, Ask Coach and Decide on each     |
+| **Coach**           | A second reading of an analysis SpotLens already made. Explains the numbers; never produces one                |
+| **Your decision**   | Watch, skip or take — recorded as _your_ call, beside what SpotLens said. Places nothing                       |
+| **Journal**         | What you decided, kept beside what SpotLens said — including the setups you passed on                          |
 | **Replay**          | Any old setup as it looked at a chosen moment: no later candle, no later event, the numbers recorded then      |
 | **Research**        | Descriptive statistics over your own history, with the engine's results and your decisions kept apart          |
 | **Learn**           | 15 articles covering every concept the engine uses, linked contextually from each analysis field               |
@@ -174,6 +177,9 @@ features/
   learning/          learn index and article view
   market/            chart, selectors, live header
   risk-management/   position size calculator
+  opportunities/     the shortlist, as something to read
+  coach/             the Coach review, rendered from facts and prose apart
+  decision/          the one place a decision is recorded
   journal/           journal, replay and research views
   watchlist/  auth/  settings/
 lib/
@@ -185,7 +191,9 @@ lib/
   setups/          setup identity + lifecycle planner (pure; services/ writes)
   scanner/         scheduling, concurrency, retries, ranking (pure; no I/O)
   notifications/   event mapping, dedupe keys, Telegram formatting (pure)
-  journal/         decision states and their legal transitions (pure)
+  journal/         decision states, transitions, decision context (pure)
+  coach/           context, rules, prompt and provider seam (pure)
+  risk/            position sizing, caps, costs, setup prefill (pure)
   replay/          the cutoff: what was knowable at a moment (pure)
   research/        engine funnel and decision counts, kept apart (pure)
 scripts/           the local scanner process
@@ -442,7 +450,7 @@ than no channel.
 
 ```bash
 npm run test        # 769 Vitest unit tests — the analysis math is the priority surface
-npm run e2e         # Playwright: 30 specs — smoke, signed-in journey, journal (port 3100)
+npm run e2e         # Playwright: smoke, journey, journal, coach, opportunities, decision (port 3100)
 npm run lint
 npm run typecheck
 ```
@@ -565,11 +573,45 @@ setup and you trading it well. The journal keeps both records side by side and
 and what your decisions produced in R, in two separate panels. One number
 across both would describe neither.
 
-Journal a tracked setup from `/setups` — including deciding to pass on it. A
-skipped setup is data too; without it, research only ever sees the trades you
-took. Decisions move `WATCHING → SKIPPED | TAKEN | CANCELLED`, a skip can still
-become a take later, and `CLOSED` is the end of the line. A taken position can
-never become a skip.
+### The workflow
+
+    Opportunities → Analysis → Ask Coach → Risk Calculator → Your decision → Journal
+
+None of the middle steps is required. You can decide without asking the Coach
+and without sizing anything; the Coach and the calculator are there when they
+help, and the four references — market, timeframe, scan, setup — travel the
+whole way so nothing has to guess at a missing id.
+
+**Three different facts, never merged.** SpotLens produces a status, a score and
+levels. The Coach reads that analysis and explains it. _You_ decide. Opening a
+page, asking the Coach or sizing a position records nothing — a decision exists
+only because you pressed the button and confirmed it, and there is deliberately
+no `coachApproved` field anywhere: you are free to decide the opposite of
+whatever the Coach concluded, and the record says only that a review was read.
+
+**Take means "I decided to take this setup".** It does not place an order.
+Nothing in SpotLens can — there is no trading API, no order endpoint and no
+wallet access — and recording a decision creates no outcome. If you go on to
+trade it, you come back and record what actually happened.
+
+Journal from `/opportunities`, from `/setups`, or from the decision page —
+including deciding to pass. A skipped setup is data too; without it, research
+only ever sees the trades you took. Decisions move
+`WATCHING → SKIPPED | TAKEN | CANCELLED`, a skip can still become a take later,
+and `CLOSED` is the end of the line. A taken position can never become a skip.
+
+**Untracked opportunities are recorded as what they are.** The scanner scores
+every market it looks at but tracks a setup only for those it begins following.
+A decision about one of the others references the scan — run, pair, timeframe —
+and carries no entry, stop, target or ratio, because none was ever produced for
+it. Nothing is invented to fill the gap, and the journal says plainly that the
+opportunity was untracked.
+
+**A decision describes the moment it was made.** The setup keeps moving; the
+entry does not follow it. Levels, score and verdict come from the immutable
+snapshot, the lifecycle state is frozen at the decision, and the timestamp is
+the server's — a later confirmation, invalidation or re-score cannot reach back
+and rewrite what you decided against.
 
 When you record what a trade did, the numbers are **yours** — your fill, your
 stop, your fees. Nothing is taken from the setup's plan, and if you traded

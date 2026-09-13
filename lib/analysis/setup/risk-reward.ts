@@ -15,6 +15,36 @@ import { GOOD_RR, MIN_ACCEPTABLE_RR } from "./types";
 export const MIN_MEANINGFUL_TARGET_R = 1;
 
 /**
+ * Which target the ratio is measured to, and whether the chart chose it.
+ *
+ * Extracted so it has one definition. The rule below is also the rule a
+ * *stored* setup needs read back — the risk calculator prefills the target the
+ * ratio describes, and a stored setup keeps `kind` and `rr` on every target but
+ * not the label of the one that was picked. Re-deriving it with a second copy
+ * of this rule would let the calculator size against one target while the panel
+ * it was opened from quoted another.
+ *
+ * Structural without a distance test would be the same mistake inverted, so the
+ * `MIN_MEANINGFUL_TARGET_R` filter travels with it.
+ */
+export function selectMeasuredTarget<T extends { kind: string; rr: number }>(
+  takeProfits: readonly T[],
+): { target: T; isSynthetic: boolean } | null {
+  if (takeProfits.length === 0) return null;
+
+  const structural = takeProfits.filter(
+    (t) => t.kind === "STRUCTURAL" && t.rr >= MIN_MEANINGFUL_TARGET_R,
+  );
+
+  // The second qualifying structural target where the chart offers two, the
+  // only one where it offers one, and the plain TP2 fallback where it offers
+  // none — the last of which is the case that gets flagged synthetic.
+  const target = structural[1] ?? structural[0] ?? takeProfits[1] ?? takeProfits[0];
+
+  return { target, isSynthetic: !structural.includes(target) };
+}
+
+/**
  * Risk/reward, measured to the second structural target where one exists.
  *
  * TP1 alone flatters nothing — it is usually the nearest resistance and often
@@ -50,15 +80,9 @@ export function calculateRiskReward(
   const risk = entry.mid - stopLoss.price;
   if (risk <= 0 || takeProfits.length === 0) return null;
 
-  const structural = takeProfits.filter(
-    (t) => t.kind === "STRUCTURAL" && t.rr >= MIN_MEANINGFUL_TARGET_R,
-  );
-
-  // The second qualifying structural target where the chart offers two, the
-  // only one where it offers one, and the plain TP2 fallback where it offers
-  // none — the last of which is the case that gets flagged below.
-  const target = structural[1] ?? structural[0] ?? takeProfits[1] ?? takeProfits[0];
-  const isSynthetic = !structural.includes(target);
+  const selected = selectMeasuredTarget(takeProfits);
+  if (!selected) return null;
+  const { target, isSynthetic } = selected;
 
   const reward = target.level - entry.mid;
   const ratio = reward / risk;

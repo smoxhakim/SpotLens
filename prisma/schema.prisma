@@ -333,6 +333,7 @@ model TradingPair {
   backtestRuns   BacktestRun[]
   trackedSetups  TrackedSetup[]
   scannerResults ScannerResult[]
+  journalEntries JournalEntry[]
 
   @@unique([assetId, quoteCurrency])
 }
@@ -632,7 +633,10 @@ model ScannerRun {
 
   durationMs Int?
 
-  results ScannerResult[]
+  results        ScannerResult[]
+  /// Decisions recorded about candidates from this pass that were never
+  /// tracked as setups. Tracked decisions reach their run through the setup.
+  journalEntries JournalEntry[]
 
   @@index([startedAt])
 }
@@ -798,17 +802,43 @@ model TelegramConnection {
 /// One entry per setup per user, enforced by the unique index: journaling the
 /// same setup twice is a mistake, not a second opinion.
 model JournalEntry {
-  id             String @id @default(uuid())
-  userId         String
-  trackedSetupId String
+  id     String @id @default(uuid())
+  userId String
+
+  /// The setup this decision was made about, when SpotLens was tracking one.
+  ///
+  /// Nullable since Phase O, and only for the case that genuinely has no
+  /// setup: the scanner scores every market it looks at but tracks a setup
+  /// only for the ones it began following, and a decision about one of the
+  /// others has nothing to point at. Minting a placeholder setup to satisfy
+  /// the column would put invented levels in the table the whole design
+  /// exists to keep honest. The three columns below carry that case instead.
+  trackedSetupId String?
+
+  // --- an untracked opportunity, referenced rather than copied -------------
+  //
+  // `ScannerResult` rows are written once per pass and never updated, so
+  // (run, pair, timeframe) resolves the same verdict and score for ever. That
+  // makes it a snapshot by construction, exactly as `TrackedSetup`'s frozen
+  // columns are, and means no number is duplicated onto this row.
+  //
+  // All three are null for a tracked entry and all three are set for an
+  // untracked one.
+  scannerRunId  String?
+  tradingPairId String?
+  timeframe     Timeframe?
 
   decision JournalDecision @default(WATCHING)
 
   /// Where the setup was in its lifecycle when this decision was made. Frozen,
   /// because the setup will move on and the decision was made against this.
-  setupStatusAtDecision SetupLifecycleStatus
+  ///
+  /// Null for an untracked opportunity, which has no lifecycle to be at a
+  /// point in. An absence, never a default — writing SETUP_FORMING here would
+  /// claim a state that was never recorded.
+  setupStatusAtDecision SetupLifecycleStatus?
   /// The moment the decision was made — and the cutoff a replay reconstructs to.
-  decidedAt             DateTime             @default(now())
+  decidedAt             DateTime              @default(now())
 
   skipReason JournalSkipReason?
   notes      String?
@@ -833,10 +863,19 @@ model JournalEntry {
   updatedAt DateTime @updatedAt
 
   user         User           @relation(fields: [userId], references: [id], onDelete: Cascade)
-  trackedSetup TrackedSetup   @relation(fields: [trackedSetupId], references: [id], onDelete: Cascade)
+  trackedSetup TrackedSetup?  @relation(fields: [trackedSetupId], references: [id], onDelete: Cascade)
+  scannerRun   ScannerRun?    @relation(fields: [scannerRunId], references: [id], onDelete: Cascade)
+  tradingPair  TradingPair?   @relation(fields: [tradingPairId], references: [id], onDelete: Cascade)
   events       JournalEvent[]
 
+  /// One decision per tracked setup, unchanged. Postgres treats nulls as
+  /// distinct in a unique index, so every untracked entry sits outside this
+  /// constraint rather than colliding with the others on a shared null.
   @@unique([trackedSetupId])
+  /// The same idempotency for the untracked case: deciding twice about the
+  /// same market in the same pass is a change of mind on one entry, not a
+  /// second entry. Null for tracked rows, so they are likewise unconstrained.
+  @@unique([userId, scannerRunId, tradingPairId, timeframe])
   @@index([userId, decidedAt])
   @@index([userId, decision])
 }

@@ -78,18 +78,22 @@ export function OpportunityCard({
     candidate.symbol,
   )}&tf=${encodeURIComponent(candidate.timeframe)}`;
 
-  // References, not a copy of the analysis: the Coach layer resolves these
-  // itself, so nothing downstream can read a stale snapshot out of a URL.
+  // References, not a copy of the analysis: the layers downstream resolve
+  // these themselves, so nothing can read a stale snapshot out of a URL.
   //
   // Four keys at most, and never a fifth. The run id says *which pass* ranked
   // this candidate — a shortlist belongs to one scan, and reviewing "ETHUSDT on
   // H4" without naming the pass is reviewing a moving target.
-  const coachParams = new URLSearchParams({
+  //
+  // One contract, two destinations: the Coach and the decision surface take the
+  // same four references, so moving between them never loses the identity of
+  // the opportunity or has to guess at a missing id.
+  const handoff = new URLSearchParams({
     symbol: candidate.symbol,
     tf: candidate.timeframe,
   });
-  if (candidate.trackedSetupId) coachParams.set("setupId", candidate.trackedSetupId);
-  if (runId) coachParams.set("runId", runId);
+  if (candidate.trackedSetupId) handoff.set("setupId", candidate.trackedSetupId);
+  if (runId) handoff.set("runId", runId);
 
   return (
     <Card>
@@ -154,11 +158,14 @@ export function OpportunityCard({
           </div>
         )}
 
-        {/* Both actions lead somewhere to look at. Neither is styled as a
-            call to act: a filled green button here would say "take this", and
-            the whole point of the page is that it does not. The visible words
-            stay short while the accessible name carries the market, so a
-            screen reader does not announce fifteen identical "Analyze"s. */}
+        {/* Every action leads somewhere to read or to write something down.
+            None is styled as a call to act: a filled green button here would
+            say "take this", and the whole point of the page is that it does
+            not. "Decide" opens a page where a decision can be recorded — it
+            records nothing by being pressed, and SpotLens places no orders at
+            all. The visible words stay short while the accessible name carries
+            the market, so a screen reader does not announce fifteen identical
+            "Analyze"s. */}
         <div className="flex flex-wrap gap-2 pt-0.5">
           <Button asChild size="sm" variant="outline">
             <Link href={analyseHref} aria-label={`Analyze ${candidate.symbol} on ${timeframe}`}>
@@ -167,10 +174,18 @@ export function OpportunityCard({
           </Button>
           <Button asChild size="sm" variant="ghost">
             <Link
-              href={`/coach?${coachParams.toString()}`}
+              href={`/coach?${handoff.toString()}`}
               aria-label={`Ask Coach about ${candidate.symbol} on ${timeframe}`}
             >
               Ask Coach
+            </Link>
+          </Button>
+          <Button asChild size="sm" variant="ghost">
+            <Link
+              href={`/decision?${handoff.toString()}`}
+              aria-label={`Record your decision on ${candidate.symbol} on ${timeframe}`}
+            >
+              Decide
             </Link>
           </Button>
         </div>

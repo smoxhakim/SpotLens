@@ -1,5 +1,8 @@
 import { z } from "zod";
 
+import { COACH_VERDICTS } from "@/lib/journal";
+import { timeframeSchema } from "@/lib/market-data/schema";
+
 /**
  * The journal's request contracts, in one place.
  *
@@ -40,21 +43,62 @@ export const journalListQuerySchema = z.object({
   cursor: z.string().uuid().optional(),
 });
 
-export const journalCreateSchema = z
+/**
+ * A Coach review the user had read when they decided.
+ *
+ * Optional, validated, and never trusted for anything but its own description:
+ * the verdict is checked against the Coach's own enum and the provider id is
+ * bounded, so a hand-edited request can record a different reading but cannot
+ * put arbitrary text into the record. There is no `approved` field, and the
+ * timestamp is deliberately absent — the server stamps it, because a moment
+ * the browser sent is a moment the browser chose.
+ */
+export const coachReferenceSchema = z
   .object({
-    // Setup-linked only: a journal entry always references a tracked setup, so
-    // "what did SpotLens say?" always has an answer.
-    trackedSetupId: z.string().uuid(),
-    decision: decisionSchema.optional(),
-    notes: z.string().max(2000).optional(),
+    providerId: z.string().min(1).max(64),
+    verdict: z.enum(COACH_VERDICTS),
   })
   .strict();
+
+/**
+ * What a decision is recorded against.
+ *
+ * Two shapes, and exactly one of them. A tracked setup is referenced by its
+ * id; a market the scanner scored but never followed is referenced by the pass
+ * it was scored in. Neither carries a number — every figure on the record is
+ * read from the row these references resolve to, so an edited request can
+ * change *which* opportunity is journaled and never what SpotLens said about it.
+ */
+export const journalCreateSchema = z.union([
+  z
+    .object({
+      trackedSetupId: z.string().uuid(),
+      decision: decisionSchema.optional(),
+      notes: z.string().max(2000).optional(),
+      coach: coachReferenceSchema.optional(),
+    })
+    .strict(),
+  z
+    .object({
+      runId: z.string().uuid(),
+      symbol: z
+        .string()
+        .transform((value) => value.toUpperCase())
+        .pipe(z.string().regex(/^[A-Z0-9]{2,20}$/)),
+      timeframe: timeframeSchema,
+      decision: decisionSchema.optional(),
+      notes: z.string().max(2000).optional(),
+      coach: coachReferenceSchema.optional(),
+    })
+    .strict(),
+]);
 
 export const journalDecisionSchema = z
   .object({
     decision: decisionSchema,
     skipReason: z.enum(SKIP_REASONS).optional(),
     notes: z.string().max(2000).optional(),
+    coach: coachReferenceSchema.optional(),
   })
   .strict();
 

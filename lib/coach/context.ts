@@ -1,6 +1,6 @@
 import { isPrimarySignal, type ConfirmationSignalType } from "@/lib/analysis";
 
-import type { CoachContext, CoachEvidence } from "./types";
+import type { CoachContext, CoachEvidence, CoachLevels } from "./types";
 
 /**
  * Turning what was recorded into what the Coach may read.
@@ -148,16 +148,17 @@ function breakdownFrom(snapshot: Record<string, unknown>) {
 function takeProfitsFrom(
   snapshot: Record<string, unknown>,
   columns: (number | null)[],
-): { label: string; level: number; rr: number | null; reason: string | null }[] {
+): CoachLevels["takeProfits"] {
   const raw = Array.isArray(snapshot.takeProfits) ? snapshot.takeProfits : [];
 
   const described = raw.map((entry) => {
     if (typeof entry !== "object" || entry === null) return null;
-    const target = entry as { label?: unknown; rr?: unknown; reason?: unknown };
+    const target = entry as { label?: unknown; rr?: unknown; kind?: unknown; reason?: unknown };
 
     return {
       label: typeof target.label === "string" ? target.label : null,
       rr: typeof target.rr === "number" ? target.rr : null,
+      kind: typeof target.kind === "string" ? target.kind : null,
       reason: typeof target.reason === "string" ? target.reason : null,
     };
   });
@@ -171,6 +172,7 @@ function takeProfitsFrom(
         label: detail?.label ?? `TP${index + 1}`,
         level,
         rr: detail?.rr ?? null,
+        kind: detail?.kind ?? null,
         reason: detail?.reason ?? null,
       },
     ];
