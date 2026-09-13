@@ -7,13 +7,27 @@ generator client {
 }
 
 datasource db {
-  provider  = "postgresql"
+  provider          = "postgresql"
   // Pooled connection for the app's own queries.
-  url       = env("DATABASE_URL")
+  url               = env("DATABASE_URL")
   // Direct (unpooled) connection for migrations: Prisma takes advisory locks
   // that a connection pooler in transaction mode cannot hold. Falls back to
   // DATABASE_URL when unset, which is correct for a plain local Postgres.
-  directUrl = env("DIRECT_URL")
+  directUrl         = env("DIRECT_URL")
+  // The scratch database `prisma migrate dev` DROPS AND RECREATES to replay the
+  // migration chain into.
+  //
+  // Declared, because a shadow database Prisma is not told about is one Prisma
+  // invents: with this line absent it creates `prisma_migrate_shadow_db_<uuid>`
+  // on the `directUrl` server, which on Neon means issuing CREATE DATABASE and
+  // DROP DATABASE against the production endpoint. Naming it here is also what
+  // activates Prisma's own refusal when the shadow and the main database are
+  // the same — a check that simply never runs on the implicit path.
+  //
+  // Resolved lazily, so commands that need no shadow are unaffected: `prisma
+  // generate`, `migrate status` and `migrate deploy` all work with this unset.
+  // Only `migrate dev` requires it, which is the command that needs guarding.
+  shadowDatabaseUrl = env("SHADOW_DATABASE_URL")
 }
 
 enum Role {

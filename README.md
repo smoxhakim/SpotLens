@@ -235,7 +235,38 @@ and falls back to the file-based list rather than failing.
 
 Set both `DATABASE_URL` (pooled) and `DIRECT_URL` (unpooled). Prisma migrations
 take advisory locks that a transaction-mode pooler cannot hold. Apply the
-schema with `npx prisma migrate deploy`.
+schema with `npm run prisma:deploy`.
+
+> **Never point a Prisma shadow database at a real database.**
+>
+> A shadow database is a scratch database Prisma **drops and recreates** to
+> replay the migration chain into. `prisma migrate dev` and
+> `prisma migrate diff --from-migrations` both need one, and with none
+> configured Prisma creates it on the `DIRECT_URL` server — which on Neon is
+> the database the application uses. Passing `DIRECT_URL` to
+> `--shadow-database-url` destroyed this project's development database once;
+> the command did exactly what it documents, and the argument was the mistake.
+>
+> `prisma/schema.prisma` declares `shadowDatabaseUrl = env("SHADOW_DATABASE_URL")`,
+> so Prisma uses the one you name. Without that declaration it invents its own
+> on the `DIRECT_URL` server — and leaving the variable _unset_ is not safe
+> either, because Prisma silently falls back to that invented shadow. The
+> declaration and the guard are both load-bearing.
+>
+> Set `SHADOW_DATABASE_URL` to the disposable local Postgres
+> (`npm run db:shadow` starts it and creates a clean `spotlens_shadow`).
+> [`scripts/check-shadow-db.ts`](scripts/check-shadow-db.ts) fails closed and
+> refuses four ways: the variable unset, not a connection string, not local, or
+> the same database the application uses.
+>
+> It also refuses when **`DIRECT_URL` itself is remote**. `migrate dev` resets
+> the main database when it detects drift — _"We need to reset the … database.
+> All data will be lost."_ — and no shadow configuration prevents that. So
+> `npm run prisma:migrate` is for a local database only.
+>
+> To migrate a real database, Neon included, use `npm run prisma:deploy`. It
+> runs `prisma migrate deploy`: no shadow database, no reset, only migrations
+> already committed — and it works with `SHADOW_DATABASE_URL` unset.
 
 ### Environment
 

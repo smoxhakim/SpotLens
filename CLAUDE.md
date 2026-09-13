@@ -259,6 +259,22 @@ npm run prisma:seed          # assets, checklists, learn articles (idempotent)
   `lib/market-data/schema.ts`. Never inline a timeframe list.
 - **Neon needs two URLs.** `DATABASE_URL` (pooled) for the app, `DIRECT_URL`
   (unpooled) for migrations — Prisma's advisory locks need a direct connection.
+- **Never point a Prisma shadow database at a real one.** A shadow database is
+  one Prisma **drops and recreates** to replay migrations into. `migrate dev`
+  and `migrate diff --from-migrations` both need one, and with none configured
+  Prisma creates it on the `directUrl` server — which on Neon is the database
+  the application uses. Passing `DIRECT_URL` to `--shadow-database-url`
+  destroyed this project's development database once; the command did exactly
+  what it documents. The datasource now declares
+  `shadowDatabaseUrl = env("SHADOW_DATABASE_URL")` so Prisma uses the one it is
+  given — leaving it unset is _not_ safe, because Prisma falls back to the
+  invented shadow without complaining, which is why the guard demands a value.
+  `scripts/check-shadow-db.ts` fails closed on an unset, malformed, remote or
+  identical shadow, **and on a remote `DIRECT_URL`**: `migrate dev` resets the
+  main database on drift ("All data will be lost"), which no shadow
+  configuration prevents. So `npm run prisma:migrate` is local-only. Apply
+  migrations to a real database with `npm run prisma:deploy` — no shadow
+  database, no reset, and it works with `SHADOW_DATABASE_URL` unset.
 - **The `@emnapi/*` devDependencies are load-bearing.** Nothing imports them;
   they exist because npm otherwise omits them from the lockfile and `npm ci`
   fails on Linux. See the troubleshooting note in `README.md`.
