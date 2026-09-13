@@ -1,6 +1,9 @@
+import { warnOnce } from "@/lib/log";
+
 import { cachedReview, rememberReview } from "./cache";
+import { CoachProviderFailure } from "./openai";
 import { buildDeterministicReview } from "./review";
-import { FORBIDDEN_PHRASES, isSafeReview } from "./rules";
+import { FORBIDDEN_PHRASES, forbiddenPhrasesIn, isSafeReview } from "./rules";
 import type { CoachContext, CoachReview } from "./types";
 
 /**
@@ -75,6 +78,11 @@ export async function reviewWith(
     const review = await provider.review(context);
 
     if (!isSafeReview(review)) {
+      warnOnce(
+        "coach-review-refused",
+        "[coach] A provider review was refused by the content rules; showing SpotLens's own reading.",
+        forbiddenPhrasesIn(review).join(", "),
+      );
       return { review: buildDeterministicReview(context), degraded: true };
     }
 
@@ -87,12 +95,24 @@ export async function reviewWith(
     // mean serving it without the check that refused it.
     rememberReview(context, provider.id, review);
     return { review, degraded: false };
-  } catch {
+  } catch (error) {
     // A provider failing is not an error the reader needs to see. The
     // deterministic reading needs nothing but the context already in hand, so
     // the page degrades to it rather than to an error — and the analysis
-    // underneath is untouched either way. The provider's own message is
-    // discarded here rather than surfaced: it is the one place a key could be.
+    // underneath is untouched either way.
+    //
+    // It is still logged, once, server-side. Discarding it entirely is how a
+    // schema mismatch hid: the Coach degraded at random for a fortnight and
+    // looked exactly like a Coach that was working. Only a
+    // `CoachProviderFailure` message is printed, because that type is
+    // sanitised before it leaves the provider — anything else is reported by
+    // name alone, since an arbitrary error string is the one place a key could
+    // be. Nothing reaches the reader either way.
+    warnOnce(
+      "coach-provider-failed",
+      "[coach] The provider could not answer; showing SpotLens's own reading.",
+      error instanceof CoachProviderFailure ? error.message : (error as Error)?.name,
+    );
     return { review: buildDeterministicReview(context), degraded: true };
   }
 }
