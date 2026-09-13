@@ -469,19 +469,99 @@ async function finishRun(
 }
 
 /**
+ * Why a scan could not choose an owner.
+ *
+ * The reason travels with the failure because each one needs a different thing
+ * from the operator, and "no account found" told them none of it.
+ */
+export type ScannerUserFailure =
+  | { reason: "NO_DATABASE" }
+  | { reason: "NO_USERS" }
+  | { reason: "CONFIGURED_USER_MISSING"; email: string }
+  | { reason: "AMBIGUOUS"; count: number };
+
+export type ScannerUserResult =
+  { ok: true; userId: string } | { ok: false; failure: ScannerUserFailure };
+
+/**
  * The account a headless scan writes setups against.
  *
- * SpotLens is a single-user local application, so "the only account" is the
- * right answer. `SCANNER_USER_EMAIL` overrides it if more than one exists.
+ * This decides who owns every `TrackedSetup`, every `SetupEvent` and every
+ * `Notification` a pass produces, which is why it now refuses to guess.
+ *
+ * It used to fall back to `findFirst({ orderBy: { createdAt: "asc" } })` — the
+ * oldest account — whenever `SCANNER_USER_EMAIL` was unset. That is a fine
+ * answer for the single-user application this is, and a silent wrong one the
+ * moment a second account exists: the scanner tracked setups for one account
+ * while Telegram was connected to another, so every notification went to a
+ * chat nobody was watching and nothing anywhere said so. It took two
+ * investigations to find, because the behaviour was indistinguishable from a
+ * broken Telegram integration.
+ *
+ * So the single-user case still resolves without configuration — requiring a
+ * variable to name the only possible answer would be a setup step that
+ * prevents nothing — and ambiguity fails closed instead. The rule is that the
+ * scanner picks an owner only when there is nothing to pick between.
  */
-export async function resolveScannerUserId(email?: string): Promise<string | null> {
-  if (!isDatabaseConfigured) return null;
+export async function resolveScannerUser(email?: string): Promise<ScannerUserResult> {
+  if (!isDatabaseConfigured) return { ok: false, failure: { reason: "NO_DATABASE" } };
 
-  const user = email
-    ? await prisma.user.findUnique({ where: { email }, select: { id: true } })
-    : await prisma.user.findFirst({ orderBy: { createdAt: "asc" }, select: { id: true } });
+  const configured = email?.trim();
 
-  return user?.id ?? null;
+  if (configured) {
+    const user = await prisma.user.findUnique({
+      where: { email: configured },
+      select: { id: true },
+    });
+
+    return user
+      ? { ok: true, userId: user.id }
+      : { ok: false, failure: { reason: "CONFIGURED_USER_MISSING", email: configured } };
+  }
+
+  // Two is enough to know the answer is ambiguous; counting the rest would
+  // tell us nothing more.
+  const users = await prisma.user.findMany({ select: { id: true }, take: 2 });
+
+  if (users.length === 0) return { ok: false, failure: { reason: "NO_USERS" } };
+  if (users.length > 1) {
+    return { ok: false, failure: { reason: "AMBIGUOUS", count: await prisma.user.count() } };
+  }
+
+  return { ok: true, userId: users[0].id };
+}
+
+/**
+ * What to tell the operator, and what to do about it.
+ *
+ * Kept beside the resolution so the wording cannot drift from the reason, and
+ * deliberately free of anything sensitive: an account's email is what the
+ * operator typed into their own configuration, and no connection string,
+ * token or password is ever named.
+ */
+export function describeScannerUserFailure(failure: ScannerUserFailure): string {
+  switch (failure.reason) {
+    case "NO_DATABASE":
+      return "No database is configured. The scanner stores setups, so it needs DATABASE_URL.";
+    case "NO_USERS":
+      return (
+        "No account found. The scanner tracks setups against an owner — create one at " +
+        "/register, then run it again."
+      );
+    case "CONFIGURED_USER_MISSING":
+      return (
+        `SCANNER_USER_EMAIL is set to ${failure.email}, but no account with that address ` +
+        "exists. Check the address, or register it."
+      );
+    case "AMBIGUOUS":
+      return (
+        `${failure.count} accounts exist and SCANNER_USER_EMAIL is not set, so there is no ` +
+        "way to tell which one this scan belongs to. Every setup, lifecycle event and " +
+        "notification it produces is written against one account — including Telegram, which " +
+        "is why guessing here once sent a week of notifications to a chat nobody was " +
+        "watching. Set SCANNER_USER_EMAIL to the account you want, then run it again."
+      );
+  }
 }
 
 /**

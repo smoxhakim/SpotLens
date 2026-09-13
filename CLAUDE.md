@@ -57,6 +57,18 @@ make that unnecessary most of the time.
   `lib/scanner`. It reads **closed candles only** — the forming candle is
   dropped before the engine sees it, which is what makes a repeated scan
   idempotent. It knows nothing about notifications.
+- **The scanner picks an owner only when there is nothing to pick between.** The
+  owner decides who every `TrackedSetup`, `SetupEvent` and `Notification`
+  belongs to, so `resolveScannerUser` resolves `SCANNER_USER_EMAIL` exactly,
+  uses the single account when only one exists, and **fails closed** on two or
+  more with none configured. It used to take the oldest account silently, which
+  tracked setups for one account while Telegram was connected to another and
+  looked exactly like a broken Telegram integration for two investigations.
+  `settlementDelayMs` gives `scanner:once` the same post-close settle window the
+  schedule waits — zero almost always, and non-zero only inside the window just
+  after a close, where the exchange may not have finished settling the bar.
+  Neither touches `closedCandlesOnly`, which is what keeps a forming candle out
+  of the engine unconditionally.
 - **The shortlist prioritises; it never analyses.** The scanner keeps covering
   the whole curated universe — 45 markets on H1 and H4, 90 analyses — because
   the problem was never coverage, it was that nobody reads ninety of anything.

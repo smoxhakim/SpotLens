@@ -10,6 +10,7 @@ import { MAX_ATTEMPTS, classifyFailure, withRetries } from "./failures";
 import { effectiveRiskReward, rankResults } from "./ranking";
 import {
   DEFAULT_CLOSE_DELAY_MS,
+  settlementDelayMs,
   closedCandlesOnly,
   currentCandleOpen,
   nextCandleClose,
@@ -404,5 +405,118 @@ describe("scanner events", () => {
     expect(event.type).toBe("ANALYSIS_FAILED");
     expect(event.setupId).toBeNull();
     expect(event.failureCategory).toBe("MARKET_DATA_ERROR");
+  });
+});
+
+/**
+ * The settlement window, shared by both ways of starting a scan.
+ *
+ * `nextScanWindow` plans the next wake-up; `settlementDelayMs` answers the
+ * same question for a pass starting now. They exist together because the
+ * manual entry point used to consult neither: `scanner:once` ran immediately,
+ * so a pass seconds after a boundary analysed whatever the exchange had
+ * settled by then. Measured once at two candles where a pass half a minute
+ * later saw forty-three — and that difference churned setups and notifications
+ * for markets that had not moved.
+ */
+describe("settlementDelayMs", () => {
+  const H1 = 60 * 60_000;
+
+  it("waits out the remainder of the window just after a candle closes", () => {
+    // Eleven seconds past the hour: the candle that just closed is still
+    // settling, so the wait is the rest of the ninety seconds.
+    const now = Date.UTC(2026, 0, 1, 10, 0, 11);
+
+    expect(settlementDelayMs(["H1"], now, DEFAULT_CLOSE_DELAY_MS)).toBe(
+      DEFAULT_CLOSE_DELAY_MS - 11_000,
+    );
+  });
+
+  it("waits for nothing once the window has passed", () => {
+    // The ordinary case. A candle closes once an hour and the window is ninety
+    // seconds, so a pass started at random waits for nothing at all.
+    for (const minutes of [2, 15, 30, 59]) {
+      const now = Date.UTC(2026, 0, 1, 10, minutes, 0);
+      expect(settlementDelayMs(["H1"], now, DEFAULT_CLOSE_DELAY_MS)).toBe(0);
+    }
+  });
+
+  it("waits at the exact instant of close, and not a millisecond after the window", () => {
+    const close = Date.UTC(2026, 0, 1, 10, 0, 0);
+
+    expect(settlementDelayMs(["H1"], close, DEFAULT_CLOSE_DELAY_MS)).toBe(DEFAULT_CLOSE_DELAY_MS);
+    expect(settlementDelayMs(["H1"], close + DEFAULT_CLOSE_DELAY_MS, DEFAULT_CLOSE_DELAY_MS)).toBe(
+      0,
+    );
+    expect(
+      settlementDelayMs(["H1"], close + DEFAULT_CLOSE_DELAY_MS + 1, DEFAULT_CLOSE_DELAY_MS),
+    ).toBe(0);
+  });
+
+  it("takes the longest wait across timeframes, since one pass covers them all", () => {
+    // 12:00 closes an H1 and an H4 together. A second past it, both are
+    // settling and the answer has to be safe for both.
+    const now = Date.UTC(2026, 0, 1, 12, 0, 1);
+
+    expect(settlementDelayMs(["H1", "H4"], now, DEFAULT_CLOSE_DELAY_MS)).toBe(
+      DEFAULT_CLOSE_DELAY_MS - 1_000,
+    );
+  });
+
+  it("is governed by the timeframe that closed most recently", () => {
+    // 13:00:05 — the H1 closed five seconds ago, the H4 an hour ago. The H1
+    // governs; the settled H4 alongside it does not shorten the wait.
+    const now = Date.UTC(2026, 0, 1, 13, 0, 5);
+
+    expect(settlementDelayMs(["H1", "H4"], now, DEFAULT_CLOSE_DELAY_MS)).toBe(
+      DEFAULT_CLOSE_DELAY_MS - 5_000,
+    );
+    expect(settlementDelayMs(["H4"], now, DEFAULT_CLOSE_DELAY_MS)).toBe(0);
+  });
+
+  it("is disabled by a zero delay, which is the documented opt-out", () => {
+    const justClosed = Date.UTC(2026, 0, 1, 10, 0, 0);
+
+    expect(settlementDelayMs(["H1", "H4"], justClosed, 0)).toBe(0);
+    expect(settlementDelayMs(["H1"], justClosed, -1)).toBe(0);
+  });
+
+  it("agrees with the schedule about which close it is waiting on", () => {
+    // Both derive from the same boundary arithmetic, which is the point of
+    // having one helper rather than two policies that can drift apart.
+    const now = Date.UTC(2026, 0, 1, 10, 0, 30);
+    const delay = DEFAULT_CLOSE_DELAY_MS;
+
+    // The close being settled is the one `currentCandleOpen` names.
+    const lastClose = currentCandleOpen("H1", now);
+    expect(settlementDelayMs(["H1"], now, delay)).toBe(lastClose + delay - now);
+
+    // And the next planned wake-up is the *following* close plus the same delay.
+    expect(nextScanWindow(["H1"], now, delay).at).toBe(nextCandleClose("H1", now) + delay);
+  });
+
+  it("never asks a scan to wait longer than the window itself", () => {
+    for (const seconds of [0, 1, 45, 89, 90, 120, 3599]) {
+      const now = Date.UTC(2026, 0, 1, 10, 0, 0) + seconds * 1_000;
+      const wait = settlementDelayMs(["H1"], now, DEFAULT_CLOSE_DELAY_MS);
+
+      expect(wait).toBeGreaterThanOrEqual(0);
+      expect(wait).toBeLessThanOrEqual(DEFAULT_CLOSE_DELAY_MS);
+    }
+  });
+
+  it("leaves closedCandlesOnly as the thing that keeps a forming candle out", () => {
+    // Settlement is about a candle the exchange has not finished writing.
+    // Whether a candle has closed at all is a separate guarantee, and it is
+    // unconditional — it does not depend on this delay or on timing.
+    const now = Date.UTC(2026, 0, 1, 10, 0, 5);
+    const candles = [
+      { closeTime: now - H1 },
+      { closeTime: now - 5_000 },
+      { closeTime: now + H1 }, // still forming
+    ];
+
+    expect(closedCandlesOnly(candles, now)).toHaveLength(2);
+    expect(closedCandlesOnly(candles, now).every((c) => c.closeTime <= now)).toBe(true);
   });
 });

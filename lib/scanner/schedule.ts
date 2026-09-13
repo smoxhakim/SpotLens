@@ -82,6 +82,51 @@ export function nextScanWindow(
 }
 
 /**
+ * How long to wait before the most recently closed candle is safe to analyse.
+ *
+ * The same settlement policy the schedule uses, expressed for a scan that is
+ * starting *now* rather than one being planned. `nextScanWindow` answers "when
+ * is the next close, plus settle time"; this answers "is the last close settled
+ * yet, and if not, how long until it is".
+ *
+ * Both derive from the same boundary arithmetic and the same delay, which is
+ * the point: a manual pass and a scheduled pass should not disagree about when
+ * a candle is ready. They did. `scanner:once` consulted neither, so a pass run
+ * seconds after a boundary analysed whatever the exchange had settled so far —
+ * measured once at two candles where a pass half a minute later saw
+ * forty-three — and the difference churned setups and notifications for markets
+ * that had not moved.
+ *
+ * Returns 0 in the ordinary case, which is most of the time: a candle closes
+ * once an hour and the window is ninety seconds, so a pass started at random
+ * waits for nothing. It is only the minutes just after a close that are unsafe,
+ * and only those that wait.
+ *
+ * `currentCandleOpen` is the moment the previous candle closed, so it is the
+ * close being waited on. The maximum is taken across timeframes because one
+ * pass covers all of them and the answer has to be safe for every one — an H1
+ * that closed ten seconds ago governs even when the H4 alongside it closed an
+ * hour back.
+ *
+ * A `delayMs` of 0 disables this entirely, which is the documented opt-out for
+ * anyone who would rather have the old behaviour.
+ */
+export function settlementDelayMs(
+  timeframes: Timeframe[],
+  now: number,
+  delayMs: number = DEFAULT_CLOSE_DELAY_MS,
+): number {
+  if (delayMs <= 0 || timeframes.length === 0) return 0;
+
+  const waits = timeframes.map((timeframe) => {
+    const lastClose = currentCandleOpen(timeframe, now);
+    return Math.max(0, lastClose + delayMs - now);
+  });
+
+  return Math.max(...waits);
+}
+
+/**
  * Drops a candle that is still being written.
  *
  * The scanner analyses only closed candles, and this is where that is enforced

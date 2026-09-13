@@ -13,6 +13,7 @@ export {
   currentCandleOpen,
   nextCandleClose,
   nextScanWindow,
+  settlementDelayMs,
   type ScanWindow,
 } from "./schedule";
 export { mapWithConcurrency, sleep } from "./concurrency";
