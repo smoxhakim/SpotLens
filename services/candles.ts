@@ -160,9 +160,86 @@ async function writeCache(query: CandleQuery, candles: Candle[]): Promise<void> 
     closeTime: new Date(c.closeTime),
   });
 
-  // Closed candles never change, so duplicates can be skipped outright.
+  // A *closed* candle never changes, so an insert that skips duplicates is
+  // right for almost all of them. Almost: a row first written while its candle
+  // was still forming holds a partial bar — a high that had not been reached
+  // yet, a volume a fraction of the final — and `skipDuplicates` cannot correct
+  // a row that is already there, so that partial bar outlived the candle it
+  // described.
+  //
+  // That made a repeated scan non-deterministic. The first pass missed the
+  // cache and analysed the true candle from the provider; the second hit the
+  // cache and analysed the partial one; the same market at the same
+  // `analysedAtCandle` scored differently and re-anchored its setup — churning
+  // setups and notifying about a market that had not moved. The engine was
+  // never at fault: given the same bytes it agrees with itself.
+  //
+  // So the stored values are reconciled against what the provider just said.
+  // Reconciling rather than only fixing the newest row matters because the
+  // damage accumulates: every scan freezes whichever candle was live at the
+  // time, so a table gathers one wrong bar per market per scan session, each
+  // of them sitting inside the window the next analysis reads.
+  //
+  // The cost is one indexed read over the window; in the ordinary case nothing
+  // differs and nothing is written.
   if (closed.length > 0) {
-    await prisma.candle.createMany({ data: closed.map(toRow), skipDuplicates: true });
+    const existing = await prisma.candle.findMany({
+      where: {
+        tradingPairId: query.pairId,
+        timeframe: query.timeframe,
+        openTime: {
+          gte: new Date(closed[0].openTime),
+          lte: new Date(closed[closed.length - 1].openTime),
+        },
+      },
+      select: { openTime: true, open: true, high: true, low: true, close: true, volume: true },
+    });
+
+    const stored = new Map(existing.map((row) => [row.openTime.getTime(), row]));
+
+    const differs = (candle: Candle) => {
+      const row = stored.get(candle.openTime);
+      if (!row) return false;
+      return (
+        Number(row.open) !== candle.open ||
+        Number(row.high) !== candle.high ||
+        Number(row.low) !== candle.low ||
+        Number(row.close) !== candle.close ||
+        Number(row.volume) !== candle.volume
+      );
+    };
+
+    const corrections = closed.filter(differs);
+    const inserts = closed.filter((candle) => !stored.has(candle.openTime));
+
+    if (inserts.length > 0) {
+      await prisma.candle.createMany({ data: inserts.map(toRow), skipDuplicates: true });
+    }
+
+    // Normally empty. When it is not, these are candles whose stored bar was
+    // written before it had finished, and writing the closed values over them
+    // is what makes a cached read and a provider read agree.
+    for (const candle of corrections) {
+      const row = toRow(candle);
+      await prisma.candle.upsert({
+        where: {
+          tradingPairId_timeframe_openTime: {
+            tradingPairId: query.pairId,
+            timeframe: query.timeframe,
+            openTime: row.openTime,
+          },
+        },
+        create: row,
+        update: {
+          open: row.open,
+          high: row.high,
+          low: row.low,
+          close: row.close,
+          volume: row.volume,
+          closeTime: row.closeTime,
+        },
+      });
+    }
   }
 
   // The forming candle does change — upsert it so the cache tracks the market.
