@@ -9,6 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
+import { DecisionSection } from "@/features/decision/components/DecisionSection";
 import { fetchApi } from "@/features/market/hooks/fetch-api";
 import {
   VERDICT_LABELS,
@@ -277,6 +278,17 @@ export function CoachReviewView({
       <Section section={review.invalidationReview} />
       <Section section={review.chartChecks} numbered />
 
+      {/* --- the reader's own decision, kept apart from the reading above --
+          Separate cards, deliberately. The Coach reads the evidence and the
+          reader decides; putting the decision inside the review would imply the
+          second follows from the first, and the reader is free to disagree with
+          every word of it. Nothing here is labelled as the Coach approving or
+          rejecting anything, because it does neither. */}
+      <DecisionSection
+        context={context}
+        coach={{ providerId: review.providerId, verdict: review.verdict }}
+      />
+
       {/* --- everything here leads somewhere to look at ------------------- */}
       <Card>
         <CardContent className="flex flex-wrap gap-2 p-4">
@@ -292,6 +304,9 @@ export function CoachReviewView({
               <Link href="/setups">View tracked setups</Link>
             </Button>
           )}
+          <Button asChild size="sm" variant="ghost">
+            <Link href="/journal">Open the journal</Link>
+          </Button>
           <Button asChild size="sm" variant="ghost">
             <Link href="/opportunities">Back to opportunities</Link>
           </Button>

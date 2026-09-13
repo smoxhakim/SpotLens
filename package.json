@@ -14,10 +14,12 @@
     "test:watch": "vitest",
     "e2e": "playwright test",
     "prisma:generate": "prisma generate",
-    "prisma:migrate": "prisma migrate dev",
+    "prisma:migrate": "tsx --env-file=.env scripts/check-shadow-db.ts && prisma migrate dev",
     "prisma:seed": "tsx prisma/seed.ts",
     "scanner": "tsx --env-file=.env scripts/scanner.ts",
-    "scanner:once": "tsx --env-file=.env scripts/scanner.ts --once"
+    "scanner:once": "tsx --env-file=.env scripts/scanner.ts --once",
+    "prisma:deploy": "prisma migrate deploy",
+    "db:shadow": "docker compose up -d postgres && docker exec spotlens-postgres-1 psql -U spotlens -d postgres -c 'DROP DATABASE IF EXISTS spotlens_shadow' -c 'CREATE DATABASE spotlens_shadow'"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"

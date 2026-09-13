@@ -1,10 +1,14 @@
 import { Calculator } from "lucide-react";
+import Link from "next/link";
+import { z } from "zod";
 
 import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Button } from "@/components/ui/button";
 import { PositionSizeCalculator } from "@/features/risk-management/components/PositionSizeCalculator";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/db/prisma";
 import { isDatabaseConfigured } from "@/lib/db/prisma";
+import { timeframeSchema } from "@/lib/market-data/schema";
 
 export const metadata = { title: "Risk Calculator — SpotLens" };
 export const dynamic = "force-dynamic";
@@ -21,6 +25,29 @@ function prefill(value: string | string[] | undefined): number | undefined {
   if (typeof value !== "string") return undefined;
   const parsed = Number(value);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+}
+
+/**
+ * The opportunity this calculator was opened from, when it was opened from one.
+ *
+ * References only — the market, the timeframe, the pass and optionally the
+ * setup. They carry the *identity* of what is being sized so the reader can get
+ * back to the analysis and on to the decision without the workflow losing its
+ * place; the levels above still arrive as plain numbers, because the calculator
+ * is usable on its own with numbers a reader typed.
+ *
+ * Validated the same way every other surface validates them, and each
+ * independently: a mangled setup id should cost the setup link, not the page.
+ */
+const symbolSchema = z
+  .string()
+  .transform((value) => value.toUpperCase())
+  .pipe(z.string().regex(/^[A-Z0-9]{2,20}$/));
+
+function parse<T>(schema: z.ZodType<T>, value: string | string[] | undefined): T | null {
+  if (typeof value !== "string") return null;
+  const result = schema.safeParse(value);
+  return result.success ? result.data : null;
 }
 
 export default async function RiskCalculatorPage({
@@ -46,6 +73,25 @@ export default async function RiskCalculatorPage({
     }
   }
 
+  const symbol = parse(symbolSchema, params.symbol);
+  const tf = parse(timeframeSchema, params.tf);
+  const runId = parse(z.string().uuid(), params.runId);
+  const setupId = parse(z.string().uuid(), params.setupId);
+
+  // All three references or none: a link to the Coach without the pass it came
+  // from is a link that cannot resolve, and a broken one is worse than absent.
+  const context = symbol && tf && runId ? { symbol, tf, runId, setupId } : null;
+  const contextParams = new URLSearchParams(
+    context
+      ? {
+          symbol: context.symbol,
+          tf: context.tf,
+          runId: context.runId,
+          ...(context.setupId ? { setupId: context.setupId } : {}),
+        }
+      : {},
+  );
+
   return (
     <div className="mx-auto max-w-3xl space-y-4">
       <header className="space-y-1">
@@ -64,6 +110,26 @@ export default async function RiskCalculatorPage({
           </p>
         )}
       </header>
+
+      {/* Where this came from and where it goes next. Without these the
+          calculator is a cul-de-sac: a reader who has just sized a position has
+          to find their way back to the analysis by hand, and the setup they
+          were looking at is the one thing a back button cannot restore. */}
+      {context && (
+        <nav aria-label="Back to the setup" className="flex flex-wrap gap-2">
+          <Button asChild size="sm" variant="outline">
+            <Link href={`/market-analysis?pair=${context.symbol}&tf=${context.tf}`}>
+              Back to the analysis
+            </Link>
+          </Button>
+          <Button asChild size="sm" variant="ghost">
+            <Link href={`/coach?${contextParams.toString()}`}>Ask Coach</Link>
+          </Button>
+          <Button asChild size="sm" variant="ghost">
+            <Link href={`/decision?${contextParams.toString()}`}>Your decision</Link>
+          </Button>
+        </nav>
+      )}
 
       <PositionSizeCalculator
         defaultRiskPercent={defaultRiskPercent}

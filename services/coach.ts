@@ -7,6 +7,7 @@ import {
   contextFromTrackedSetup,
   resolveCoachProvider,
   reviewWith,
+  type CoachContext,
   type CoachProvider,
   type CoachResult,
 } from "@/lib/coach";
@@ -55,6 +56,28 @@ export async function buildCoachReview(
   request: CoachRequest,
   provider: CoachProvider = resolveCoachProvider().provider,
 ): Promise<CoachLookup> {
+  const resolved = await resolveCoachContext(request);
+  if (!resolved.ok) return resolved;
+
+  const { review, degraded } = await reviewWith(provider, resolved.context);
+  return { ok: true, result: { context: resolved.context, review }, degraded };
+}
+
+export type CoachContextLookup =
+  { ok: true; context: CoachContext } | { ok: false; failure: CoachLookupFailure };
+
+/**
+ * The facts, with no provider anywhere near them.
+ *
+ * Split out of `buildCoachReview` in Phase O because the decision workflow
+ * needs the same canonical numbers — the entry the calculator prefills, the
+ * score the journal records against — without asking a model anything. The
+ * Coach is invoked only when the reader presses Ask Coach, so a page that
+ * merely *shows* a setup must have a way to resolve it that cannot reach
+ * OpenAI, and a boolean argument on the function that can would be one edit
+ * away from a page that quietly did.
+ */
+export async function resolveCoachContext(request: CoachRequest): Promise<CoachContextLookup> {
   // The run is resolved first and always, even for a tracked setup: it is the
   // context the reader was looking at, and a review that silently accepted an
   // unknown run would be reviewing something else.
@@ -120,8 +143,7 @@ export async function buildCoachReview(
       run.id,
     );
 
-    const { review, degraded } = await reviewWith(provider, context);
-    return { ok: true, result: { context, review }, degraded };
+    return { ok: true, context };
   }
 
   const candidate = await prisma.scannerResult.findFirst({
@@ -157,6 +179,5 @@ export async function buildCoachReview(
     run.id,
   );
 
-  const { review, degraded } = await reviewWith(provider, context);
-  return { ok: true, result: { context, review }, degraded };
+  return { ok: true, context };
 }

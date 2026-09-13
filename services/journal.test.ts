@@ -19,6 +19,8 @@ const entryUpdate = vi.fn();
 const eventCreate = vi.fn();
 const eventUpdate = vi.fn();
 const eventDeleteMany = vi.fn();
+const resultFindFirst = vi.fn();
+const resultFindMany = vi.fn();
 const transaction = vi.fn();
 
 vi.mock("@/lib/db/prisma", () => ({
@@ -42,13 +44,18 @@ vi.mock("@/lib/db/prisma", () => ({
       update: (a: unknown) => eventUpdate(a),
       deleteMany: (a: unknown) => eventDeleteMany(a),
     },
+    scannerResult: {
+      findFirst: (a: unknown) => resultFindFirst(a),
+      findMany: (a: unknown) => resultFindMany(a),
+    },
     $transaction: (ops: unknown) => transaction(ops),
   },
 }));
 
 import { supersededVersions } from "@/lib/journal";
 
-const { createEntry, listEntries, recordOutcome, updateDecision } = await import("./journal");
+const { createEntry, findEntryForOpportunity, listEntries, recordOutcome, updateDecision } =
+  await import("./journal");
 
 beforeEach(() => {
   for (const fn of [
@@ -62,6 +69,8 @@ beforeEach(() => {
     eventCreate,
     eventUpdate,
     eventDeleteMany,
+    resultFindFirst,
+    resultFindMany,
     transaction,
   ]) {
     fn.mockReset();
@@ -71,6 +80,14 @@ beforeEach(() => {
   entryFindUnique.mockResolvedValue(null);
   entryCreate.mockResolvedValue({ id: "entry-1" });
   entryFindMany.mockResolvedValue([]);
+  resultFindFirst.mockResolvedValue({
+    tradingPairId: "pair-1",
+    analysisStatus: "WAIT_FOR_CONFIRMATION",
+    score: 62,
+    trackedSetupId: null,
+  });
+  resultFindMany.mockResolvedValue([]);
+  entryFindFirst.mockResolvedValue(null);
   transaction.mockResolvedValue([]);
 });
 
@@ -78,7 +95,11 @@ describe("createEntry", () => {
   it("freezes the lifecycle state the decision was made against", async () => {
     // The setup will keep moving. What matters later is where it was when the
     // person decided, not where it ended up.
-    await createEntry({ userId: "user-1", trackedSetupId: "setup-1", decision: "SKIPPED" });
+    await createEntry({
+      userId: "user-1",
+      target: { kind: "TRACKED", trackedSetupId: "setup-1" },
+      decision: "SKIPPED",
+    });
 
     const data = entryCreate.mock.calls[0][0].data;
     expect(data.setupStatusAtDecision).toBe("WAITING_CONFIRMATION");
@@ -89,19 +110,19 @@ describe("createEntry", () => {
   it("does not write anything back to the setup", async () => {
     // The snapshot is the record of what was on offer. Journaling is an
     // observation about it and must leave it exactly as it was.
-    await createEntry({ userId: "user-1", trackedSetupId: "setup-1" });
+    await createEntry({ userId: "user-1", target: { kind: "TRACKED", trackedSetupId: "setup-1" } });
 
     expect(setupUpdate).not.toHaveBeenCalled();
   });
 
   it("defaults to watching", async () => {
-    await createEntry({ userId: "user-1", trackedSetupId: "setup-1" });
+    await createEntry({ userId: "user-1", target: { kind: "TRACKED", trackedSetupId: "setup-1" } });
 
     expect(entryCreate.mock.calls[0][0].data.decision).toBe("WATCHING");
   });
 
   it("opens the decision history with a CREATED event", async () => {
-    await createEntry({ userId: "user-1", trackedSetupId: "setup-1" });
+    await createEntry({ userId: "user-1", target: { kind: "TRACKED", trackedSetupId: "setup-1" } });
 
     expect(entryCreate.mock.calls[0][0].data.events.create.type).toBe("CREATED");
   });
@@ -110,14 +131,17 @@ describe("createEntry", () => {
     // Journaling the same setup twice is a double click, not a second opinion.
     entryFindUnique.mockResolvedValue({ id: "entry-9", userId: "user-1" });
 
-    const result = await createEntry({ userId: "user-1", trackedSetupId: "setup-1" });
+    const result = await createEntry({
+      userId: "user-1",
+      target: { kind: "TRACKED", trackedSetupId: "setup-1" },
+    });
 
     expect(result).toEqual({ ok: true, value: { id: "entry-9", created: false } });
     expect(entryCreate).not.toHaveBeenCalled();
   });
 
   it("scopes the setup lookup to the owner", async () => {
-    await createEntry({ userId: "user-1", trackedSetupId: "setup-1" });
+    await createEntry({ userId: "user-1", target: { kind: "TRACKED", trackedSetupId: "setup-1" } });
 
     expect(setupFindFirst.mock.calls[0][0].where).toEqual({ id: "setup-1", userId: "user-1" });
   });
@@ -126,11 +150,17 @@ describe("createEntry", () => {
     // Distinguishable errors would turn this endpoint into a way of asking
     // which setup ids exist.
     setupFindFirst.mockResolvedValue(null);
-    const missing = await createEntry({ userId: "user-1", trackedSetupId: "nope" });
+    const missing = await createEntry({
+      userId: "user-1",
+      target: { kind: "TRACKED", trackedSetupId: "nope" },
+    });
 
     setupFindFirst.mockResolvedValue({ id: "setup-1", status: "SETUP_FORMING" });
     entryFindUnique.mockResolvedValue({ id: "entry-9", userId: "someone-else" });
-    const foreign = await createEntry({ userId: "user-1", trackedSetupId: "setup-1" });
+    const foreign = await createEntry({
+      userId: "user-1",
+      target: { kind: "TRACKED", trackedSetupId: "setup-1" },
+    });
 
     expect(missing).toEqual(foreign);
     expect(entryCreate).not.toHaveBeenCalled();
@@ -516,5 +546,428 @@ describe("listEntries", () => {
       entries: [],
       nextCursor: null,
     });
+  });
+});
+
+/**
+ * Phase O: the decision workflow.
+ *
+ * Two additions, and the second is the one with teeth. Decisions can now be
+ * recorded about markets the scanner scored but never tracked — and the record
+ * for those references a scan rather than copying numbers out of it, so there
+ * is no second place for an entry price to live and drift.
+ */
+describe("createEntry — an opportunity that was never tracked", () => {
+  const untracked = {
+    kind: "UNTRACKED" as const,
+    scannerRunId: "run-1",
+    symbol: "ETHUSDT",
+    timeframe: "H4" as const,
+  };
+
+  it("records the references and invents no levels", async () => {
+    await createEntry({ userId: "user-1", target: untracked, decision: "SKIPPED" });
+
+    const data = entryCreate.mock.calls[0][0].data;
+
+    expect(data.scannerRunId).toBe("run-1");
+    expect(data.tradingPairId).toBe("pair-1");
+    expect(data.timeframe).toBe("H4");
+    expect(data.trackedSetupId).toBeUndefined();
+
+    // The whole point. The scanner produced no entry, stop, target or ratio for
+    // this market, and nothing here is allowed to fill the gap.
+    for (const field of [
+      "entryLow",
+      "entryHigh",
+      "stopLoss",
+      "takeProfit1",
+      "riskReward",
+      "score",
+    ]) {
+      expect(data).not.toHaveProperty(field);
+    }
+  });
+
+  it("leaves the lifecycle state null rather than defaulting it", async () => {
+    // An untracked opportunity has no lifecycle to be at a point in. Writing
+    // SETUP_FORMING here would claim a state that was never recorded.
+    await createEntry({ userId: "user-1", target: untracked });
+
+    expect(entryCreate.mock.calls[0][0].data.setupStatusAtDecision).toBeNull();
+  });
+
+  it("refuses a market that pass never analysed", async () => {
+    resultFindFirst.mockResolvedValue(null);
+
+    const result = await createEntry({ userId: "user-1", target: untracked });
+
+    expect(result.ok).toBe(false);
+    expect(entryCreate).not.toHaveBeenCalled();
+  });
+
+  it("journals against the setup when the candidate turned out to have one", async () => {
+    // The setup is the richer record. Accepting the untracked shape here would
+    // mint a second entry for the same opportunity and split its history.
+    resultFindFirst.mockResolvedValue({
+      tradingPairId: "pair-1",
+      analysisStatus: "POTENTIAL_SETUP",
+      score: 80,
+      trackedSetupId: "setup-1",
+    });
+
+    await createEntry({ userId: "user-1", target: untracked });
+
+    expect(entryCreate.mock.calls[0][0].data.trackedSetupId).toBe("setup-1");
+    expect(entryCreate.mock.calls[0][0].data.scannerRunId).toBeUndefined();
+  });
+
+  it("returns the existing entry instead of writing a second", async () => {
+    // Deciding twice about the same market in the same pass is a change of
+    // mind on one entry, not a second entry.
+    entryFindFirst.mockResolvedValue({ id: "entry-7" });
+
+    const result = await createEntry({ userId: "user-1", target: untracked });
+
+    expect(result).toEqual({ ok: true, value: { id: "entry-7", created: false } });
+    expect(entryCreate).not.toHaveBeenCalled();
+  });
+
+  it("scopes the idempotency lookup to the owner", async () => {
+    // Without the owner in the `where`, one account deciding about ETHUSDT
+    // would hand its entry to another account deciding about the same market.
+    await createEntry({ userId: "user-1", target: untracked });
+
+    expect(entryFindFirst.mock.calls[0][0].where).toMatchObject({
+      userId: "user-1",
+      scannerRunId: "run-1",
+      tradingPairId: "pair-1",
+      timeframe: "H4",
+    });
+  });
+});
+
+describe("what a decision records about the Coach", () => {
+  const tracked = { kind: "TRACKED" as const, trackedSetupId: "setup-1" };
+
+  it("notes that a review was read, and never that one approved anything", async () => {
+    await createEntry({
+      userId: "user-1",
+      target: tracked,
+      decision: "TAKEN",
+      coach: { providerId: "openai:gpt-5.6-terra", verdict: "MIXED_EVIDENCE" },
+    });
+
+    const payload = entryCreate.mock.calls[0][0].data.events.create.payload;
+    const context = payload.decisionContext;
+
+    expect(context.coach.providerId).toBe("openai:gpt-5.6-terra");
+    expect(context.coach.verdict).toBe("MIXED_EVIDENCE");
+    expect(JSON.stringify(payload)).not.toMatch(/approv/i);
+  });
+
+  it("stamps the moment from the server, never from the request", async () => {
+    // A timestamp a browser sent is a timestamp a browser chose, and the
+    // ordering of decisions is exactly what replay reads.
+    const before = Date.now();
+    await createEntry({
+      userId: "user-1",
+      target: tracked,
+      coach: { providerId: "deterministic", verdict: "INSUFFICIENT_DATA" },
+    });
+    const after = Date.now();
+
+    const recordedAt =
+      entryCreate.mock.calls[0][0].data.events.create.payload.decisionContext.coach.recordedAt;
+
+    expect(recordedAt).toBeGreaterThanOrEqual(before);
+    expect(recordedAt).toBeLessThanOrEqual(after);
+
+    // And `decidedAt` is never written at all — the column defaults to now().
+    expect(entryCreate.mock.calls[0][0].data).not.toHaveProperty("decidedAt");
+  });
+
+  it("records a decision made without the Coach as an ordinary decision", async () => {
+    await createEntry({ userId: "user-1", target: tracked, decision: "WATCHING" });
+
+    const context = entryCreate.mock.calls[0][0].data.events.create.payload.decisionContext;
+
+    expect(context.coach).toBeNull();
+    expect(context.source).toBe("TRACKED_SETUP");
+  });
+
+  it("does not create an outcome when the user decides to take it", async () => {
+    // "I decided to take this setup" is not "an order was executed". SpotLens
+    // has no order path at all, and the trade columns stay empty until the
+    // person comes back and records what actually happened.
+    await createEntry({ userId: "user-1", target: tracked, decision: "TAKEN" });
+
+    const data = entryCreate.mock.calls[0][0].data;
+
+    for (const field of ["actualEntry", "actualExit", "quantity", "openedAt", "closedAt"]) {
+      expect(data).not.toHaveProperty(field);
+    }
+  });
+});
+
+describe("updateDecision — Phase O", () => {
+  beforeEach(() => {
+    entryFindFirst.mockResolvedValue({
+      id: "entry-1",
+      decision: "WATCHING",
+      trackedSetupId: "setup-1",
+      scannerRunId: null,
+    });
+  });
+
+  it("never moves the original decision timestamp", async () => {
+    // Editing a note days later is not a new decision. Replay reads `decidedAt`
+    // as its cutoff, so moving it would silently re-date history.
+    await updateDecision({
+      userId: "user-1",
+      id: "entry-1",
+      decision: "WATCHING",
+      notes: "second thoughts, same conclusion",
+    });
+
+    expect(entryUpdate.mock.calls[0][0].data).not.toHaveProperty("decidedAt");
+  });
+
+  it("carries the context of this change of mind, not the previous one", async () => {
+    await updateDecision({
+      userId: "user-1",
+      id: "entry-1",
+      decision: "SKIPPED",
+      coach: { providerId: "deterministic", verdict: "CONTRADICTED" },
+    });
+
+    expect(eventCreate.mock.calls[0][0].data.payload.decisionContext.coach.verdict).toBe(
+      "CONTRADICTED",
+    );
+  });
+
+  it("refuses a move the journal does not allow", async () => {
+    entryFindFirst.mockResolvedValue({
+      id: "entry-1",
+      decision: "TAKEN",
+      trackedSetupId: "setup-1",
+      scannerRunId: null,
+    });
+
+    // A position that was entered cannot retroactively become one passed over.
+    const result = await updateDecision({ userId: "user-1", id: "entry-1", decision: "SKIPPED" });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.errors[0].code).toBe("INVALID_TRANSITION");
+    expect(transaction).not.toHaveBeenCalled();
+  });
+
+  it("scopes the entry to the owner", async () => {
+    entryFindFirst.mockResolvedValue(null);
+
+    const result = await updateDecision({
+      userId: "user-1",
+      id: "someone-elses",
+      decision: "TAKEN",
+    });
+
+    expect(entryFindFirst.mock.calls[0][0].where).toEqual({
+      id: "someone-elses",
+      userId: "user-1",
+    });
+    expect(result.ok).toBe(false);
+  });
+});
+
+describe("findEntryForOpportunity", () => {
+  it("looks a tracked setup up by the setup, scoped to the owner", async () => {
+    entryFindFirst.mockResolvedValue(null);
+
+    await findEntryForOpportunity("user-1", { kind: "TRACKED", trackedSetupId: "setup-1" });
+
+    expect(entryFindFirst.mock.calls[0][0].where).toEqual({
+      userId: "user-1",
+      trackedSetupId: "setup-1",
+    });
+  });
+
+  it("looks an untracked opportunity up by its references", async () => {
+    entryFindFirst.mockResolvedValue(null);
+
+    await findEntryForOpportunity("user-1", {
+      kind: "UNTRACKED",
+      scannerRunId: "run-1",
+      symbol: "ETHUSDT",
+      timeframe: "H4",
+    });
+
+    expect(entryFindFirst.mock.calls[0][0].where).toEqual({
+      userId: "user-1",
+      scannerRunId: "run-1",
+      timeframe: "H4",
+      tradingPair: { exchangeSymbol: "ETHUSDT" },
+    });
+  });
+
+  it("reports whether a Coach review had been read", async () => {
+    entryFindFirst.mockResolvedValue({
+      id: "entry-1",
+      decision: "WATCHING",
+      notes: null,
+      skipReason: null,
+      decidedAt: new Date(1_757_000_000_000),
+      events: [
+        {
+          payload: {
+            decisionContext: {
+              source: "TRACKED_SETUP",
+              runId: null,
+              coach: { providerId: "deterministic", verdict: "MIXED_EVIDENCE", recordedAt: 1 },
+            },
+          },
+        },
+      ],
+    });
+
+    const entry = await findEntryForOpportunity("user-1", {
+      kind: "TRACKED",
+      trackedSetupId: "setup-1",
+    });
+
+    expect(entry?.coachReviewed).toBe(true);
+  });
+});
+
+/**
+ * No lookahead: a journal entry describes the moment it was made.
+ *
+ * The setup keeps moving — it confirms, it invalidates, the scanner re-anchors
+ * it. None of that may reach backwards into a decision that was made before it
+ * happened, and the mechanism is that the entry reads `TrackedSetup`'s frozen
+ * snapshot columns and its own `setupStatusAtDecision` rather than anything
+ * current.
+ */
+describe("a recorded decision does not change when the setup does", () => {
+  const decidedRow = {
+    id: "entry-1",
+    decision: "WATCHING",
+    skipReason: null,
+    notes: null,
+    // Where the setup was when the person decided.
+    setupStatusAtDecision: "WAITING_CONFIRMATION",
+    decidedAt: new Date(1_757_000_000_000),
+    createdAt: new Date(1_757_000_000_000),
+    scannerRunId: null,
+    tradingPairId: null,
+    timeframe: null,
+    actualEntry: null,
+    actualStopLoss: null,
+    actualTakeProfit: null,
+    actualExit: null,
+    quantity: null,
+    fees: null,
+    slippage: null,
+    exitReason: null,
+    openedAt: null,
+    closedAt: null,
+    tradingPair: null,
+    scannerRun: null,
+    events: [],
+    trackedSetup: {
+      id: "setup-1",
+      timeframe: "H4",
+      // The setup has since moved on, twice over.
+      status: "INVALIDATED",
+      entryLow: 100,
+      entryHigh: 104,
+      stopLoss: 96,
+      takeProfit1: 108,
+      takeProfit2: 120,
+      riskReward: 3,
+      riskRewardIsSynthetic: false,
+      score: 71,
+      scoreGrade: "GOOD",
+      analysisStatus: "WAIT_FOR_CONFIRMATION",
+      createdAt: new Date(1_756_000_000_000),
+      invalidationReason: "Price closed below the stop.",
+      tradingPair: { exchangeSymbol: "ETHUSDT" },
+    },
+  };
+
+  it("reports the lifecycle state at the decision, not the current one", async () => {
+    entryFindMany.mockResolvedValue([decidedRow]);
+
+    const { entries } = await listEntries({ userId: "user-1", limit: 20 });
+
+    expect(entries[0].setupStatusAtDecision).toBe("WAITING_CONFIRMATION");
+    // The current state is available too, and is plainly a different field.
+    expect(entries[0].setup?.currentStatus).toBe("INVALIDATED");
+  });
+
+  it("reports the levels that were on offer, from the immutable snapshot", async () => {
+    entryFindMany.mockResolvedValue([decidedRow]);
+
+    const { entries } = await listEntries({ userId: "user-1", limit: 20 });
+
+    expect(entries[0].setup).toMatchObject({
+      entryLow: 100,
+      entryHigh: 104,
+      stopLoss: 96,
+      riskReward: 3,
+      riskRewardIsSynthetic: false,
+      score: 71,
+      analysisStatus: "WAIT_FOR_CONFIRMATION",
+    });
+  });
+
+  it("implies no outcome for an entry that has none", async () => {
+    // Deciding to take a setup is not a trade. Until the person records what
+    // actually happened there is no result, and the entry must not suggest one.
+    entryFindMany.mockResolvedValue([{ ...decidedRow, decision: "TAKEN" }]);
+
+    const { entries } = await listEntries({ userId: "user-1", limit: 20 });
+
+    expect(entries[0].trade).toBeNull();
+    expect(entries[0].decision).toBe("TAKEN");
+  });
+
+  it("marks an untracked entry as one, with no levels anywhere on it", async () => {
+    entryFindMany.mockResolvedValue([
+      {
+        ...decidedRow,
+        trackedSetup: null,
+        setupStatusAtDecision: null,
+        scannerRunId: "run-1",
+        tradingPairId: "pair-1",
+        timeframe: "H4",
+        tradingPair: { exchangeSymbol: "SOLUSDT" },
+        scannerRun: { id: "run-1", startedAt: new Date(1_757_000_000_000) },
+      },
+    ]);
+    resultFindMany.mockResolvedValue([
+      {
+        scannerRunId: "run-1",
+        tradingPairId: "pair-1",
+        timeframe: "H4",
+        analysisStatus: "WAIT_FOR_CONFIRMATION",
+        score: 62,
+      },
+    ]);
+
+    const { entries } = await listEntries({ userId: "user-1", limit: 20 });
+
+    expect(entries[0].source).toBe("SCANNER_RESULT");
+    expect(entries[0].setup).toBeNull();
+    expect(entries[0].symbol).toBe("SOLUSDT");
+    // The verdict and the score the scanner did record, resolved from the pass
+    // rather than copied onto the journal row.
+    expect(entries[0].opportunity).toMatchObject({
+      runId: "run-1",
+      analysisStatus: "WAIT_FOR_CONFIRMATION",
+      score: 62,
+      scoreGrade: expect.any(String),
+    });
+    expect(JSON.stringify(entries[0])).not.toMatch(/entryLow|stopLoss|riskReward/);
   });
 });

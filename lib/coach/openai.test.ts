@@ -575,3 +575,61 @@ describe("configuration", () => {
     expect(JSON.stringify(choice.model)).not.toContain(KEY);
   });
 });
+
+/**
+ * The bounds and the prompt must not be the same number.
+ *
+ * A regression, and a subtle one. The response schema once capped each list at
+ * exactly 8 points — the number the model lands on most of the time — so an
+ * ordinary 9-point answer failed validation and the whole review was discarded.
+ * The page then showed SpotLens's own reading instead, at random, and looked
+ * exactly like a Coach that was working. The prompt asks for at most 8; the
+ * schema refuses a runaway. They do different jobs and must not coincide.
+ */
+describe("the response bounds leave room above what the prompt asks for", () => {
+  const valid = {
+    summary: "A short reading.",
+    verdict: "MIXED_EVIDENCE" as const,
+    strengths: [],
+    concerns: [],
+    confirmationReview: [],
+    riskRewardReview: [],
+    invalidationReview: [],
+    chartChecks: [],
+    educationalNotes: [],
+  };
+
+  it("states the limit in the prompt, so the model aims below it", () => {
+    // A limit the model is never told about is a limit it cannot respect.
+    expect(COACH_SYSTEM_PROMPT).toMatch(/at most 8 points in each list/i);
+  });
+
+  it("accepts the 8 points the prompt asks for", () => {
+    const eight = Array.from({ length: 8 }, (_, i) => `Point ${i + 1}.`);
+    expect(coachResponseSchema.safeParse({ ...valid, strengths: eight }).success).toBe(true);
+  });
+
+  it("accepts a ninth point rather than throwing the review away", () => {
+    // The case that actually broke. One extra point is a variation, not a
+    // malfunction, and discarding a good review over it degraded the page.
+    const nine = Array.from({ length: 9 }, (_, i) => `Point ${i + 1}.`);
+    expect(coachResponseSchema.safeParse({ ...valid, strengths: nine }).success).toBe(true);
+  });
+
+  it("still refuses a runaway", () => {
+    // The bound has not been removed, only moved off the value the model sits
+    // on. Something unbounded must never reach the page.
+    const many = Array.from({ length: 40 }, (_, i) => `Point ${i + 1}.`);
+    expect(coachResponseSchema.safeParse({ ...valid, strengths: many }).success).toBe(false);
+
+    const enormous = ["x".repeat(5000)];
+    expect(coachResponseSchema.safeParse({ ...valid, strengths: enormous }).success).toBe(false);
+    expect(coachResponseSchema.safeParse({ ...valid, summary: "x".repeat(5000) }).success).toBe(
+      false,
+    );
+  });
+
+  it("still refuses a verdict the Coach cannot reach", () => {
+    expect(coachResponseSchema.safeParse({ ...valid, verdict: "BUY" }).success).toBe(false);
+  });
+});

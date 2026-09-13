@@ -18,7 +18,7 @@ const db = {
 
 vi.mock("@/lib/db/prisma", () => ({ isDatabaseConfigured: true, prisma: db }));
 
-const { buildCoachReview: resolveAndReview } = await import("./coach");
+const { buildCoachReview: resolveAndReview, resolveCoachContext } = await import("./coach");
 const { deterministicProvider } = await import("@/lib/coach");
 
 /**
@@ -275,5 +275,83 @@ describe("provider isolation", () => {
     // The numbers are unaffected: they never travelled through the provider.
     expect(result.result.context.levels!.stopLoss).toBe(0.24671011);
     expect(JSON.stringify(result)).not.toContain("sk-live");
+  });
+});
+
+/**
+ * Phase O: the facts, without the Coach.
+ *
+ * The decision surface shows a setup the moment it loads, and the Coach costs
+ * money and is only ever invoked when the reader presses Ask Coach. That is
+ * enforced by there being a resolution path with no provider argument at all —
+ * a single function with a "skip the model" flag would be one careless edit
+ * away from a page that quietly called it on every render.
+ */
+describe("resolveCoachContext", () => {
+  it("returns the same canonical numbers a review would be built from", async () => {
+    db.scannerRun.findUnique.mockResolvedValue({ id: RUN });
+    db.trackedSetup.findFirst.mockResolvedValue(setupRow());
+
+    const facts = await resolveCoachContext({
+      userId: USER,
+      symbol: "ADAUSDT",
+      timeframe: "H1",
+      runId: RUN,
+      setupId: SETUP,
+    });
+
+    const reviewed = await buildCoachReview({
+      userId: USER,
+      symbol: "ADAUSDT",
+      timeframe: "H1",
+      runId: RUN,
+      setupId: SETUP,
+    });
+
+    expect(facts.ok).toBe(true);
+    expect(reviewed.ok).toBe(true);
+    if (!facts.ok || !reviewed.ok) return;
+
+    // Byte-identical. The decision page and the Coach page cannot show
+    // different numbers for the same setup, because they resolve the same one.
+    expect(facts.context).toEqual(reviewed.result.context);
+  });
+
+  it("asks no provider anything", async () => {
+    db.scannerRun.findUnique.mockResolvedValue({ id: RUN });
+    db.trackedSetup.findFirst.mockResolvedValue(setupRow());
+
+    const provider = { id: "spy", review: vi.fn() };
+
+    // There is nowhere to pass one — that is the assertion. The signature takes
+    // a request and nothing else, so no caller can hand it a provider by
+    // accident and no default can smuggle one in.
+    await resolveCoachContext({
+      userId: USER,
+      symbol: "ADAUSDT",
+      timeframe: "H1",
+      runId: RUN,
+      setupId: SETUP,
+    });
+
+    expect(provider.review).not.toHaveBeenCalled();
+    expect(resolveCoachContext.length).toBe(1);
+  });
+
+  it("keeps another account's setup indistinguishable from a missing one", async () => {
+    db.scannerRun.findUnique.mockResolvedValue({ id: RUN });
+    db.trackedSetup.findFirst.mockResolvedValue(null);
+
+    const result = await resolveCoachContext({
+      userId: STRANGER,
+      symbol: "ADAUSDT",
+      timeframe: "H1",
+      runId: RUN,
+      setupId: SETUP,
+    });
+
+    expect(result.ok).toBe(false);
+    // Ownership is in the `where`, so the row never reaches this process.
+    expect(db.trackedSetup.findFirst.mock.calls[0][0].where).toMatchObject({ userId: STRANGER });
   });
 });

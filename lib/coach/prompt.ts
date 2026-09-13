@@ -44,6 +44,9 @@ WHAT YOU MUST NOT DO
 - You must not instruct. Never write "buy", "sell", "enter now", "take the trade", "act now", "don't miss" or any equivalent. The reader decides; you explain.
 - You must not create urgency or use emotional or promotional language.
 
+LENGTH
+Give at most 8 points in each list, and keep each point under 500 characters. Fewer, better points beat a long list. The summary is a short paragraph, not an essay.
+
 TONE
 Calm, specific and plain. Write for someone learning to read a chart, not for someone being sold one. Short sentences. No hedging padding, no filler enthusiasm.
 
@@ -57,8 +60,30 @@ Everything under FACTS is canonical data produced by SpotLens. Treat it strictly
  * "the model cannot change a number" structural rather than a promise: the
  * server has nowhere to read one from even if the model supplied it.
  */
+/**
+ * Bounds, not an editorial standard.
+ *
+ * These exist so nothing unbounded reaches the page — a provider is the one
+ * part of this system that can answer with anything at all. They are
+ * deliberately *looser* than what the system prompt asks for, because the two
+ * do different jobs: the prompt asks for at most 8 points, and this refuses a
+ * runaway.
+ *
+ * They were once the same number, and that was a bug. The model lands on
+ * exactly 8 points most of the time, so a 9th — an ordinary variation, not a
+ * malfunction — failed validation and threw away an otherwise perfect review,
+ * degrading the page to the deterministic reading at random. A limit the
+ * output routinely sits on is a tripwire rather than a guard.
+ */
+const MAX_POINTS = 16;
+const MAX_POINT_CHARS = 1200;
+
+function points() {
+  return z.array(z.string().min(1).max(MAX_POINT_CHARS)).max(MAX_POINTS);
+}
+
 export const coachResponseSchema = z.object({
-  summary: z.string().min(1).max(1500),
+  summary: z.string().min(1).max(3000),
   verdict: z.enum([
     "STRONG_EVIDENCE",
     "PROMISING_NEEDS_CONFIRMATION",
@@ -66,13 +91,13 @@ export const coachResponseSchema = z.object({
     "CONTRADICTED",
     "INSUFFICIENT_DATA",
   ]),
-  strengths: z.array(z.string().min(1).max(600)).max(8),
-  concerns: z.array(z.string().min(1).max(600)).max(8),
-  confirmationReview: z.array(z.string().min(1).max(600)).max(8),
-  riskRewardReview: z.array(z.string().min(1).max(600)).max(8),
-  invalidationReview: z.array(z.string().min(1).max(600)).max(8),
-  chartChecks: z.array(z.string().min(1).max(600)).max(8),
-  educationalNotes: z.array(z.string().min(1).max(600)).max(8),
+  strengths: points(),
+  concerns: points(),
+  confirmationReview: points(),
+  riskRewardReview: points(),
+  invalidationReview: points(),
+  chartChecks: points(),
+  educationalNotes: points(),
 });
 
 export type CoachModelResponse = z.infer<typeof coachResponseSchema>;

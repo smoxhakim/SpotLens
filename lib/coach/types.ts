@@ -40,7 +40,20 @@ export interface CoachLevels {
   entryLow: number;
   entryHigh: number;
   stopLoss: number;
-  takeProfits: { label: string; level: number; rr: number | null; reason: string | null }[];
+  /**
+   * `kind` travels with each target because it is what decides which one the
+   * ratio was measured to — `selectMeasuredTarget` needs it, and the risk
+   * calculator prefills that target. Null on a record written before it was
+   * carried, which simply means no target can be identified as the measured
+   * one rather than the wrong one being.
+   */
+  takeProfits: {
+    label: string;
+    level: number;
+    rr: number | null;
+    kind: string | null;
+    reason: string | null;
+  }[];
   riskReward: number;
   /**
    * Phase A's qualifier, carried the whole way to the screen. A ratio measured

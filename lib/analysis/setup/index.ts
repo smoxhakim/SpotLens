@@ -165,7 +165,7 @@ export function runAnalysis(candles: Candle[], options: RunAnalysisOptions = {})
 export { calculateEntryZone, EXTENDED_ATR_MULTIPLE } from "./entry";
 export { calculateStopLoss, STOP_BUFFER_ATR, MAX_SENSIBLE_RISK_PCT } from "./stop-loss";
 export { calculateTakeProfits } from "./take-profit";
-export { calculateRiskReward } from "./risk-reward";
+export { calculateRiskReward, selectMeasuredTarget } from "./risk-reward";
 export { calculatePositionSize } from "./position-size";
 export type { PositionSizeInput, PositionSizeResult } from "./position-size";
 export { scoreSetup, gradeFor, SCORE_WEIGHTS } from "./score";

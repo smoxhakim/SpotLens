@@ -5,6 +5,8 @@
  * calculator UI and the tests.
  */
 export { calculateRisk } from "./calculate";
+export { entryPriceOf, riskCalculatorParams, riskPrefillFrom } from "./prefill";
+export type { RiskPrefill } from "./prefill";
 export {
   COSTS_SIGNIFICANT_RATIO,
   DEFAULT_RISK_FEE_RATE,

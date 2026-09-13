@@ -12,6 +12,16 @@ export {
 } from "./amendment";
 export { canTransition, computeOutcome, validateOutcome, validateTransition } from "./decide";
 export {
+  buildDecisionContext,
+  coachWasRead,
+  readDecisionContext,
+  COACH_VERDICTS,
+  type CoachReference,
+  type CoachVerdictRecord,
+  type DecisionContext,
+  type DecisionContextPayload,
+} from "./decision-context";
+export {
   ALLOWED_TRANSITIONS,
   POSITION_DECISIONS,
   type JournalDecision,

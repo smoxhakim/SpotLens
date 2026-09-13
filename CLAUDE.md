@@ -4,10 +4,10 @@ Educational crypto **spot trading** analysis app. A deterministic engine reads
 market structure and produces entry / stop / targets / score / status, with a
 plain-language reason attached to every number.
 
-Phases A–H are shipped and merged to `main`. Phase I (journal, replay,
-research) is on `feat/phase-i-journal-replay-research`, and Phase J (final
-hardening) builds on it in `feat/phase-j-hardening`. **Open items and where
-work stopped are at the top of `TODO.md`** — start there.
+Phases A–N.1 are shipped and merged to `main`. Phase O (the decision workflow —
+Opportunities → Coach → Risk → decision → Journal) is on
+`feat/phase-o-decision-workflow`. **Open items and where work stopped are at the
+top of `TODO.md`** — start there.
 
 Full spec in `PRD.md`, design in `ARCHITECTURE.md`, security posture in
 `SECURITY.md`. Read those only when the task needs them — this file is meant to
@@ -186,6 +186,39 @@ WAITING_CONFIRMATION` is price arriving somewhere, not structure changing,
   through an adapter — never redefined. A trade is grouped by the confirmation
   state **at the decision** (`setupStatusAtDecision`), not by whether the setup
   ever confirmed.
+- **A decision is the user's, and only an explicit action creates one.**
+  `features/decision` is the one place a journal decision is written. Opening an
+  analysis, asking the Coach, sizing a position or reading a notification record
+  nothing — inferring a decision from any of them would collapse the three facts
+  the journal exists to keep apart: what the engine found, what the person
+  decided, and what the trade did. TAKEN means "I decided to take this setup"
+  and creates **no outcome**; SpotLens has no order path, and the confirmation
+  step before it says so. There is deliberately no `coachApproved` field and
+  there never will be — the Coach reads the same analysis the reader does, so
+  what is recorded is narrower and true: that a review was read, by which
+  provider, and what its own verdict said. `readDecisionContext` rebuilds field
+  by field rather than casting, so an extra key cannot survive into the record.
+- **A decision references; it never copies.** A tracked setup is referenced by
+  `trackedSetupId` and reads the immutable snapshot. An opportunity the scanner
+  scored but never followed is referenced by (run, pair, timeframe) — and
+  `ScannerResult` is written once per pass and never updated, so those three
+  resolve the same verdict and score for ever. No entry, stop, target or ratio
+  is stored on a journal row for the untracked case, because none was produced;
+  `setupStatusAtDecision` is null rather than defaulted, since there was no
+  lifecycle to be at a point in. Numbers never travel in a request either: the
+  create contract is references only, and `.strict()` refuses the rest.
+- **The decision surface cannot reach a model.** `resolveCoachContext` takes a
+  request and nothing else — no provider argument, no flag — while
+  `buildCoachReview` is the only path that calls one. `/api/decision/context`
+  uses the first. A single function with a "skip the model" option would be one
+  edit away from a page that invoked ChatGPT on every render; the Coach is
+  explicit, and stays explicit.
+- **The calculator sizes what the panel quoted.** `lib/risk/prefill.ts` selects
+  from stored levels and computes nothing, and the target it offers comes from
+  `selectMeasuredTarget` — the engine's own rule, imported rather than restated,
+  because a second copy would let the calculator size against one target while
+  the analysis quoted another. `lib/risk` stays the only position-sizing
+  formula; no component re-derives one.
 - **Disclaimers come from `lib/constants/disclaimers.ts`.** Never inline the
   wording.
 - **No meme coins.** The curated list is `lib/market-data/curated-assets.ts`.
@@ -210,7 +243,8 @@ lib/
   setups/       setup identity + lifecycle planner (pure; no DB)
   scanner/      scheduling, concurrency, retries, ranking, shortlist (pure)
   notifications/ event mapping, dedupe keys, Telegram formatting (pure)
-  journal/      decision states and their legal transitions (pure)
+  journal/      decision states, transitions, decision context (pure)
+  coach/        context, rules, prompt, provider seam (pure)
   replay/       the cutoff: what was knowable at a moment (pure)
   research/     engine funnel vs decision counts, kept apart (pure)
   risk/         position sizing, caps, costs (pure; one source of the formula)
@@ -259,6 +293,22 @@ npm run prisma:seed          # assets, checklists, learn articles (idempotent)
   `lib/market-data/schema.ts`. Never inline a timeframe list.
 - **Neon needs two URLs.** `DATABASE_URL` (pooled) for the app, `DIRECT_URL`
   (unpooled) for migrations — Prisma's advisory locks need a direct connection.
+- **Never point a Prisma shadow database at a real one.** A shadow database is
+  one Prisma **drops and recreates** to replay migrations into. `migrate dev`
+  and `migrate diff --from-migrations` both need one, and with none configured
+  Prisma creates it on the `directUrl` server — which on Neon is the database
+  the application uses. Passing `DIRECT_URL` to `--shadow-database-url`
+  destroyed this project's development database once; the command did exactly
+  what it documents. The datasource now declares
+  `shadowDatabaseUrl = env("SHADOW_DATABASE_URL")` so Prisma uses the one it is
+  given — leaving it unset is _not_ safe, because Prisma falls back to the
+  invented shadow without complaining, which is why the guard demands a value.
+  `scripts/check-shadow-db.ts` fails closed on an unset, malformed, remote or
+  identical shadow, **and on a remote `DIRECT_URL`**: `migrate dev` resets the
+  main database on drift ("All data will be lost"), which no shadow
+  configuration prevents. So `npm run prisma:migrate` is local-only. Apply
+  migrations to a real database with `npm run prisma:deploy` — no shadow
+  database, no reset, and it works with `SHADOW_DATABASE_URL` unset.
 - **The `@emnapi/*` devDependencies are load-bearing.** Nothing imports them;
   they exist because npm otherwise omits them from the lockfile and `npm ci`
   fails on Linux. See the troubleshooting note in `README.md`.

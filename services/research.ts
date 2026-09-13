@@ -105,7 +105,13 @@ export async function runResearch(input: {
 
     setups.push(setup);
 
-    if (entry) {
+    // Reached through the setup's own relation, so an entry here is a tracked
+    // one by construction and has the lifecycle state it was decided against.
+    // Phase O's untracked entries reference a scanner result instead and
+    // belong to no setup, so they never arrive in this loop — which is right:
+    // the engine funnel counts setups, and a market that never became one has
+    // nothing to contribute to it.
+    if (entry && entry.setupStatusAtDecision !== null) {
       entries.push({
         setupId: row.id,
         decision: entry.decision,

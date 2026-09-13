@@ -15,7 +15,7 @@ import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { fetchApi } from "@/features/market/hooks/fetch-api";
 import { formatPrice } from "@/lib/format";
-import { ALLOWED_TRANSITIONS, type JournalDecision } from "@/lib/journal";
+import { ALLOWED_TRANSITIONS, type DecisionContext, type JournalDecision } from "@/lib/journal";
 import { TIMEFRAME_LABELS } from "@/lib/market-data/provider";
 import { cn } from "@/lib/utils";
 
@@ -55,6 +55,8 @@ interface JournalEntryDetail extends JournalEntrySummary {
     createdAt: string;
     /** The values this event replaced, when it replaced any. */
     supersededOutcome: SupersededOutcome | null;
+    /** What was on screen when this decision was made. Null before Phase O. */
+    decisionContext: DecisionContext | null;
   }[];
   trade: {
     actualEntry: number;
@@ -115,9 +117,59 @@ export function JournalDetail({ id }: { id: string }) {
   );
 }
 
-/** What SpotLens said, read from the immutable setup snapshot. */
+/**
+ * What SpotLens said — from the immutable setup snapshot, or, for a market it
+ * never tracked, from the scanner result the decision references.
+ *
+ * The second kind shows a verdict and a score and nothing else. There is no
+ * entry, no stop, no target and no ratio, because the scanner produced none for
+ * this market; showing a dash in those rows would read as data that went
+ * missing rather than as the truthful answer, so the whole grid is replaced by
+ * a sentence that says what happened.
+ */
 function Plan({ entry }: { entry: JournalEntryDetail }) {
-  const { setup } = entry;
+  const { setup, opportunity } = entry;
+
+  if (!setup) {
+    return (
+      <Card>
+        <CardHeader className="pb-2">
+          <CardTitle className="flex flex-wrap items-baseline gap-2 text-sm">
+            <span>{entry.symbol ?? "Unknown market"}</span>
+            <span className="text-muted-foreground">
+              {entry.timeframe ? TIMEFRAME_LABELS[entry.timeframe] : ""}
+            </span>
+            <Badge variant="outline" className="text-[9px]">
+              Untracked opportunity
+            </Badge>
+          </CardTitle>
+          <p className="text-[10px] leading-relaxed text-muted-foreground">
+            SpotLens scored this market in a scan but never began tracking a setup for it, so there
+            is no entry, stop, target or ratio on the record — and none has been invented for one.
+            {opportunity?.scannedAt
+              ? ` Scanned ${new Date(opportunity.scannedAt).toLocaleString()}.`
+              : ""}
+          </p>
+        </CardHeader>
+        <CardContent>
+          <dl className="grid grid-cols-2 gap-3 text-[11px] sm:grid-cols-4">
+            <Field label="Quality">
+              {opportunity?.score === null || opportunity?.score === undefined
+                ? "Not recorded"
+                : `${opportunity.score}/100${
+                    opportunity.scoreGrade ? ` · ${opportunity.scoreGrade.toLowerCase()}` : ""
+                  }`}
+            </Field>
+            <Field label="Verdict then">
+              {opportunity?.analysisStatus
+                ? opportunity.analysisStatus.toLowerCase().replace(/_/g, " ")
+                : "Not recorded"}
+            </Field>
+          </dl>
+        </CardContent>
+      </Card>
+    );
+  }
 
   return (
     <Card>
@@ -157,7 +209,9 @@ function Plan({ entry }: { entry: JournalEntryDetail }) {
             )}
           </Field>
           <Field label="At decision">
-            {entry.setupStatusAtDecision.toLowerCase().replace(/_/g, " ")}
+            {entry.setupStatusAtDecision === null
+              ? "Not recorded"
+              : entry.setupStatusAtDecision.toLowerCase().replace(/_/g, " ")}
           </Field>
           <Field label="Verdict then">
             {setup.analysisStatus.toLowerCase().replace(/_/g, " ")}
@@ -421,6 +475,20 @@ function Timeline({ entry }: { entry: JournalEntryDetail }) {
                 </span>
                 <br />
                 {event.detail}
+                {event.decisionContext?.coach && (
+                  <span className="mt-0.5 block text-[10px] text-muted-foreground">
+                    {/* What was read, never what it concluded about the decision.
+                        The Coach's own verdict is its reading of the evidence —
+                        the reader may have decided the opposite, and nothing
+                        here says which way they went. */}
+                    A Coach review had been read (
+                    {event.decisionContext.coach.providerId.startsWith("openai:")
+                      ? "AI Coach"
+                      : "SpotLens's own reading"}
+                    , verdict {event.decisionContext.coach.verdict.toLowerCase().replace(/_/g, " ")}
+                    ).
+                  </span>
+                )}
                 {event.supersededOutcome && <Superseded previous={event.supersededOutcome} />}
               </li>
             ))}
