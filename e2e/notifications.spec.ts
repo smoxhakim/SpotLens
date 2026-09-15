@@ -163,7 +163,9 @@ test.describe("notification settings", () => {
     }
 
     expect(issued.ok()).toBe(true);
-    const before = await prisma.telegramConnection.findUnique({ where: { userId } });
+    const before = await prisma.telegramConnection.findUnique({
+      where: { userId_bot: { userId, bot: "MAIN" } },
+    });
     expect(before?.pendingCodeHash).toBeTruthy();
 
     async function poll(times: number) {
@@ -175,7 +177,9 @@ test.describe("notification settings", () => {
         const { result } = await response.json();
         expect(["PENDING", "UNAVAILABLE"], `poll ${i}`).toContain(result.status);
       }
-      return (await prisma.telegramConnection.findUnique({ where: { userId } }))!;
+      return (await prisma.telegramConnection.findUnique({
+        where: { userId_bot: { userId, bot: "MAIN" } },
+      }))!;
     }
 
     // Not "attempts stay at zero": one bot serves every account, so a message
