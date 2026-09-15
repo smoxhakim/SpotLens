@@ -106,11 +106,33 @@ enum NotificationEventType {
   STRUCTURE_CHANGED
   DAILY_SUMMARY
   SYSTEM_ERROR
+  /// Phase Q. New positive evidence has appeared at a tracked level while the
+  /// setup is still waiting. Not a status, not a promotion, and never produced
+  /// by anything but `lib/analysis/confirmation`.
+  CONFIRMATION_EVIDENCE
+  /// Phase Q. The deterministic confirmation engine returned PRESENT for this
+  /// setup for the first time since the watcher began following it.
+  CONFIRMATION_REACHED
 }
 
+/// Where a notification was delivered.
+///
+/// `TELEGRAM` is the main SpotLens bot and carries lifecycle events.
+/// `TELEGRAM_CONFIRMATION` is a second, dedicated bot that carries confirmation
+/// traffic and nothing else — the whole point of separating them is that
+/// per-candle confirmation activity must not fill the main channel. The two
+/// have different tokens, different chat bindings and different rows; the
+/// unique index below is per channel, so one cannot deduplicate the other away.
 enum NotificationChannel {
   IN_APP
   TELEGRAM
+  TELEGRAM_CONFIRMATION
+}
+
+/// Which bot a Telegram binding belongs to.
+enum TelegramBot {
+  MAIN
+  CONFIRMATION
 }
 
 enum NotificationStatus {
@@ -244,19 +266,22 @@ model User {
   createdAt          DateTime  @default(now())
   updatedAt          DateTime  @updatedAt
 
-  accounts           Account[]
-  sessions           Session[]
-  watchlist          Watchlist[]
-  snapshots          AnalysisSnapshot[]
-  backtestRuns       BacktestRun[]
-  trackedSetups      TrackedSetup[]
-  notifications      Notification[]
-  notificationPrefs  NotificationPreference?
-  telegramConnection TelegramConnection?
-  subscription       Subscription?
-  auditLogs          AdminAuditLog[]
-  checklistsUpdated  EthicalChecklist[]      @relation("ChecklistUpdatedBy")
-  JournalEntry       JournalEntry[]
+  accounts            Account[]
+  sessions            Session[]
+  watchlist           Watchlist[]
+  snapshots           AnalysisSnapshot[]
+  backtestRuns        BacktestRun[]
+  trackedSetups       TrackedSetup[]
+  notifications       Notification[]
+  notificationPrefs   NotificationPreference?
+  /// One per bot: the main SpotLens bot and the confirmation-alert bot are
+  /// separate Telegram bots, and a chat bound to one cannot be messaged by the
+  /// other until the user has started it there.
+  telegramConnections TelegramConnection[]
+  subscription        Subscription?
+  auditLogs           AdminAuditLog[]
+  checklistsUpdated   EthicalChecklist[]      @relation("ChecklistUpdatedBy")
+  JournalEntry        JournalEntry[]
 }
 
 // --- NextAuth Prisma adapter tables (standard shape) -----------------------
@@ -569,10 +594,11 @@ model TrackedSetup {
   /// Reference rather than a second copy of the same analysis.
   analysisSnapshotId String?
 
-  user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
-  tradingPair  TradingPair   @relation(fields: [tradingPairId], references: [id], onDelete: Cascade)
-  events       SetupEvent[]
-  journalEntry JournalEntry?
+  user              User                    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tradingPair       TradingPair             @relation(fields: [tradingPairId], references: [id], onDelete: Cascade)
+  events            SetupEvent[]
+  journalEntry      JournalEntry?
+  confirmationWatch SetupConfirmationWatch?
 
   @@index([userId, tradingPairId, timeframe, status])
   @@index([userId, createdAt])
@@ -751,6 +777,13 @@ model NotificationPreference {
   structureChanged     Boolean @default(false)
   dailySummary         Boolean @default(false)
   systemError          Boolean @default(true)
+  /// Phase Q. Governs both confirmation-watch event types at once, because a
+  /// reader who wants "evidence is developing" and not "evidence is complete"
+  /// is a preference nobody has ever had.
+  ///
+  /// Defaults on, unlike `telegramEnabled`: these reach a bot that has to be
+  /// deliberately created and connected, so connecting it *is* the opt-in.
+  confirmationAlerts   Boolean @default(true)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -762,8 +795,17 @@ model NotificationPreference {
 ///
 /// The bot token is never here. It lives only in the server's environment: a
 /// token in a database is a token in every backup of it.
+///
+/// One row per (user, bot). A second row is not a convenience — it is forced by
+/// Telegram: a bot cannot message someone who has never started a chat with
+/// *that* bot, so reusing the main bot's `chatId` for the confirmation bot
+/// would produce a binding that looks connected and silently answers 403. The
+/// per-bot `lastUpdateId` and `pendingCodeHash` matter for the same reason:
+/// each bot has its own update queue, and one poll must not consume the
+/// other's messages or overwrite the other's pending code.
 model TelegramConnection {
-  userId String @id
+  userId String
+  bot    TelegramBot @default(MAIN)
 
   /// Null until the connection is completed.
   chatId      String?
@@ -778,12 +820,71 @@ model TelegramConnection {
   claimAttempts   Int       @default(0)
 
   /// Telegram's update cursor, so one poll cannot re-read old messages.
+  /// Per bot: each has its own queue, and sharing a cursor would let one bot's
+  /// poll swallow the message the other was waiting for.
   lastUpdateId BigInt?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([userId, bot])
+}
+
+/// What the confirmation watcher has already said about one tracked setup.
+///
+/// ## Why this exists at all
+///
+/// The obvious alternative is to read it back off `Notification`: a row exists
+/// exactly when that evidence was announced, and the unique index already makes
+/// a repeat silent. That is genuinely sufficient for "has this been announced?"
+/// and it is *not* sufficient for "has this setup been watched yet?", which is
+/// the question a baseline needs answered.
+///
+/// The two are different because a setup with no evidence has nothing to
+/// announce, so it writes no row. A setup seen for the first time at
+/// SETUP_FORMING with nothing at the level is therefore indistinguishable, in
+/// the notification history, from one the watcher has followed for a week that
+/// still has nothing — and the first must be baselined into silence while the
+/// second must speak the moment a higher low appears. Without this table the
+/// watcher either re-baselines forever and never says anything, or announces
+/// the whole existing evidence of every open setup the first time it runs.
+///
+/// So this records the watch, and `Notification`'s unique index still records
+/// the delivery. They are not redundant: this decides *what changed*, and the
+/// index guarantees *at most one message* for whatever this decided — which is
+/// what makes a crash between the two self-healing rather than lossy.
+model SetupConfirmationWatch {
+  /// One row per tracked setup. Identity is the setup, never the market: a
+  /// replacement setup on the same symbol and timeframe is a different level
+  /// with its own history, and must not inherit what was said about the last.
+  trackedSetupId String @id
+  userId         String
+
+  /// Every positive signal type ever announced for this setup, sorted and
+  /// joined with `+`. A high-water mark rather than the last set seen, and
+  /// deliberately so: evidence that lapses and returns is the same evidence,
+  /// and re-announcing it on every oscillation is precisely the spam this
+  /// whole layer exists to prevent. Empty string means nothing yet.
+  announcedEvidence String
+  /// Whether the "confirmation reached" message has been sent. Once true it
+  /// stays true — a setup that loses and regains PRESENT has not reached
+  /// anything twice.
+  reachedAnnounced  Boolean @default(false)
+
+  /// Close time of the candle the last observation was judged on, epoch ms.
+  /// Always a closed candle: the scanner drops the forming one before the
+  /// engine sees it. Stored so the record can be audited against the chart.
+  lastEvaluatedAt BigInt
+  /// When the watcher first saw this setup. Everything true at that moment was
+  /// recorded as already known and announced nothing.
+  baselinedAt     DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  setup TrackedSetup @relation(fields: [trackedSetupId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
 }
 
 /// One human decision about one setup.
