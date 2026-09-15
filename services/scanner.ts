@@ -4,6 +4,7 @@ import {
   runAnalysis,
   type AnalysisResult,
 } from "@/lib/analysis";
+import type { ConfirmationObservation } from "@/lib/confirmation-watch";
 import { isDatabaseConfigured, prisma } from "@/lib/db/prisma";
 import type { Candle, Timeframe } from "@/lib/market-data/provider";
 import {
@@ -23,6 +24,7 @@ import { classifyRegime } from "@/lib/regime";
 import type { MarketSummary } from "@/types/market";
 import { getCandles } from "@/services/candles";
 import { listMarkets } from "@/services/markets";
+import { lifecycleStatusFor } from "@/lib/setups";
 import { trackSetup } from "@/services/setups";
 
 /**
@@ -103,6 +105,21 @@ export interface ScanSummary {
    * never what to keep.
    */
   shortlist: Shortlist;
+  /**
+   * What the confirmation engine said about each tracked setup on this pass.
+   *
+   * Carried out of the scan rather than acted on inside it, for the same reason
+   * the scanner emits events instead of sending them: this service knows
+   * nothing about Telegram, and `scripts/scanner.ts` is the composition root
+   * that knows both halves.
+   *
+   * One entry per market that has a tracked setup — including the ones where
+   * nothing moved, because "nothing moved" is exactly what the watcher needs to
+   * see in order to stay quiet about it. Every entry was judged on a closed
+   * candle: `closedCandlesOnly` runs before the engine, and `evaluatedAt` is
+   * the close time of the candle the engine actually read.
+   */
+  observations: ConfirmationObservation[];
 }
 
 /**
@@ -135,6 +152,9 @@ export async function runScan(options: ScanOptions): Promise<ScanSummary> {
 
   const events = outcomes.flatMap((outcome) => outcome.events);
   const results = outcomes.map((outcome) => outcome.result);
+  const observations = outcomes
+    .map((outcome) => outcome.observation)
+    .filter((observation): observation is ConfirmationObservation => observation !== null);
   const summary = summarise(results, events, timeframes, markets.length, Date.now() - startedAt);
 
   await finishRun(runId, summary, results);
@@ -147,6 +167,7 @@ export async function runScan(options: ScanOptions): Promise<ScanSummary> {
     runId,
     results: rankResults(results),
     shortlist: buildShortlist(results.map(toShortlistInput)),
+    observations,
   };
 }
 
@@ -172,6 +193,8 @@ function toShortlistInput(result: MarketScanOutcome) {
 interface OneOutcome {
   result: MarketScanOutcome;
   events: ScannerEvent[];
+  /** Null when this market has no tracked setup to watch. */
+  observation: ConfirmationObservation | null;
 }
 
 /**
@@ -251,6 +274,10 @@ async function scanOne(
           message: failure.message,
         }),
       ],
+      // A market that could not be analysed produced no confirmation reading.
+      // Carrying an empty one would let the watcher record a baseline, or an
+      // evidence set, from an analysis that never happened.
+      observation: null,
     };
   }
 
@@ -273,6 +300,7 @@ async function scanOne(
   });
 
   return {
+    observation: observationFor(market, timeframe, result, outcome, options.userId),
     result: {
       symbol: market.exchangeSymbol,
       tradingPairId: market.pairId,
@@ -359,6 +387,57 @@ function abortedOutcome(market: MarketSummary, timeframe: Timeframe): OneOutcome
       durationMs: 0,
     },
     events: [],
+    observation: null,
+  };
+}
+
+/**
+ * What the confirmation engine said about this setup, as an observation.
+ *
+ * A projection, not a computation: every field is read off the
+ * `ConfirmationResult` the engine produced during `runAnalysis`, and the
+ * lifecycle status is the one the lifecycle service just returned. Nothing here
+ * decides whether evidence is sufficient — `lib/analysis/confirmation` already
+ * did, and re-deciding it would be a second opinion that could drift from the
+ * first.
+ *
+ * Null when there is no tracked setup: the watcher follows setups, never
+ * markets, so a reading with no setup to attach to is not an observation of
+ * anything.
+ */
+function observationFor(
+  market: MarketSummary,
+  timeframe: Timeframe,
+  result: AnalysisResult,
+  outcome: { setupId: string | null; status: string | null },
+  userId: string,
+): ConfirmationObservation | null {
+  const confirmation = result.confirmation;
+  if (!confirmation || !outcome.setupId) return null;
+
+  return {
+    trackedSetupId: outcome.setupId,
+    userId,
+    symbol: market.exchangeSymbol,
+    timeframe,
+    // `trackSetup` reports a status only when it wrote something. A setup that
+    // did not move is the common case and the one the watcher most needs to
+    // see — it is how "nothing new here" stays quiet — so the status falls back
+    // to the lifecycle's own pure function. For an unchanged setup the two are
+    // the same value by construction: NONE is returned precisely when the
+    // target state equals the stored one.
+    lifecycleStatus:
+      (outcome.status as ConfirmationObservation["lifecycleStatus"]) ?? lifecycleStatusFor(result),
+    status: confirmation.status,
+    signals: confirmation.signals.map((signal) => ({
+      type: signal.type,
+      signal: signal.signal,
+      title: signal.title,
+      detail: signal.detail,
+    })),
+    // The close time of the candle the engine judged. Always a closed one: the
+    // scanner drops the forming candle before `runAnalysis` sees it.
+    evaluatedAt: confirmation.evaluatedAt,
   };
 }
 
@@ -368,7 +447,7 @@ function summarise(
   timeframes: Timeframe[],
   marketCount: number,
   durationMs: number,
-): Omit<ScanSummary, "runId" | "results" | "shortlist"> {
+): Omit<ScanSummary, "runId" | "results" | "shortlist" | "observations"> {
   const succeeded = results.filter((r) => r.ok).length;
   const failed = results.length - succeeded;
 
@@ -415,7 +494,7 @@ async function createRun(
 
 async function finishRun(
   runId: string | null,
-  summary: Omit<ScanSummary, "runId" | "results" | "shortlist">,
+  summary: Omit<ScanSummary, "runId" | "results" | "shortlist" | "observations">,
   results: MarketScanOutcome[],
 ): Promise<void> {
   if (!runId || !isDatabaseConfigured) return;
