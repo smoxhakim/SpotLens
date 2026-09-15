@@ -13,8 +13,13 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { fetchApi } from "@/features/market/hooks/fetch-api";
 import type { NotificationPreferences } from "@/lib/notifications";
 
+type TelegramBot = "MAIN" | "CONFIRMATION";
+
 interface TelegramStatus {
+  bot: TelegramBot;
   configured: boolean;
+  /** Which variable to set, so an unconfigured bot names the right one. */
+  tokenVariable: string;
   /** The bot's public @username, when the server could ask Telegram for it. */
   botUsername: string | null;
   connected: boolean;
@@ -22,6 +27,38 @@ interface TelegramStatus {
   connectedAt: string | null;
   pending: boolean;
 }
+
+/**
+ * What each bot carries, in the words a reader chooses by.
+ *
+ * Two bots is one more thing to understand than one, so the panel has to be
+ * explicit about why: the main bot carries lifecycle events, the confirmation
+ * bot carries the per-candle evidence that would otherwise bury them. That is
+ * the whole reason the second one exists, and it is the only thing a reader
+ * needs to know to decide whether to connect it.
+ */
+const BOT_COPY: Record<
+  TelegramBot,
+  { title: string; blurb: string; connect: string; queryKey: string }
+> = {
+  MAIN: {
+    title: "Main SpotLens bot",
+    blurb:
+      "Potential setups, invalidations and the daily summary — the events that say a tracked " +
+      "setup's situation has changed.",
+    connect: "Connect Telegram",
+    queryKey: "telegram-status",
+  },
+  CONFIRMATION: {
+    title: "Confirmation alerts",
+    blurb:
+      "A separate bot for confirmation evidence as it appears at a tracked level, so it cannot " +
+      "bury the main channel. Each setup is followed on its own, the first look at a setup is a " +
+      "silent baseline, and the same evidence is never announced twice.",
+    connect: "Connect confirmation alerts",
+    queryKey: "telegram-status-confirmation",
+  },
+};
 
 /**
  * Each toggle names the event and says plainly how often it fires, because
@@ -48,7 +85,8 @@ const EVENT_TOGGLES: {
   {
     key: "confirmationDetected",
     label: "Confirmation evidence",
-    hint: "The confirmation layer found its evidence at a tracked level, without the analysis being promoted. Evidence, not approval. Telegram gets these only when the setup is not high risk and the reward is measurable; the rest stay here.",
+    inApp: true,
+    hint: "The lifecycle reached confirmation-detected: the confirmation layer found its evidence and the analysis was still not promoted. Recorded here and kept in the setup's history. It no longer reaches the main bot — confirmation traffic moved to its own bot, which is the point of having one.",
   },
   {
     key: "setupInvalidated",
@@ -60,6 +98,11 @@ const EVENT_TOGGLES: {
     label: "Structure signal",
     inApp: true,
     hint: "One piece of structural evidence at a tracked level — a break upward, or a zone reclaimed. Rare, and always in the setup's favour, since an adverse break arrives as an invalidation instead.",
+  },
+  {
+    key: "confirmationAlerts",
+    label: "Confirmation alerts",
+    hint: "New confirmation evidence at a tracked level, and the moment the deterministic confirmation check has everything it requires. These go to the confirmation bot below — never to the main one.",
   },
   {
     key: "dailySummary",
@@ -87,6 +130,12 @@ export function NotificationSettings() {
   const telegram = useQuery<{ telegram: TelegramStatus }>({
     queryKey: ["telegram-status"],
     queryFn: () => fetchApi("/api/notifications/telegram"),
+    enabled: signedIn,
+  });
+
+  const confirmation = useQuery<{ telegram: TelegramStatus }>({
+    queryKey: ["telegram-status-confirmation"],
+    queryFn: () => fetchApi("/api/notifications/telegram?bot=CONFIRMATION"),
     enabled: signedIn,
   });
 
@@ -165,19 +214,37 @@ export function NotificationSettings() {
 
         <Separator />
 
-        <TelegramSection status={telegram.data?.telegram} isLoading={telegram.isPending} />
+        <TelegramSection
+          bot="MAIN"
+          status={telegram.data?.telegram}
+          isLoading={telegram.isPending}
+        />
+
+        <Separator />
+
+        <TelegramSection
+          bot="CONFIRMATION"
+          status={confirmation.data?.telegram}
+          isLoading={confirmation.isPending}
+        />
       </CardContent>
     </Card>
   );
 }
 
 function TelegramSection({
+  bot,
   status,
   isLoading,
 }: {
+  bot: TelegramBot;
   status: TelegramStatus | undefined;
   isLoading: boolean;
 }) {
+  const copy = BOT_COPY[bot];
+  // One query string for every call in this section, so a bot's connect, claim,
+  // test and disconnect cannot end up addressing different bots.
+  const query = `?bot=${bot}`;
   const queryClient = useQueryClient();
   const [code, setCode] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
@@ -185,7 +252,7 @@ function TelegramSection({
 
   const connect = useMutation({
     mutationFn: () =>
-      fetchApi<{ code: string }>("/api/notifications/telegram/connect", { method: "POST" }),
+      fetchApi<{ code: string }>(`/api/notifications/telegram/connect${query}`, { method: "POST" }),
     onSuccess: (data) => {
       setCode(data.code);
       setMessage(null);
@@ -196,14 +263,14 @@ function TelegramSection({
   const claim = useMutation({
     mutationFn: () =>
       fetchApi<{ result: { status: string; chatLabel?: string | null; error?: string } }>(
-        "/api/notifications/telegram/claim",
+        `/api/notifications/telegram/claim${query}`,
         { method: "POST" },
       ),
     onSuccess: (data) => {
       if (data.result.status === "CONNECTED") {
         setCode(null);
-        setMessage("Telegram connected.");
-        queryClient.invalidateQueries({ queryKey: ["telegram-status"] });
+        setMessage(`${copy.title} connected.`);
+        queryClient.invalidateQueries({ queryKey: [copy.queryKey] });
         queryClient.invalidateQueries({ queryKey: ["notification-preferences"] });
       } else if (data.result.status === "EXPIRED" || data.result.status === "TOO_MANY_ATTEMPTS") {
         setCode(null);
@@ -221,17 +288,17 @@ function TelegramSection({
   });
 
   const disconnect = useMutation({
-    mutationFn: () => fetchApi("/api/notifications/telegram", { method: "DELETE" }),
+    mutationFn: () => fetchApi(`/api/notifications/telegram${query}`, { method: "DELETE" }),
     onSuccess: () => {
-      setMessage("Telegram disconnected.");
-      queryClient.invalidateQueries({ queryKey: ["telegram-status"] });
+      setMessage(`${copy.title} disconnected.`);
+      queryClient.invalidateQueries({ queryKey: [copy.queryKey] });
       queryClient.invalidateQueries({ queryKey: ["notification-preferences"] });
     },
   });
 
   const test = useMutation({
     mutationFn: () =>
-      fetchApi<{ ok: boolean; error: string | null }>("/api/notifications/telegram/test", {
+      fetchApi<{ ok: boolean; error: string | null }>(`/api/notifications/telegram/test${query}`, {
         method: "POST",
       }),
     onSuccess: (data) =>
@@ -258,13 +325,15 @@ function TelegramSection({
 
   return (
     <section>
-      <SectionLabel>Telegram</SectionLabel>
+      <SectionLabel>{copy.title}</SectionLabel>
+      <p className="mb-2 text-[11px] leading-relaxed text-muted-foreground">{copy.blurb}</p>
 
       {!status?.configured && (
         <Alert variant="muted">
           <AlertDescription className="text-[11px]">
-            No bot token is set on this machine. Add <code>TELEGRAM_BOT_TOKEN</code> to{" "}
-            <code>.env</code> and restart to enable Telegram notifications.
+            No bot token is set on this machine. Add{" "}
+            <code>{status?.tokenVariable ?? "the bot token"}</code> to <code>.env</code> and restart
+            to enable this channel.
           </AlertDescription>
         </Alert>
       )}
@@ -301,8 +370,9 @@ function TelegramSection({
           {code ? (
             <div className="space-y-1.5">
               <p className="text-[11px] leading-relaxed text-muted-foreground">
-                Send this code to your SpotLens bot on Telegram. It expires in ten minutes and can
-                only be used once.
+                Send this code to the {copy.title.toLowerCase()} bot on Telegram. It expires in ten
+                minutes and can only be used once. Each bot needs its own code — a chat bound to one
+                cannot be messaged by the other until you have started it there.
               </p>
               <p className="tabular rounded-md bg-muted px-3 py-2 text-lg font-semibold tracking-widest">
                 {code}
@@ -331,7 +401,7 @@ function TelegramSection({
               onClick={() => connect.mutate()}
               disabled={connect.isPending || !status?.configured}
             >
-              {connect.isPending ? "Generating…" : "Connect Telegram"}
+              {connect.isPending ? "Generating…" : copy.connect}
             </Button>
           )}
         </div>
