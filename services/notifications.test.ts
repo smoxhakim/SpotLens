@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { NotificationEvent } from "@/lib/notifications";
+import { EVENT_PRIORITY, type NotificationEvent } from "@/lib/notifications";
 
 /**
  * Delivery behaviour: who gets told, once, and what happens when the channel
@@ -35,9 +35,17 @@ vi.mock("@/lib/notifications", async () => {
 
 const { deliverEvents, markRead, markAllRead } = await import("./notifications");
 
+/**
+ * The stand-in event for tests about delivery mechanics.
+ *
+ * `SETUP_DETECTED` rather than `CONFIRMATION_DETECTED`, as of Phase Q:
+ * confirmation traffic no longer reaches the main bot at all, so an event that
+ * is deliberately in-app only cannot stand in for "an event that gets pushed".
+ * The confirmation types have their own routing cases further down.
+ */
 function event(overrides: Partial<NotificationEvent> = {}): NotificationEvent {
   return {
-    type: "CONFIRMATION_DETECTED",
+    type: "SETUP_DETECTED",
     userId: "user-1",
     priority: "HIGH",
     asset: "BTCUSDT",
@@ -124,7 +132,7 @@ describe("preferences decide what is delivered", () => {
   it("suppresses an event type the user turned off, on every channel at once", async () => {
     db.notificationPreference.findUnique.mockResolvedValue({
       ...PREFS,
-      confirmationDetected: false,
+      setupDetected: false,
     });
 
     const outcome = await deliverEvents([event()]);
@@ -299,7 +307,8 @@ describe("what gets stored", () => {
     const created = db.notification.create.mock.calls[0][0].data;
     expect(created.channel).toBe("IN_APP");
     expect(created.status).toBe("SENT");
-    expect(created.priority).toBe("HIGH");
+    // The priority of the event type, from the one table that grades them.
+    expect(created.priority).toBe(EVENT_PRIORITY.SETUP_DETECTED);
   });
 });
 
@@ -346,6 +355,10 @@ describe("channel routing", () => {
         setup: { ...event().setup!, isReplacement: true },
       }),
     ],
+    // Phase Q: every confirmation, whatever the setup looks like. The
+    // dedicated confirmation bot exists precisely so this traffic stops
+    // reaching the main channel, and the routing rule is what enforces it.
+    ["a confirmation", event({ type: "CONFIRMATION_DETECTED" })],
     [
       "a confirmation on a high-risk setup",
       event({
@@ -378,7 +391,6 @@ describe("channel routing", () => {
 
   const loud = [
     ["a potential setup", event({ type: "SETUP_DETECTED" })],
-    ["a measured confirmation", event()],
     [
       "a genuine invalidation of a level that had confirmed",
       event({

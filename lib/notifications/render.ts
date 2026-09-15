@@ -17,6 +17,10 @@ export const IN_APP_MARKERS = {
   structureSignal: "🟠",
   dailySummary: "📊",
   scannerError: "⚠️",
+  /** Phase Q — evidence is accumulating, and is not yet sufficient. */
+  confirmationDeveloping: "🟡",
+  /** Phase Q — the deterministic engine has what it requires. Still not an instruction. */
+  confirmationReached: "🟩",
 } as const;
 
 /**
@@ -31,6 +35,10 @@ export type NotificationTone = "POSITIVE" | "INFO" | "NEGATIVE" | "NEUTRAL" | "W
 const TONE_BY_MARKER: [string, NotificationTone][] = [
   [IN_APP_MARKERS.potentialSetup, "POSITIVE"],
   [IN_APP_MARKERS.confirmationEvidence, "INFO"],
+  // Developing reads as "watch this", reached as "read this" — neither reads as
+  // an instruction, which is why neither borrows the potential-setup marker.
+  [IN_APP_MARKERS.confirmationDeveloping, "WARNING"],
+  [IN_APP_MARKERS.confirmationReached, "POSITIVE"],
   [IN_APP_MARKERS.invalidated, "NEGATIVE"],
   // Bookkeeping. The engine moved its entry to a neighbouring zone and created
   // a replacement in the same pass; nothing failed, so nothing should read as
@@ -49,6 +57,8 @@ const TONE_BY_TYPE: Record<NotificationEventType, NotificationTone> = {
   STRUCTURE_CHANGED: "WARNING",
   DAILY_SUMMARY: "NEUTRAL",
   SYSTEM_ERROR: "NEGATIVE",
+  CONFIRMATION_EVIDENCE: "WARNING",
+  CONFIRMATION_REACHED: "POSITIVE",
 };
 
 /**

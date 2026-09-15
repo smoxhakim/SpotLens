@@ -1,6 +1,6 @@
 import type { SetupLifecycleStatus } from "@/lib/setups";
 
-import type { NotificationEventType } from "./types";
+import type { LifecycleNotificationEventType, NotificationEventType } from "./types";
 
 /**
  * Turning what the lifecycle recorded into what is worth saying.
@@ -57,7 +57,9 @@ export function isStructuralChange(facts: TransitionFacts): boolean {
  *  - Anything else only speaks if structure actually moved. Most transitions
  *    are price arriving somewhere, and those are silent.
  */
-export function eventTypeForTransition(facts: TransitionFacts): NotificationEventType | null {
+export function eventTypeForTransition(
+  facts: TransitionFacts,
+): LifecycleNotificationEventType | null {
   switch (facts.lifecycleStatus) {
     case "INVALIDATED":
       return "SETUP_INVALIDATED";
@@ -150,21 +152,29 @@ export function telegramPriorityFor(event: RoutingFacts): TelegramPriority {
     case "SETUP_DETECTED":
       return "HIGH";
 
-    case "CONFIRMATION_DETECTED": {
-      const setup = event.setup;
-      if (!setup) return "LOW";
+    // Confirmation traffic does not reach the main bot at all, as of Phase Q.
+    //
+    // It is still recorded, still shown in-app, and still appends the same
+    // `SetupEvent` it always did — the lifecycle history is untouched. What
+    // changed is only where it is *delivered*: a dedicated bot now carries
+    // confirmation, and the whole reason for adding one was that per-candle
+    // confirmation activity was the thing filling the main channel. Leaving a
+    // copy here would have defeated the separation on the one event type that
+    // motivated it.
+    //
+    // LOW rather than a deletion, so the routing rule stays a routing rule: the
+    // event still exists, the preference still governs it, and turning this
+    // back on is a one-line change rather than a resurrection.
+    case "CONFIRMATION_DETECTED":
+      return "LOW";
 
-      // Confirmation on a setup the engine itself calls high risk is a notice,
-      // not an alert — nine of the seventeen confirmations ever sent were
-      // exactly this, and the levels were printed above the disqualifier.
-      if (setup.analysisStatus === "HIGH_RISK") return "LOW";
-
-      // An unmeasured reward means no structural target sits far enough above
-      // the entry. Confirming into that is not something to be woken for.
-      if (setup.riskRewardIsSynthetic) return "LOW";
-
-      return "HIGH";
-    }
+    // Phase Q's own types. They are delivered by `deliverConfirmationAlerts`,
+    // which cannot select the main Telegram channel at all — this is the second
+    // lock on the same door, so that a future caller handing one of these to
+    // `deliverEvents` by mistake still cannot reach the main bot.
+    case "CONFIRMATION_EVIDENCE":
+    case "CONFIRMATION_REACHED":
+      return "LOW";
 
     case "SETUP_INVALIDATED": {
       const setup = event.setup;

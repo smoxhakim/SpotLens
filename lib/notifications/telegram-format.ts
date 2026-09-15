@@ -1,7 +1,7 @@
 import { isPrimarySignal, type ConfirmationSignalType } from "@/lib/analysis/confirmation";
 import { ANALYSIS_DISCLAIMER, SPOT_ONLY_NOTE } from "@/lib/constants/disclaimers";
 
-import type { NotificationEvent, NotificationEventType, SetupFacts } from "./types";
+import type { LifecycleNotificationEventType, NotificationEvent, SetupFacts } from "./types";
 
 /**
  * Telegram MarkdownV2 rendering.
@@ -47,7 +47,7 @@ export function escape(value: string | number | null | undefined): string {
  * would mean every stored row disagreeing with every new one; renaming the
  * presentation costs nothing.
  */
-export const TELEGRAM_TITLES: Record<NotificationEventType, string> = {
+export const TELEGRAM_TITLES: Record<LifecycleNotificationEventType, string> = {
   SETUP_DETECTED: "🟢 Potential setup",
   CONFIRMATION_DETECTED: "🔵 Confirmation evidence",
   SETUP_INVALIDATED: "🔴 Setup invalidated",

@@ -18,9 +18,45 @@ export type NotificationEventType =
   | "SETUP_INVALIDATED"
   | "STRUCTURE_CHANGED"
   | "DAILY_SUMMARY"
-  | "SYSTEM_ERROR";
+  | "SYSTEM_ERROR"
+  /** Phase Q — new positive evidence at a tracked level. */
+  | "CONFIRMATION_EVIDENCE"
+  /** Phase Q — the confirmation engine returned PRESENT for the first time. */
+  | "CONFIRMATION_REACHED";
 
-export type NotificationChannel = "IN_APP" | "TELEGRAM";
+/**
+ * The two confirmation-watch types, in one place.
+ *
+ * Used by the routing rules to keep them off the main bot and by the delivery
+ * path to assert it is only ever handed one of them. A list rather than a
+ * convention, so "is this confirmation traffic?" is answered mechanically.
+ */
+export const CONFIRMATION_WATCH_EVENTS: NotificationEventType[] = [
+  "CONFIRMATION_EVIDENCE",
+  "CONFIRMATION_REACHED",
+];
+
+export function isConfirmationWatchEvent(type: NotificationEventType): boolean {
+  return CONFIRMATION_WATCH_EVENTS.includes(type);
+}
+
+/**
+ * What a `NotificationEvent` is allowed to be about.
+ *
+ * Everything except the confirmation-watch types, and that exclusion is the
+ * main-bot isolation expressed in the type system rather than in a rule
+ * somebody has to remember. `NotificationEvent` is the main path's currency —
+ * `eventsFromScan` produces it, `deliverEvents` routes it, `formatForTelegram`
+ * renders it — so making the two Phase Q types unrepresentable in it means no
+ * amount of wrong wiring downstream can put confirmation traffic on the main
+ * bot. The confirmation path has its own event object in `lib/confirmation-watch`.
+ */
+export type LifecycleNotificationEventType = Exclude<
+  NotificationEventType,
+  "CONFIRMATION_EVIDENCE" | "CONFIRMATION_REACHED"
+>;
+
+export type NotificationChannel = "IN_APP" | "TELEGRAM" | "TELEGRAM_CONFIRMATION";
 export type NotificationPriority = "LOW" | "MEDIUM" | "HIGH" | "CRITICAL";
 
 /**
@@ -37,6 +73,11 @@ export const EVENT_PRIORITY: Record<NotificationEventType, NotificationPriority>
   STRUCTURE_CHANGED: "MEDIUM",
   DAILY_SUMMARY: "LOW",
   SYSTEM_ERROR: "HIGH",
+  // Evidence appearing is worth reading; it is not worth ranking above a level
+  // failing. Reaching confirmation is the one the reader asked for the second
+  // bot in order to catch.
+  CONFIRMATION_EVIDENCE: "MEDIUM",
+  CONFIRMATION_REACHED: "HIGH",
 };
 
 /** Levels and reasoning as they stood, copied from the stored setup snapshot. */
@@ -126,7 +167,8 @@ export interface SystemErrorFacts {
  * silent.
  */
 export interface NotificationEvent {
-  type: NotificationEventType;
+  /** Never a confirmation-watch type — see `LifecycleNotificationEventType`. */
+  type: LifecycleNotificationEventType;
   userId: string;
   priority: NotificationPriority;
   asset: string | null;
@@ -153,9 +195,11 @@ export const notificationEventTypeSchema = z.enum([
   "STRUCTURE_CHANGED",
   "DAILY_SUMMARY",
   "SYSTEM_ERROR",
+  "CONFIRMATION_EVIDENCE",
+  "CONFIRMATION_REACHED",
 ]);
 
-export const notificationChannelSchema = z.enum(["IN_APP", "TELEGRAM"]);
+export const notificationChannelSchema = z.enum(["IN_APP", "TELEGRAM", "TELEGRAM_CONFIRMATION"]);
 
 export interface NotificationPreferences {
   inAppEnabled: boolean;
@@ -166,6 +210,8 @@ export interface NotificationPreferences {
   structureChanged: boolean;
   dailySummary: boolean;
   systemError: boolean;
+  /** Phase Q — both confirmation-watch types at once. See the schema comment. */
+  confirmationAlerts: boolean;
 }
 
 /**
@@ -189,6 +235,10 @@ export const DEFAULT_PREFERENCES: NotificationPreferences = {
   structureChanged: false,
   dailySummary: false,
   systemError: true,
+  // On by default, unlike `telegramEnabled`: these only ever reach a bot the
+  // user had to create and connect on purpose, so connecting it is the opt-in
+  // and a second switch off by default would just be a thing to discover later.
+  confirmationAlerts: true,
 };
 
 /** Which preference flag governs which event type. */
@@ -202,4 +252,8 @@ export const PREFERENCE_FOR_EVENT: Record<
   STRUCTURE_CHANGED: "structureChanged",
   DAILY_SUMMARY: "dailySummary",
   SYSTEM_ERROR: "systemError",
+  // One switch for both. Wanting "evidence is developing" without "evidence is
+  // complete" is not a preference anyone has.
+  CONFIRMATION_EVIDENCE: "confirmationAlerts",
+  CONFIRMATION_REACHED: "confirmationAlerts",
 };

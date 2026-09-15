@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 
 import { isDenied, requireUser } from "@/lib/api/auth-guard";
+import { parseBotParam } from "@/lib/api/telegram-bot-param";
 import { apiError, handleRouteError } from "@/lib/api/response";
 import { isDatabaseConfigured } from "@/lib/db/prisma";
 import { RATE_LIMITS, enforceRateLimit } from "@/lib/rate-limit";
@@ -26,7 +27,10 @@ export async function POST(req: NextRequest) {
     const limited = await enforceRateLimit(req, RATE_LIMITS.telegramTest, guard.userId);
     if (limited) return limited;
 
-    const result = await sendTelegramTest(guard.userId);
+    const bot = parseBotParam(req.nextUrl.searchParams.get("bot"));
+    if (!bot) return apiError("INVALID_REQUEST", "Unknown Telegram bot.", 400);
+
+    const result = await sendTelegramTest(guard.userId, bot);
 
     // The error is already sanitised by the provider; it can never carry the
     // token, because the provider strips it before returning.

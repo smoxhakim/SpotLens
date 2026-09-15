@@ -23,6 +23,7 @@ import {
   settlementDelayMs,
   sleep,
 } from "@/lib/scanner";
+import { deliverConfirmationAlerts } from "@/services/confirmation-alerts";
 import { buildDailySummary, eventsFromScan } from "@/services/notification-events";
 import { deliverEvents } from "@/services/notifications";
 import {
@@ -97,6 +98,12 @@ async function scan(triggeredBy: "SCHEDULE" | "MANUAL", due: Timeframe[], userId
   // is the only place that knows both halves.
   await notify(summary.events, userId);
 
+  // The second channel, and deliberately a second call rather than a branch
+  // inside the first. The two paths share no delivery code: lifecycle events go
+  // to the main bot, confirmation activity to its own, and neither function can
+  // reach the other's destination.
+  await watchConfirmation(summary.observations, userId);
+
   // The shortlist, not the first three of everything: ninety analyses is more
   // than anyone reads, and the counts either side of it are what say how much
   // was looked at and refused.
@@ -159,6 +166,35 @@ async function notify(
     }
   } catch (err) {
     log(`   notifications skipped: ${err instanceof Error ? err.message : "unknown error"}`);
+  }
+}
+
+/**
+ * Follows each tracked setup's confirmation evidence.
+ *
+ * Wrapped like `notify`, and for the same reason: a bot being unreachable must
+ * not end a scan. The first observation of any setup is a baseline that records
+ * what is already true and says nothing, so arming this over setups that have
+ * been open for days cannot produce a burst.
+ */
+async function watchConfirmation(
+  observations: Awaited<ReturnType<typeof runScan>>["observations"],
+  userId: string,
+) {
+  try {
+    if (observations.length === 0) return;
+
+    const outcome = await deliverConfirmationAlerts({ userId, observations });
+
+    if (outcome.baselined > 0 || outcome.created > 0 || outcome.duplicates > 0) {
+      log(
+        `   confirmation: ${outcome.observed} watched · ${outcome.baselined} baselined · ` +
+          `${outcome.sent} sent · ${outcome.failed} failed · ` +
+          `${outcome.duplicates} already announced · ${outcome.suppressed} not subscribed`,
+      );
+    }
+  } catch (err) {
+    log(`   confirmation alerts skipped: ${err instanceof Error ? err.message : "unknown error"}`);
   }
 }
 

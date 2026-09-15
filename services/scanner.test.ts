@@ -386,3 +386,144 @@ describe("shortlist", () => {
     expect(summary.shortlist.allEligible.some((c) => c.symbol === "SYM00USDT")).toBe(false);
   });
 });
+
+describe("confirmation observations", () => {
+  /** The lifecycle reporting a setup that exists and did not move this pass. */
+  function unchanged(setupId = "setup-a") {
+    trackSetup.mockResolvedValue({
+      action: "NONE",
+      setupId,
+      status: null,
+      reason: "unchanged",
+    });
+  }
+
+  it("carries one observation per tracked setup, including the ones that did not move", async () => {
+    // The case the watcher most needs. A setup sitting at the same lifecycle
+    // state pass after pass is what "nothing new here" looks like, and if the
+    // scan dropped it the watcher could never tell that from a first sight.
+    unchanged();
+
+    const summary = await runScan({ ...base, markets: universe(3), timeframes: ["H1"] });
+
+    expect(summary.observations).toHaveLength(3);
+    expect(summary.observations.every((o) => o.trackedSetupId === "setup-a")).toBe(true);
+  });
+
+  it("gives an unchanged setup its real lifecycle status rather than null", async () => {
+    // `trackSetup` reports a status only when it wrote something, so the
+    // observation falls back to the lifecycle's own pure function. Without
+    // that, every unchanged setup would look untracked and be refused.
+    unchanged();
+
+    const summary = await runScan({ ...base, markets: universe(1), timeframes: ["H1"] });
+
+    expect(summary.observations[0].lifecycleStatus).not.toBeNull();
+  });
+
+  it("attributes every observation to the scan's owner", async () => {
+    unchanged();
+
+    const summary = await runScan({ ...base, markets: universe(2), timeframes: ["H1"] });
+
+    expect(summary.observations.every((o) => o.userId === "user-1")).toBe(true);
+  });
+
+  it("produces none for a market with no tracked setup", async () => {
+    trackSetup.mockResolvedValue({
+      action: "NONE",
+      setupId: null,
+      status: null,
+      reason: "nothing to track",
+    });
+
+    const summary = await runScan({ ...base, markets: universe(3), timeframes: ["H1"] });
+
+    expect(summary.observations).toHaveLength(0);
+  });
+
+  it("produces none for a market that failed to analyse", async () => {
+    unchanged();
+    getCandles.mockRejectedValue(new MarketDataError("BAD_RESPONSE", "garbage payload"));
+
+    const summary = await runScan({ ...base, markets: universe(2), timeframes: ["H1"] });
+
+    // A reading from an analysis that never happened would let the watcher
+    // baseline, or announce, on nothing.
+    expect(summary.observations).toHaveLength(0);
+  });
+
+  it("judges on a closed candle, never the one still forming", async () => {
+    unchanged();
+    const midCandle = BULLISH.at(-1)!.openTime + 1_000;
+
+    const summary = await runScan({
+      ...base,
+      now: midCandle,
+      markets: universe(1),
+      timeframes: ["H1"],
+    });
+
+    const forming = BULLISH[BULLISH.length - 1];
+    const lastClosed = BULLISH[BULLISH.length - 2];
+
+    expect(summary.observations[0].evaluatedAt).toBe(lastClosed.closeTime);
+    expect(summary.observations[0].evaluatedAt).not.toBe(forming.closeTime);
+  });
+
+  it("is unchanged by rewriting the forming candle, which is the no-lookahead claim", async () => {
+    unchanged();
+    const midCandle = BULLISH.at(-1)!.openTime + 1_000;
+    const options = {
+      ...base,
+      now: midCandle,
+      markets: universe(1),
+      timeframes: ["H1"] as Timeframe[],
+    };
+
+    const before = await runScan(options);
+
+    // A perfect confirmation on the candle that has not closed yet. It must
+    // reach no decision at all.
+    const tampered: Candle[] = [
+      ...BULLISH.slice(0, -1),
+      { ...BULLISH.at(-1)!, low: 1, high: 10_000, close: 9_999, volume: 1_000_000 },
+    ];
+    getCandles.mockImplementation(async () => ({ candles: tampered }));
+
+    const after = await runScan(options);
+
+    expect(JSON.stringify(after.observations)).toBe(JSON.stringify(before.observations));
+  });
+
+  it("re-running inside the same candle produces identical observations", async () => {
+    unchanged();
+    const midCandle = BULLISH.at(-1)!.openTime + 5_000;
+    const options = {
+      ...base,
+      now: midCandle,
+      markets: universe(3),
+      timeframes: ["H1"] as Timeframe[],
+    };
+
+    const first = await runScan(options);
+    const second = await runScan(options);
+
+    // The scanner's half of idempotency. The watcher's half is that identical
+    // observations produce identical dedupe keys, which the unique index then
+    // rejects.
+    expect(JSON.stringify(second.observations)).toBe(JSON.stringify(first.observations));
+  });
+
+  it("copies the engine's signals rather than re-deriving them", async () => {
+    unchanged();
+
+    const summary = await runScan({ ...base, markets: universe(1), timeframes: ["H1"] });
+    const fromEngine = trackSetup.mock.calls[0][0].result.confirmation;
+
+    expect(summary.observations[0].status).toBe(fromEngine.status);
+    expect(summary.observations[0].signals.map((s) => s.type)).toEqual(
+      fromEngine.signals.map((s: { type: string }) => s.type),
+    );
+  });
+});

@@ -1,9 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 
 import { isDenied, requireUser } from "@/lib/api/auth-guard";
+import { parseBotParam } from "@/lib/api/telegram-bot-param";
 import { apiError, handleRouteError } from "@/lib/api/response";
 import { isDatabaseConfigured } from "@/lib/db/prisma";
-import { isTelegramConfigured } from "@/lib/notifications";
+import { isTelegramConfigured, tokenVariableFor } from "@/lib/notifications";
 import { RATE_LIMITS, enforceRateLimit } from "@/lib/rate-limit";
 import { CONNECTION_CODE_TTL_MS, beginTelegramConnection } from "@/services/notifications";
 
@@ -28,15 +29,21 @@ export async function POST(req: NextRequest) {
     const limited = await enforceRateLimit(req, RATE_LIMITS.telegramConnect, guard.userId);
     if (limited) return limited;
 
-    if (!isTelegramConfigured()) {
+    const bot = parseBotParam(req.nextUrl.searchParams.get("bot"));
+    if (!bot) return apiError("INVALID_REQUEST", "Unknown Telegram bot.", 400);
+
+    if (!isTelegramConfigured(bot)) {
       return apiError(
         "TELEGRAM_NOT_CONFIGURED",
-        "No bot token is set on this machine. Add TELEGRAM_BOT_TOKEN to .env and restart.",
+        // Names the variable rather than assuming which bot is missing: with
+        // two of them, "add TELEGRAM_BOT_TOKEN" is advice that cannot work
+        // half the time.
+        `No bot token is set on this machine. Add ${tokenVariableFor(bot)} to .env and restart.`,
         503,
       );
     }
 
-    const { code } = await beginTelegramConnection(guard.userId);
+    const { code } = await beginTelegramConnection(guard.userId, bot);
 
     return NextResponse.json({ code, expiresInMs: CONNECTION_CODE_TTL_MS });
   } catch (err) {

@@ -265,7 +265,9 @@ describe("claiming a connection", () => {
 
     await claimTelegramConnection("user-1");
 
-    expect(getTelegramUpdates).toHaveBeenCalledWith({ offset: 6 });
+    // The cursor and the bot travel together: each bot has its own update
+    // queue, so polling with the other's offset would skip or re-read.
+    expect(getTelegramUpdates).toHaveBeenCalledWith({ offset: 6, bot: "MAIN" });
   });
 
   it("reports Telegram being unavailable without binding anything", async () => {

@@ -778,19 +778,38 @@ describe("Telegram routing", () => {
       { type: "SETUP_DETECTED", setup: setupFacts() },
       "HIGH",
     ],
+    // Phase Q moved every confirmation off the main bot. It is still recorded,
+    // still shown in-app and still in the setup's lifecycle history — what
+    // changed is where it is delivered, because per-candle confirmation traffic
+    // filling the main channel is the whole reason a second bot exists. The
+    // setup's own qualities no longer make any difference here, which is why
+    // the three cases that used to distinguish them now agree.
     [
-      "a measured confirmation on a setup the engine has not disqualified",
+      "a confirmation never reaches the main bot, however sound the setup",
       { type: "CONFIRMATION_DETECTED", setup: setupFacts() },
-      "HIGH",
+      "LOW",
     ],
     [
-      "a confirmation on a high-risk setup stays in the app",
+      "a confirmation on a high-risk setup never reaches the main bot either",
       { type: "CONFIRMATION_DETECTED", setup: setupFacts({ analysisStatus: "HIGH_RISK" }) },
       "LOW",
     ],
     [
-      "a confirmation whose reward was never measurable stays in the app",
+      "a confirmation whose reward was never measurable is no different",
       { type: "CONFIRMATION_DETECTED", setup: setupFacts({ riskRewardIsSynthetic: true }) },
+      "LOW",
+    ],
+    // Phase Q's own types, which the main path's `NotificationEvent` cannot
+    // even represent. Checked anyway: if that narrowing were ever loosened, the
+    // routing rule is the remaining lock on the door.
+    [
+      "confirmation evidence belongs to the confirmation bot alone",
+      { type: "CONFIRMATION_EVIDENCE", setup: setupFacts() },
+      "LOW",
+    ],
+    [
+      "confirmation reached belongs to the confirmation bot alone",
+      { type: "CONFIRMATION_REACHED", setup: setupFacts() },
       "LOW",
     ],
     [
