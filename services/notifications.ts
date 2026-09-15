@@ -3,6 +3,7 @@ import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { isDatabaseConfigured, prisma } from "@/lib/db/prisma";
 import { warnOnce } from "@/lib/log";
 import type { Timeframe } from "@/lib/market-data/provider";
+import { formatConfirmationConnectionTest } from "@/lib/confirmation-watch";
 import {
   DEFAULT_PREFERENCES,
   EVENT_PRIORITY,
@@ -15,9 +16,11 @@ import {
   isTelegramWorthy,
   renderInApp,
   sendTelegramMessage,
+  tokenVariableFor,
   type NotificationChannel,
   type NotificationEvent,
   type NotificationPreferences,
+  type TelegramBot,
 } from "@/lib/notifications";
 
 /**
@@ -182,11 +185,15 @@ async function deliverToChannel(
   return { ...NOTHING, created: 1, sent: result.ok ? 1 : 0, failed: result.ok ? 0 : 1 };
 }
 
+/**
+ * The main bot, named explicitly.
+ *
+ * `deliverEvents` is the lifecycle path and only ever speaks to MAIN.
+ * Confirmation traffic has its own service, its own channel and its own bot,
+ * and there is deliberately no parameter here that could send it down this one.
+ */
 async function sendToTelegram(userId: string, text: string) {
-  const connection = await prisma.telegramConnection.findUnique({
-    where: { userId },
-    select: { chatId: true },
-  });
+  const connection = await findConnection(userId, "MAIN");
 
   if (!connection?.chatId) {
     return {
@@ -197,7 +204,15 @@ async function sendToTelegram(userId: string, text: string) {
     };
   }
 
-  return sendTelegramMessage({ chatId: connection.chatId, text });
+  return sendTelegramMessage({ chatId: connection.chatId, text, bot: "MAIN" });
+}
+
+/** One binding, by owner and bot. The composite key is the whole lookup. */
+function findConnection(userId: string, bot: TelegramBot) {
+  return prisma.telegramConnection.findUnique({
+    where: { userId_bot: { userId, bot } },
+    select: { chatId: true },
+  });
 }
 
 // --- preferences -----------------------------------------------------------
@@ -216,6 +231,7 @@ export async function getPreferences(userId: string): Promise<NotificationPrefer
     structureChanged: row.structureChanged,
     dailySummary: row.dailySummary,
     systemError: row.systemError,
+    confirmationAlerts: row.confirmationAlerts,
   };
 }
 
@@ -238,6 +254,7 @@ export async function updatePreferences(
     structureChanged: row.structureChanged,
     dailySummary: row.dailySummary,
     systemError: row.systemError,
+    confirmationAlerts: row.confirmationAlerts,
   };
 }
 
@@ -264,7 +281,10 @@ export const MAX_CLAIM_ATTEMPTS = 10;
  * is stored. Anyone with read access to the table therefore cannot bind their
  * own chat to someone else's account.
  */
-export async function beginTelegramConnection(userId: string): Promise<{ code: string }> {
+export async function beginTelegramConnection(
+  userId: string,
+  bot: TelegramBot = "MAIN",
+): Promise<{ code: string }> {
   // 32 bits of entropy in an unambiguous alphabet — no O/0 or I/1 — because
   // this gets retyped into a phone. Guessing is bounded by MAX_CLAIM_ATTEMPTS
   // and a ten-minute window, not by length alone.
@@ -273,9 +293,10 @@ export async function beginTelegramConnection(userId: string): Promise<{ code: s
   const code = Array.from(bytes, (b) => alphabet[b % alphabet.length]).join("");
 
   await prisma.telegramConnection.upsert({
-    where: { userId },
+    where: { userId_bot: { userId, bot } },
     create: {
       userId,
+      bot,
       pendingCodeHash: hash(code),
       pendingExpires: new Date(Date.now() + CONNECTION_CODE_TTL_MS),
       claimAttempts: 0,
@@ -308,23 +329,31 @@ export type ClaimResult =
  * The comparison is constant-time on the hash. A code is short enough to retype
  * that a timing side channel is worth closing even though the window is small.
  */
-export async function claimTelegramConnection(userId: string): Promise<ClaimResult> {
-  const connection = await prisma.telegramConnection.findUnique({ where: { userId } });
+export async function claimTelegramConnection(
+  userId: string,
+  bot: TelegramBot = "MAIN",
+): Promise<ClaimResult> {
+  const connection = await prisma.telegramConnection.findUnique({
+    where: { userId_bot: { userId, bot } },
+  });
 
   if (!connection?.pendingCodeHash || !connection.pendingExpires) return { status: "NO_CODE" };
 
   if (connection.pendingExpires.getTime() < Date.now()) {
-    await clearPendingCode(userId);
+    await clearPendingCode(userId, bot);
     return { status: "EXPIRED" };
   }
 
   if (connection.claimAttempts >= MAX_CLAIM_ATTEMPTS) {
-    await clearPendingCode(userId);
+    await clearPendingCode(userId, bot);
     return { status: "TOO_MANY_ATTEMPTS" };
   }
 
+  // The cursor is per bot. Each has its own update queue, so polling one with
+  // the other's offset would either re-read old messages or skip the one the
+  // user just sent.
   const offset = connection.lastUpdateId === null ? undefined : Number(connection.lastUpdateId) + 1;
-  const updates = await getTelegramUpdates({ offset });
+  const updates = await getTelegramUpdates({ offset, bot });
 
   if (!updates.ok)
     return { status: "UNAVAILABLE", error: updates.error ?? "Telegram unavailable." };
@@ -349,7 +378,7 @@ export async function claimTelegramConnection(userId: string): Promise<ClaimResu
 
     if (highestUpdateId >= 0 || wrongGuesses > 0) {
       await prisma.telegramConnection.update({
-        where: { userId },
+        where: { userId_bot: { userId, bot } },
         data: {
           ...(highestUpdateId >= 0 ? { lastUpdateId: BigInt(highestUpdateId) } : {}),
           ...(wrongGuesses > 0 ? { claimAttempts: { increment: wrongGuesses } } : {}),
@@ -358,7 +387,7 @@ export async function claimTelegramConnection(userId: string): Promise<ClaimResu
     }
 
     if (connection.claimAttempts + wrongGuesses >= MAX_CLAIM_ATTEMPTS) {
-      await clearPendingCode(userId);
+      await clearPendingCode(userId, bot);
       return { status: "TOO_MANY_ATTEMPTS" };
     }
 
@@ -367,7 +396,7 @@ export async function claimTelegramConnection(userId: string): Promise<ClaimResu
 
   // Bind, and burn the code in the same write so it cannot be replayed.
   await prisma.telegramConnection.update({
-    where: { userId },
+    where: { userId_bot: { userId, bot } },
     data: {
       chatId: match.chatId,
       chatLabel: match.chatLabel,
@@ -379,9 +408,15 @@ export async function claimTelegramConnection(userId: string): Promise<ClaimResu
     },
   });
 
-  // Telegram becomes useful only once a chat is bound, so this is the moment
-  // to turn the channel on rather than making the user find a second switch.
-  await updatePreferences(userId, { telegramEnabled: true });
+  // A channel becomes useful only once a chat is bound, so this is the moment
+  // to turn it on rather than making the user find a second switch. The two
+  // bots own different switches: binding the confirmation bot must not silently
+  // enable the main Telegram channel, which the user may have left off on
+  // purpose.
+  await updatePreferences(
+    userId,
+    bot === "CONFIRMATION" ? { confirmationAlerts: true } : { telegramEnabled: true },
+  );
 
   return { status: "CONNECTED", chatLabel: match.chatLabel };
 }
@@ -411,16 +446,26 @@ function matchesCode(text: string, expectedHash: string): boolean {
   return false;
 }
 
-async function clearPendingCode(userId: string): Promise<void> {
+async function clearPendingCode(userId: string, bot: TelegramBot): Promise<void> {
   await prisma.telegramConnection.update({
-    where: { userId },
+    where: { userId_bot: { userId, bot } },
     data: { pendingCodeHash: null, pendingExpires: null, claimAttempts: 0 },
   });
 }
 
-export async function disconnectTelegram(userId: string): Promise<void> {
-  await prisma.telegramConnection.deleteMany({ where: { userId } });
-  await updatePreferences(userId, { telegramEnabled: false });
+/**
+ * Unbinds one bot and turns its own switch off.
+ *
+ * Scoped to the bot named, so disconnecting confirmation alerts leaves the main
+ * bot bound and delivering — and vice versa. `deleteMany` rather than `delete`
+ * so disconnecting something that was never connected is not an error.
+ */
+export async function disconnectTelegram(userId: string, bot: TelegramBot = "MAIN"): Promise<void> {
+  await prisma.telegramConnection.deleteMany({ where: { userId, bot } });
+  await updatePreferences(
+    userId,
+    bot === "CONFIRMATION" ? { confirmationAlerts: false } : { telegramEnabled: false },
+  );
 }
 
 /**
@@ -429,18 +474,21 @@ export async function disconnectTelegram(userId: string): Promise<void> {
  * Reports whether a token is configured on the server, never anything about
  * the token itself.
  */
-export async function getTelegramStatus(userId: string) {
+export async function getTelegramStatus(userId: string, bot: TelegramBot = "MAIN") {
   const connection = await prisma.telegramConnection.findUnique({
-    where: { userId },
+    where: { userId_bot: { userId, bot } },
     select: { chatId: true, chatLabel: true, connectedAt: true, pendingExpires: true },
   });
 
   return {
-    configured: isTelegramConfigured(),
+    bot,
+    configured: isTelegramConfigured(bot),
+    /** The variable to set, so an unconfigured bot says which one is missing. */
+    tokenVariable: tokenVariableFor(bot),
     // Public, unlike the token: this is the name anyone would see in the bot's
     // profile, and it is what lets Settings link straight to the right chat
     // instead of asking the user to go and find it.
-    botUsername: await getTelegramBotUsername(),
+    botUsername: await getTelegramBotUsername({ bot }),
     connected: Boolean(connection?.chatId),
     chatLabel: connection?.chatLabel ?? null,
     connectedAt: connection?.connectedAt?.toISOString() ?? null,
@@ -451,22 +499,33 @@ export async function getTelegramStatus(userId: string) {
   };
 }
 
-/** Sends the test message. Says nothing about any market, by design. */
+/**
+ * Sends the test message for one bot. Says nothing about any market, by design.
+ *
+ * Each bot gets its own wording, because the two carry different things and a
+ * test that did not say which channel had just been proved would be a test of
+ * nothing in particular.
+ */
 export async function sendTelegramTest(
   userId: string,
+  bot: TelegramBot = "MAIN",
 ): Promise<{ ok: boolean; error: string | null }> {
-  const connection = await prisma.telegramConnection.findUnique({
-    where: { userId },
-    select: { chatId: true },
-  });
+  const connection = await findConnection(userId, bot);
 
   if (!connection?.chatId) {
-    return { ok: false, error: "Telegram is not connected for this account." };
+    return {
+      ok: false,
+      error:
+        bot === "CONFIRMATION"
+          ? "The confirmation bot is not connected for this account."
+          : "Telegram is not connected for this account.",
+    };
   }
 
   const result = await sendTelegramMessage({
     chatId: connection.chatId,
-    text: formatConnectionTest(),
+    text: bot === "CONFIRMATION" ? formatConfirmationConnectionTest() : formatConnectionTest(),
+    bot,
   });
 
   return { ok: result.ok, error: result.error };

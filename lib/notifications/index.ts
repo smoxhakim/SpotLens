@@ -7,12 +7,15 @@
  * the writes.
  */
 export {
+  CONFIRMATION_WATCH_EVENTS,
   DEFAULT_PREFERENCES,
   EVENT_PRIORITY,
   PREFERENCE_FOR_EVENT,
+  isConfirmationWatchEvent,
   notificationChannelSchema,
   notificationEventTypeSchema,
   type DailySummaryFacts,
+  type LifecycleNotificationEventType,
   type NotificationChannel,
   type NotificationEvent,
   type NotificationEventType,
@@ -54,12 +57,15 @@ export {
   MAX_RETRY_AFTER_MS,
   MAX_SEND_ATTEMPTS,
   SEND_RETRY_BASE_MS,
+  TELEGRAM_BOTS,
   getTelegramBotUsername,
   getTelegramUpdates,
   isTelegramConfigured,
   resetTelegramIdentityCache,
   parseUpdates,
   sendTelegramMessage,
+  tokenVariableFor,
+  type TelegramBot,
   type TelegramSendResult,
   type TelegramUpdate,
 } from "./telegram-provider";

@@ -22,6 +22,7 @@ const patchSchema = z
     structureChanged: z.boolean(),
     dailySummary: z.boolean(),
     systemError: z.boolean(),
+    confirmationAlerts: z.boolean(),
   })
   .strict()
   .partial();

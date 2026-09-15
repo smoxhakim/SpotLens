@@ -3,18 +3,66 @@ import { sleep } from "@/lib/scanner";
 /**
  * Telegram delivery.
  *
- * The only place in the codebase that reads `TELEGRAM_BOT_TOKEN`. It is read
- * from the environment at call time and never returned, logged, stored, or put
- * in an error message — a token that reaches a database is a token in every
- * backup of it, and one that reaches a log is a token in every log shipper.
+ * The only place in the codebase that reads a Telegram bot token. Both tokens
+ * are read from the environment at call time and neither is ever returned,
+ * logged, stored, or put in an error message — a token that reaches a database
+ * is a token in every backup of it, and one that reaches a log is a token in
+ * every log shipper.
+ *
+ * ## Why two bots share one file
+ *
+ * Phase Q added a second bot for confirmation traffic, and the obvious
+ * alternative was a second provider module. That would have meant a second copy
+ * of the retry policy, the abort handling and — the one that matters — the
+ * token scrubber. A scrubber that exists twice is one that will eventually only
+ * strip one of the two tokens. So the token is selected by `bot` here instead,
+ * `sanitise` strips both unconditionally, and the invariant strengthens from
+ * "the token is read in one file" to "every Telegram token is read in one
+ * file".
  *
  * There are no trading commands here and no way to add one: this module can
- * send a message, read updates, and ask the bot its own name — that is the
- * whole surface.
+ * send a message, read updates, and ask a bot its own name — that is the whole
+ * surface.
  */
 
 const API_BASE = "https://api.telegram.org";
 const REQUEST_TIMEOUT_MS = 10_000;
+
+/**
+ * Which bot a call is about.
+ *
+ * MAIN carries lifecycle notifications; CONFIRMATION carries confirmation
+ * evidence and nothing else. They are genuinely different bots with different
+ * tokens, and a chat bound to one cannot be messaged by the other until the
+ * user has pressed Start there — which is why this is a parameter rather than
+ * a setting.
+ */
+export type TelegramBot = "MAIN" | "CONFIRMATION";
+
+export const TELEGRAM_BOTS: TelegramBot[] = ["MAIN", "CONFIRMATION"];
+
+/**
+ * The environment variable behind each bot, in one table.
+ *
+ * Named here and nowhere else, so "where does the confirmation token come
+ * from?" has exactly one answer and adding a third bot is a one-line edit
+ * rather than a search.
+ */
+const TOKEN_VARIABLE: Record<TelegramBot, string> = {
+  MAIN: "TELEGRAM_BOT_TOKEN",
+  CONFIRMATION: "TELEGRAM_CONFIRMATION_BOT_TOKEN",
+};
+
+/** The token for one bot, or undefined. Never returned to a caller. */
+function tokenFor(bot: TelegramBot): string | undefined {
+  const value = process.env[TOKEN_VARIABLE[bot]];
+  return value && value.trim().length > 0 ? value : undefined;
+}
+
+/** The variable an operator has to set, for a message that can be acted on. */
+export function tokenVariableFor(bot: TelegramBot): string {
+  return TOKEN_VARIABLE[bot];
+}
 
 /** One attempt, then two more. Enough for a blip, short of a retry storm. */
 export const MAX_SEND_ATTEMPTS = 3;
@@ -50,8 +98,8 @@ export interface TelegramUpdate {
 }
 
 /** Present only when a token is configured. Never reveals the token itself. */
-export function isTelegramConfigured(): boolean {
-  return Boolean(process.env.TELEGRAM_BOT_TOKEN);
+export function isTelegramConfigured(bot: TelegramBot = "MAIN"): boolean {
+  return tokenFor(bot) !== undefined;
 }
 
 /**
@@ -61,18 +109,22 @@ export function isTelegramConfigured(): boolean {
  * find a bot by name. A bot's username is public — anyone can message it — so
  * unlike the token it is safe to hand to the browser.
  *
- * Cached after the first success: it cannot change while the process is
+ * Cached per bot after the first success: it cannot change while the process is
  * running, and Settings would otherwise make this call on every load. Failures
  * are not cached, so a machine that was offline recovers on its own.
  */
-let cachedUsername: string | null = null;
+const cachedUsername: Partial<Record<TelegramBot, string>> = {};
 
 export async function getTelegramBotUsername(input?: {
+  bot?: TelegramBot;
   fetchImpl?: typeof fetch;
 }): Promise<string | null> {
-  if (cachedUsername) return cachedUsername;
+  const bot = input?.bot ?? "MAIN";
 
-  const token = process.env.TELEGRAM_BOT_TOKEN;
+  const cached = cachedUsername[bot];
+  if (cached) return cached;
+
+  const token = tokenFor(bot);
   if (!token) return null;
 
   const doFetch = input?.fetchImpl ?? fetch;
@@ -91,7 +143,7 @@ export async function getTelegramBotUsername(input?: {
     const username = body.result?.username;
     if (typeof username !== "string" || username.length === 0) return null;
 
-    cachedUsername = username;
+    cachedUsername[bot] = username;
     return username;
   } catch {
     // Deliberately silent and deliberately not carrying the error: the caller
@@ -105,7 +157,7 @@ export async function getTelegramBotUsername(input?: {
 
 /** Test seam — the cache is process-wide and would otherwise leak across tests. */
 export function resetTelegramIdentityCache(): void {
-  cachedUsername = null;
+  for (const bot of TELEGRAM_BOTS) delete cachedUsername[bot];
 }
 
 /**
@@ -117,13 +169,16 @@ export function resetTelegramIdentityCache(): void {
 export async function sendTelegramMessage(input: {
   chatId: string;
   text: string;
+  bot?: TelegramBot;
   fetchImpl?: typeof fetch;
 }): Promise<TelegramSendResult> {
-  const token = process.env.TELEGRAM_BOT_TOKEN;
+  const bot = input.bot ?? "MAIN";
+  const token = tokenFor(bot);
+
   if (!token) {
     return {
       ok: false,
-      error: "Telegram is not configured on this machine (TELEGRAM_BOT_TOKEN is unset).",
+      error: `Telegram is not configured on this machine (${TOKEN_VARIABLE[bot]} is unset).`,
       retryable: false,
       attempts: 0,
     };
@@ -189,7 +244,7 @@ async function attemptSend(
 
     return {
       ok: false,
-      error: sanitise(`Telegram ${status}: ${body?.description ?? "no description"}`, token),
+      error: sanitise(`Telegram ${status}: ${body?.description ?? "no description"}`),
       retryable,
       ...(typeof retryAfter === "number" && retryAfter > 0
         ? { retryAfterMs: retryAfter * 1000 }
@@ -199,7 +254,7 @@ async function attemptSend(
     const aborted = error instanceof Error && error.name === "AbortError";
     return {
       ok: false,
-      error: sanitise(aborted ? "Telegram request timed out." : describeError(error), token),
+      error: sanitise(aborted ? "Telegram request timed out." : describeError(error)),
       retryable: true,
     };
   } finally {
@@ -208,19 +263,28 @@ async function attemptSend(
 }
 
 /**
- * Reads pending updates for the bot.
+ * Reads pending updates for a bot.
  *
  * Used only by the connection flow, to find the code a user sent the bot. The
  * offset makes Telegram drop everything already seen, so a poll cannot re-read
- * an old message and re-bind an account.
+ * an old message and re-bind an account. The offset is stored per bot, because
+ * each bot has its own update queue and one poll must not consume the other's
+ * messages.
  */
 export async function getTelegramUpdates(input: {
   offset?: number;
+  bot?: TelegramBot;
   fetchImpl?: typeof fetch;
 }): Promise<{ ok: boolean; updates: TelegramUpdate[]; error: string | null }> {
-  const token = process.env.TELEGRAM_BOT_TOKEN;
+  const bot = input.bot ?? "MAIN";
+  const token = tokenFor(bot);
+
   if (!token) {
-    return { ok: false, updates: [], error: "Telegram is not configured on this machine." };
+    return {
+      ok: false,
+      updates: [],
+      error: `Telegram is not configured on this machine (${TOKEN_VARIABLE[bot]} is unset).`,
+    };
   }
 
   const doFetch = input.fetchImpl ?? fetch;
@@ -244,13 +308,13 @@ export async function getTelegramUpdates(input: {
       return {
         ok: false,
         updates: [],
-        error: sanitise(`Telegram ${response.status}: ${body?.description ?? "unknown"}`, token),
+        error: sanitise(`Telegram ${response.status}: ${body?.description ?? "unknown"}`),
       };
     }
 
     return { ok: true, updates: parseUpdates(body.result), error: null };
   } catch (error) {
-    return { ok: false, updates: [], error: sanitise(describeError(error), token) };
+    return { ok: false, updates: [], error: sanitise(describeError(error)) };
   } finally {
     clearTimeout(timer);
   }
@@ -315,14 +379,24 @@ function describeError(error: unknown): string {
 /**
  * Last line of defence.
  *
- * The token is interpolated into every request URL, so any error text that
- * quotes a URL could carry it. This removes it explicitly rather than trusting
- * that no library ever echoes the request back.
+ * A token is interpolated into every request URL, so any error text that quotes
+ * a URL could carry one. This removes them explicitly rather than trusting that
+ * no library ever echoes the request back.
+ *
+ * It strips *every* configured token, not the one whose call failed. That costs
+ * nothing and closes the case where an error raised on one bot's request
+ * happens to quote the other's — which is exactly the kind of thing a second,
+ * per-bot scrubber would eventually get wrong.
  */
-function sanitise(message: string, token: string): string {
-  return message
-    .split(token)
-    .join("[redacted]")
+function sanitise(message: string): string {
+  let out = message;
+
+  for (const bot of TELEGRAM_BOTS) {
+    const token = tokenFor(bot);
+    if (token) out = out.split(token).join("[redacted]");
+  }
+
+  return out
     .replace(/bot\d+:[A-Za-z0-9_-]+/g, "bot[redacted]")
     .replace(/\s+/g, " ")
     .trim()
