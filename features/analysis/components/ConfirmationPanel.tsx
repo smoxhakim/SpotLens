@@ -42,11 +42,8 @@ export function ConfirmationPanel({ confirmation }: { confirmation: Confirmation
   const meta = STATUS_META[confirmation.status];
 
   return (
+    // Titled by its caller — see the note in MtfPanel.
     <section>
-      <h3 className="mb-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
-        Confirmation
-      </h3>
-
       <div className="flex items-center gap-2">
         <p className={cn("text-xs font-semibold", meta.className)}>{meta.label}</p>
         {confirmation.invalidationReason && (
