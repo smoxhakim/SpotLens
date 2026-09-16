@@ -172,7 +172,13 @@ test.describe("the decision workflow", () => {
     await signIn(page, email, password);
 
     // --- opportunities -------------------------------------------------------
-    await page.getByRole("link", { name: "Opportunities" }).first().click();
+    //
+    // Addressed by run id rather than reached through the nav. Without one the
+    // page shows whichever pass is newest, and three specs each seed a pass —
+    // so under parallel workers they raced, and the loser's market was simply
+    // not on the page. The walk this test is about is shortlist → Coach →
+    // decision; which door it enters the shortlist by is incidental.
+    await page.goto(`/opportunities?runId=${runId}`);
     await expect(page.getByRole("heading", { name: /Top opportunities to review/ })).toBeVisible({
       timeout: 30_000,
     });
