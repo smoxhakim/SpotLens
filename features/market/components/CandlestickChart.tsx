@@ -8,11 +8,13 @@ import {
   type IChartApi,
   type IPriceLine,
   type ISeriesApi,
+  type MouseEventParams,
   type UTCTimestamp,
 } from "lightweight-charts";
 import { useEffect, useRef } from "react";
 
 import type { PriceZone } from "@/lib/analysis";
+import { formatPrice, priceMinMove } from "@/lib/format";
 import type { Candle } from "@/lib/market-data/provider";
 
 export interface EmaOverlay {
@@ -44,6 +46,15 @@ interface CandlestickChartProps {
   zones?: PriceZone[];
   /** Entry / stop / target levels from the current analysis, if one has run. */
   levels?: SetupLevel[];
+  /**
+   * Called as the crosshair moves, with the candle under it — or null when the
+   * pointer leaves the chart.
+   *
+   * The chart reports; the caller decides whether to render a readout and
+   * where. Keeps this component presentational and lets the compact embedded
+   * chart and the full-page one show the same numbers in different chrome.
+   */
+  onHoverCandle?: (candle: Candle | null) => void;
 }
 
 const COLORS = {
@@ -67,6 +78,7 @@ export function CandlestickChart({
   emas,
   zones,
   levels,
+  onHoverCandle,
 }: CandlestickChartProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
@@ -75,6 +87,7 @@ export function CandlestickChart({
   const emaSeriesRef = useRef<Map<number, ISeriesApi<"Line">>>(new Map());
   const priceLinesRef = useRef<IPriceLine[]>([]);
   const levelLinesRef = useRef<IPriceLine[]>([]);
+  const onHoverRef = useRef(onHoverCandle);
   const hasFittedRef = useRef(false);
 
   // Create the chart once; data updates are handled separately so switching
@@ -100,6 +113,13 @@ export function CandlestickChart({
       rightPriceScale: { borderColor: COLORS.border, scaleMargins: { top: 0.1, bottom: 0.25 } },
       timeScale: { borderColor: COLORS.border, timeVisible: true, secondsVisible: false },
       crosshair: { mode: CrosshairMode.Normal },
+      // The single source of truth for how a price reads, handed to the
+      // library rather than re-implemented. This is what the price axis and
+      // the crosshair use, so the axis, the crosshair and the entry printed
+      // under the chart can no longer disagree about precision — which is how
+      // a four-decimal market was showing "50.92" on the axis and "50.9200"
+      // in the panel.
+      localization: { priceFormatter: (price: number) => formatPrice(price) },
       autoSize: true,
     });
 
@@ -110,11 +130,27 @@ export function CandlestickChart({
       borderDownColor: COLORS.bearish,
       wickUpColor: COLORS.bullish,
       wickDownColor: COLORS.bearish,
+      // `localization.priceFormatter` covers the axis and the crosshair; the
+      // series' own format is what the last-value badge and every price line's
+      // axis label use. Both point at the same function. `minMove` is set from
+      // the data below, once there is a price to judge the magnitude from.
+      priceFormat: {
+        type: "custom",
+        formatter: (price: number) => formatPrice(price),
+        minMove: 0.00000001,
+      },
     });
 
     volumeSeriesRef.current = chart.addHistogramSeries({
       priceFormat: { type: "volume" },
       priceScaleId: "volume",
+      // No badge on the price axis. `localization.priceFormatter` is
+      // chart-wide, so the volume series' last value was being rendered as a
+      // *price* — "15,190.04" where the axis beside it means dollars. It was
+      // wrong before this change too, just less obviously: "15.19K" sitting in
+      // a price scale is a number in the wrong unit either way.
+      lastValueVisible: false,
+      priceLineVisible: false,
     });
     chart.priceScale("volume").applyOptions({ scaleMargins: { top: 0.82, bottom: 0 } });
 
@@ -153,6 +189,20 @@ export function CandlestickChart({
       })),
     );
 
+    // Tick granularity follows the market's own magnitude. Left at a fixed
+    // 1e-8 the axis would offer eight-decimal gridlines on a $75,000 market,
+    // and the labels would repeat because the formatter rounds them to two.
+    const last = candles.at(-1)?.close;
+    if (last !== undefined) {
+      candleSeries.applyOptions({
+        priceFormat: {
+          type: "custom",
+          formatter: (price: number) => formatPrice(price),
+          minMove: priceMinMove(last),
+        },
+      });
+    }
+
     if (!hasFittedRef.current) {
       chartRef.current?.timeScale().fitContent();
       hasFittedRef.current = true;
@@ -189,7 +239,11 @@ export function CandlestickChart({
           priceLineVisible: false,
           lastValueVisible: false,
           crosshairMarkerVisible: false,
-          title: `EMA ${period}`,
+          // No on-chart title. Lightweight Charts draws it at the series' last
+          // point, which is exactly where the entry, stop and target labels
+          // are — and of those, the trade levels are the ones worth the pixels
+          // (see the visual hierarchy note above). The toolbar already
+          // identifies each EMA by the same colour.
         });
         emaSeriesRef.current.set(period, series);
       }
@@ -229,7 +283,7 @@ export function CandlestickChart({
           lineWidth: 1,
           lineStyle: LineStyle.Dashed,
           axisLabelVisible: false,
-          title: `${label} ${formatZonePrice(zone.low)}-${formatZonePrice(zone.high)}`,
+          title: `${label} ${formatPrice(zone.low)} – ${formatPrice(zone.high)}`,
         }),
         series.createPriceLine({
           price: zone.low,
@@ -281,6 +335,39 @@ export function CandlestickChart({
     }
   }, [levels]);
 
+  /**
+   * OHLC under the crosshair.
+   *
+   * Subscribed once against a ref rather than re-subscribed whenever the
+   * caller re-renders: an inline arrow function as a dependency would tear the
+   * subscription down and rebuild it on every parent render, which is how a
+   * chart starts dropping the first move of every hover.
+   *
+   * The candle handed back is the caller's own object, so the readout renders
+   * the same floats the engine saw — no copy, no rounding on the way through.
+   */
+  // Kept current in an effect rather than assigned during render, which React
+  // 19 refuses: a ref written while rendering is a write the reconciler may
+  // roll back.
+  useEffect(() => {
+    onHoverRef.current = onHoverCandle;
+  }, [onHoverCandle]);
+
+  useEffect(() => {
+    const chart = chartRef.current;
+    if (!chart) return;
+
+    const byTime = new Map(candles.map((c) => [Math.floor(c.openTime / 1000), c]));
+
+    const handler = (param: MouseEventParams) => {
+      const time = param.time as UTCTimestamp | undefined;
+      onHoverRef.current?.(time === undefined ? null : (byTime.get(time) ?? null));
+    };
+
+    chart.subscribeCrosshairMove(handler);
+    return () => chart.unsubscribeCrosshairMove(handler);
+  }, [candles]);
+
   // Fold the streamed price into the forming candle so the chart tracks the
   // market between REST refreshes.
   useEffect(() => {
@@ -300,11 +387,4 @@ export function CandlestickChart({
   return (
     <div ref={containerRef} style={{ height }} className="w-full" data-testid="candlestick-chart" />
   );
-}
-
-/** Compact price label for a zone band drawn on the chart. */
-function formatZonePrice(value: number): string {
-  const abs = Math.abs(value);
-  const decimals = abs >= 1000 ? 0 : abs >= 1 ? 2 : 4;
-  return value.toFixed(decimals);
 }

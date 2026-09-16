@@ -373,3 +373,52 @@ test("responses carry the security headers", async ({ request }) => {
   // The framework banner is switched off.
   expect(headers["x-powered-by"]).toBeUndefined();
 });
+
+test("the chart opens in a dedicated view and comes back", async ({ page }) => {
+  await page.goto("/market-analysis?pair=BTCUSDT&tf=H4");
+
+  // The action lives on the chart itself, and its accessible name says which
+  // market and timeframe it will open — "Open chart" alone would be fifteen
+  // identical links to a screen reader on a page with several charts.
+  const open = page.getByRole("link", { name: /Open BTC\/USDT 4h in the full chart view/ });
+  await expect(open).toBeVisible({ timeout: 30_000 });
+  await open.click();
+
+  // Symbol and timeframe survive the navigation, in the URL.
+  await expect(page).toHaveURL(/\/chart\/BTCUSDT\?tf=H4/, { timeout: 30_000 });
+  await expect(page.getByTestId("chart-last-price")).toHaveText(/\d/, { timeout: 30_000 });
+
+  // Prices keep the precision the market is quoted at, on the page as well as
+  // the axis: never "50.92" where the engine means 50.9200.
+  await expect(page.getByTestId("chart-last-price")).toHaveText(/^[\d,]+\.\d{2,8}$/);
+
+  const back = page.getByRole("link", { name: /Back to analysis/ });
+  await expect(back).toBeVisible();
+  await back.click();
+  await expect(page).toHaveURL(/\/market-analysis\?pair=BTCUSDT&tf=H4/, { timeout: 30_000 });
+});
+
+test("the dedicated chart is reachable by direct URL and switches timeframe", async ({ page }) => {
+  await page.goto("/chart/ETHUSDT?tf=H1");
+
+  // Deliberately no assertion on the live price here. Market data is rate
+  // limited to 120 requests a minute, and a suite full of chart pages each
+  // polling candles and a ticker exhausts that — at which point this page
+  // correctly shows its error state and an em dash rather than a number. The
+  // price *format* is asserted in the test above, once, against a feed that
+  // has not been hammered yet. What this test is for is the routing contract,
+  // which does not depend on an exchange being reachable.
+  await expect(page.getByRole("heading", { name: "ETH/USDT" })).toBeVisible({ timeout: 30_000 });
+
+  // Timeframe switching keeps the market and is reflected in the URL, so the
+  // view stays linkable and the browser's back button still works.
+  await page.getByRole("button", { name: "4h", exact: true }).click();
+  await expect(page).toHaveURL(/\/chart\/ETHUSDT\?tf=H4/, { timeout: 30_000 });
+  await expect(page.getByRole("heading", { name: "ETH/USDT" })).toBeVisible();
+});
+
+test("an unknown market on the chart route explains itself", async ({ page }) => {
+  await page.goto("/chart/NOTAMARKET?tf=H1");
+
+  await expect(page.getByText(/not in the curated market list/i)).toBeVisible({ timeout: 30_000 });
+});
