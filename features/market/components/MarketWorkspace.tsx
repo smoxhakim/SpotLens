@@ -1,6 +1,7 @@
 "use client";
 
-import { AlertTriangle, RefreshCw, Sparkles } from "lucide-react";
+import { AlertTriangle, Maximize2, RefreshCw, Sparkles } from "lucide-react";
+import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useMemo, useState } from "react";
 
@@ -32,7 +33,9 @@ import { useCandles } from "../hooks/useCandles";
 import { useLivePrice } from "../hooks/useLivePrice";
 import { useMarkets } from "../hooks/useMarkets";
 import { useTicker } from "../hooks/useTicker";
-import { CandlestickChart, type EmaOverlay, type SetupLevel } from "./CandlestickChart";
+import { type EmaOverlay } from "./CandlestickChart";
+import { ChartPanel } from "./ChartPanel";
+import { setupLevelsFor } from "./setup-levels";
 import { MarketHeader } from "./MarketHeader";
 import { OverlayToggles, type OverlayState } from "./OverlayToggles";
 import { PairSelector } from "./PairSelector";
@@ -154,28 +157,7 @@ export function MarketWorkspace() {
    * the setup entirely, so there is nothing to draw, which is the correct
    * outcome rather than a special case.
    */
-  const setupLevels = useMemo<SetupLevel[]>(() => {
-    const setup = result?.setup;
-    if (!setup) return [];
-
-    const levels: SetupLevel[] = [
-      { price: setup.entry.low, label: "Entry", kind: "entry" },
-      { price: setup.stopLoss.price, label: "Stop", kind: "stop" },
-      ...setup.takeProfits.map((target) => ({
-        price: target.level,
-        label: target.label,
-        kind: "target" as const,
-      })),
-    ];
-
-    // The entry is a zone; its upper edge only earns a second line when it is
-    // actually a different price.
-    if (setup.entry.high !== setup.entry.low) {
-      levels.splice(1, 0, { price: setup.entry.high, label: "Entry", kind: "entry" });
-    }
-
-    return levels;
-  }, [result]);
+  const setupLevels = useMemo(() => setupLevelsFor(result?.setup ?? null), [result]);
 
   const regime = useMemo(() => (read ? classifyRegime(read) : null), [read]);
   const chartLoading = candlesQuery.isPending || marketsQuery.isLoading;
@@ -323,18 +305,35 @@ export function MarketWorkspace() {
           <Card>
             <CardContent className="p-2 sm:p-3">
               {chartLoading ? (
-                <Skeleton className="h-[480px] w-full" />
+                <Skeleton className="h-[560px] w-full" />
               ) : candles.length === 0 ? (
-                <div className="flex h-[480px] items-center justify-center text-sm text-muted-foreground">
+                <div className="flex h-[560px] items-center justify-center text-sm text-muted-foreground">
                   No candle data available for this market yet.
                 </div>
               ) : (
-                <CandlestickChart
+                <ChartPanel
                   candles={candles}
                   livePrice={live?.price ?? null}
                   emas={emaOverlays}
                   zones={zoneOverlays}
                   levels={setupLevels}
+                  // Taller than the old 480: the levels moved out from under
+                  // the chart's right-hand column, so the vertical space they
+                  // used to need is the chart's now.
+                  height={560}
+                  actions={
+                    market ? (
+                      <Button asChild size="sm" variant="outline">
+                        <Link
+                          href={`/chart/${market.exchangeSymbol}?tf=${timeframe}`}
+                          aria-label={`Open ${market.label} ${TIMEFRAME_LABELS[timeframe]} in the full chart view`}
+                        >
+                          <Maximize2 className="h-3.5 w-3.5" aria-hidden="true" />
+                          Open chart
+                        </Link>
+                      </Button>
+                    ) : null
+                  }
                 />
               )}
             </CardContent>
