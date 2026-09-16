@@ -37,11 +37,10 @@ export function MtfPanel({ mtf }: { mtf: MtfSummary }) {
   const agreementTone = AGREEMENT_TONE[mtf.agreement];
 
   return (
+    // No heading of its own: the only caller is a collapsible section that
+    // already titles this "Multi-timeframe", and two identical headings one
+    // line apart is a heading that has stopped meaning anything.
     <section className="space-y-2">
-      <h3 className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
-        Multi-timeframe
-      </h3>
-
       <div className="flex items-center gap-2">
         <TimeframeTrend
           timeframe={TIMEFRAME_LABELS[mtf.higherTimeframe]}

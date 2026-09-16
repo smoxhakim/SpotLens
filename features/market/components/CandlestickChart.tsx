@@ -22,6 +22,19 @@ export interface EmaOverlay {
   values: (number | null)[];
 }
 
+/**
+ * One horizontal level from a finished setup, drawn on the chart.
+ *
+ * Presentation only: the price is whatever the engine already decided, passed
+ * straight through. Nothing here derives a level, and the chart never rounds
+ * one — the label carries the same formatting the panel below it uses.
+ */
+export interface SetupLevel {
+  price: number;
+  label: string;
+  kind: "entry" | "stop" | "target";
+}
+
 interface CandlestickChartProps {
   candles: Candle[];
   /** Live last price, folded into the forming candle between REST refreshes. */
@@ -29,6 +42,8 @@ interface CandlestickChartProps {
   height?: number;
   emas?: EmaOverlay[];
   zones?: PriceZone[];
+  /** Entry / stop / target levels from the current analysis, if one has run. */
+  levels?: SetupLevel[];
 }
 
 const COLORS = {
@@ -51,6 +66,7 @@ export function CandlestickChart({
   height = 480,
   emas,
   zones,
+  levels,
 }: CandlestickChartProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
@@ -58,6 +74,7 @@ export function CandlestickChart({
   const volumeSeriesRef = useRef<ISeriesApi<"Histogram"> | null>(null);
   const emaSeriesRef = useRef<Map<number, ISeriesApi<"Line">>>(new Map());
   const priceLinesRef = useRef<IPriceLine[]>([]);
+  const levelLinesRef = useRef<IPriceLine[]>([]);
   const hasFittedRef = useRef(false);
 
   // Create the chart once; data updates are handled separately so switching
@@ -225,6 +242,44 @@ export function CandlestickChart({
       );
     }
   }, [zones]);
+
+  /**
+   * The setup's own levels: entry, invalidation, targets.
+   *
+   * The point of drawing these is that the numbers under the chart and the
+   * picture above it stop being two separate things to reconcile — the reader
+   * sees where the entry sits relative to price, and how far the stop is.
+   *
+   * Axis labels are on here, unlike the zone boundaries: there are at most five
+   * of these and each one is a number the reader came for, where the zone
+   * edges were a dozen dashes that buried the price scale. Kept in their own
+   * effect and their own ref so a new analysis replaces the levels without
+   * disturbing the support/resistance shading, which changes on a different
+   * cadence.
+   */
+  useEffect(() => {
+    const series = candleSeriesRef.current;
+    if (!series) return;
+
+    for (const line of levelLinesRef.current) series.removePriceLine(line);
+    levelLinesRef.current = [];
+
+    for (const level of levels ?? []) {
+      const color =
+        level.kind === "stop" ? "#ef4444" : level.kind === "target" ? "#22c55e" : "#38bdf8";
+
+      levelLinesRef.current.push(
+        series.createPriceLine({
+          price: level.price,
+          color,
+          lineWidth: level.kind === "entry" ? 2 : 1,
+          lineStyle: level.kind === "entry" ? LineStyle.Solid : LineStyle.Dashed,
+          axisLabelVisible: true,
+          title: level.label,
+        }),
+      );
+    }
+  }, [levels]);
 
   // Fold the streamed price into the forming candle so the chart tracks the
   // market between REST refreshes.
