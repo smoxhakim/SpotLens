@@ -35,7 +35,7 @@ import { OpportunityCard } from "./OpportunityCard";
 
 const VIEWS: ViewSize[] = ["top5", "top10", "top15", "all"];
 
-export function OpportunitiesView() {
+export function OpportunitiesView({ runId }: { runId?: string | null }) {
   const { status: authStatus } = useSession();
   const [view, setView] = useState<ViewSize>(DEFAULT_VIEW);
   const [timeframe, setTimeframe] = useState<TimeframeFilter>("all");
@@ -44,8 +44,12 @@ export function OpportunitiesView() {
     // `size=ALL` once, sliced locally, rather than a request per view: four
     // round trips to reorder nothing would be four chances for two views to
     // disagree about what is third.
-    queryKey: ["shortlist", "all"],
-    queryFn: () => fetchApi("/api/scanner/shortlist?size=ALL"),
+    //
+    // The run is part of the key. Without it, opening a specific pass and then
+    // the latest would serve the first from cache under the second's heading —
+    // which is exactly the kind of "two runs mixed" this page exists to avoid.
+    queryKey: ["shortlist", "all", runId ?? "latest"],
+    queryFn: () => fetchApi(`/api/scanner/shortlist?size=ALL${runId ? `&runId=${runId}` : ""}`),
     enabled: authStatus === "authenticated",
   });
 
@@ -105,7 +109,7 @@ export function OpportunitiesView() {
 
   return (
     <div className="space-y-4">
-      <ScanContext data={data} />
+      <ScanContext data={data} pinned={Boolean(runId)} />
 
       {data.totalEligible === 0 ? (
         <NothingEligible data={data} />
@@ -170,7 +174,7 @@ export function OpportunitiesView() {
  * analyses" is the honest headline, and five cards on their own would hide how
  * much was examined and refused.
  */
-function ScanContext({ data }: { data: ShortlistResponse }) {
+function ScanContext({ data, pinned }: { data: ShortlistResponse; pinned: boolean }) {
   const { run } = data;
   const when = run.completedAt ?? run.startedAt;
 
@@ -191,6 +195,18 @@ function ScanContext({ data }: { data: ShortlistResponse }) {
         {/* Stored UTC, shown in the reader's own zone — the only place a local
             time belongs. Naming the pass is what stops two runs being mixed. */}
         <span className="sm:ml-auto">Scanned {new Date(when).toLocaleString()}</span>
+
+        {pinned && (
+          // A pinned pass is not necessarily the newest one, and a reader who
+          // followed a link here deserves to be told that rather than left to
+          // infer it from a timestamp.
+          <span className="w-full sm:w-auto">
+            Viewing one pass ·{" "}
+            <Link href="/opportunities" className="text-primary underline underline-offset-2">
+              show the latest
+            </Link>
+          </span>
+        )}
       </CardContent>
     </Card>
   );

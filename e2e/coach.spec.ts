@@ -2,6 +2,8 @@ import { PrismaClient } from "@prisma/client";
 import { expect, test } from "@playwright/test";
 import bcrypt from "bcryptjs";
 
+import { signIn } from "./support/session";
+
 /**
  * The Coach, on a tracked setup.
  *
@@ -161,11 +163,7 @@ test.describe("coach review", () => {
   test("shows exactly the numbers SpotLens recorded, and reads them", async ({ page }) => {
     test.setTimeout(180_000);
 
-    await page.goto("/login");
-    await page.getByLabel("Email").fill(email);
-    await page.getByLabel("Password").fill(password);
-    await page.getByRole("button", { name: "Sign in" }).click();
-    await expect(page.getByRole("heading", { name: "Dashboard" })).toBeVisible({ timeout: 30_000 });
+    await signIn(page, email, password);
 
     await page.goto(`/coach?symbol=XTZUSDT&tf=H1&runId=${runId}&setupId=${setupId}`);
     await expect(page.getByRole("heading", { name: "Coach", exact: true })).toBeVisible({
@@ -225,11 +223,7 @@ test.describe("coach review", () => {
   test("cannot be used to read another account's setup", async ({ page }) => {
     test.setTimeout(120_000);
 
-    await page.goto("/login");
-    await page.getByLabel("Email").fill(email);
-    await page.getByLabel("Password").fill(password);
-    await page.getByRole("button", { name: "Sign in" }).click();
-    await expect(page.getByRole("heading", { name: "Dashboard" })).toBeVisible({ timeout: 30_000 });
+    await signIn(page, email, password);
 
     // A real setup id, belonging to somebody else.
     const forbidden = await page.request.get(
@@ -254,11 +248,7 @@ test.describe("coach review", () => {
   test("labels the reading, and never claims a model wrote one that did not", async ({ page }) => {
     test.setTimeout(120_000);
 
-    await page.goto("/login");
-    await page.getByLabel("Email").fill(email);
-    await page.getByLabel("Password").fill(password);
-    await page.getByRole("button", { name: "Sign in" }).click();
-    await expect(page.getByRole("heading", { name: "Dashboard" })).toBeVisible({ timeout: 30_000 });
+    await signIn(page, email, password);
 
     await page.goto(`/coach?symbol=XTZUSDT&tf=H1&runId=${runId}&setupId=${setupId}`);
     await expect(page.getByRole("heading", { name: "Coach", exact: true })).toBeVisible({

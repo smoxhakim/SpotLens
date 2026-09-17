@@ -2,6 +2,8 @@ import { PrismaClient } from "@prisma/client";
 import { expect, test } from "@playwright/test";
 import bcrypt from "bcryptjs";
 
+import { signIn as signInAs } from "./support/session";
+
 /**
  * Notification settings and the Telegram connection, end to end.
  *
@@ -41,12 +43,16 @@ let strangerId = "";
 
 const prisma = new PrismaClient();
 
+/**
+ * This spec's account, signed in through the shared helper.
+ *
+ * It used to drive the login form, which is the precondition-versus-subject
+ * mistake `support/session.ts` was written to stop: signing in is not what any
+ * test here is checking, and a submit that lands before React owns the inputs
+ * fails at the login page describing nothing about notifications.
+ */
 async function signIn(page: import("@playwright/test").Page) {
-  await page.goto("/login");
-  await page.getByLabel("Email").fill(email);
-  await page.getByLabel("Password").fill(password);
-  await page.getByRole("button", { name: "Sign in" }).click();
-  await expect(page.getByRole("heading", { name: "Dashboard" })).toBeVisible({ timeout: 30_000 });
+  await signInAs(page, email, password);
 }
 
 test.describe("notification settings", () => {

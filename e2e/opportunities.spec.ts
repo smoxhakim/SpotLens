@@ -117,6 +117,15 @@ test.describe("top opportunities", () => {
       timeout: 30_000,
     });
 
+    // From here on, this spec's own pass. The nav link reaches whichever is
+    // newest, which is the right behaviour for the product and a race between
+    // specs that each seed one — so the arrival is asserted through the nav
+    // and the content against a run this test owns.
+    await page.goto(`/opportunities?runId=${runId}`);
+    await expect(page.getByRole("heading", { name: /Top opportunities to review/ })).toBeVisible({
+      timeout: 30_000,
+    });
+
     // --- the scan's breadth, not just its survivors -------------------------
     await expect(page.getByText(/45/).first()).toBeVisible();
     await expect(page.getByText(/analyses/).first()).toBeVisible();
@@ -270,7 +279,7 @@ test.describe("top opportunities", () => {
       timeout: 30_000,
     });
 
-    await page.goto("/opportunities");
+    await page.goto(`/opportunities?runId=${runId}`);
     await expect(page.getByRole("heading", { name: /Top opportunities/ })).toBeVisible({
       timeout: 30_000,
     });
@@ -286,12 +295,49 @@ test.describe("top opportunities", () => {
     expect(page.url()).toContain("tf=H1");
   });
 
+  test("addresses one particular pass, and says that is what it is showing", async ({ page }) => {
+    test.setTimeout(120_000);
+
+    await signIn(page, email, password);
+
+    // The seeded pass is not necessarily the newest — other specs seed their
+    // own, and the scanner may have run since. That is the whole point: a pass
+    // is addressable rather than reachable only while it happens to be latest.
+    await page.goto(`/opportunities?runId=${runId}`);
+    await expect(page.getByRole("heading", { name: /Top opportunities to review/ })).toBeVisible({
+      timeout: 30_000,
+    });
+
+    // The page must not claim to be showing the latest scan when it is not.
+    await expect(page.getByText(/from one particular scan/)).toBeVisible();
+    await expect(page.getByText(/Viewing one pass/)).toBeVisible();
+
+    // And it offers the way back, rather than stranding whoever followed a link.
+    await page.getByRole("link", { name: "show the latest" }).click();
+    await expect(page).toHaveURL(/\/opportunities$/, { timeout: 30_000 });
+    await expect(page.getByText(/from the latest broad market scan/)).toBeVisible();
+    await expect(page.getByText(/Viewing one pass/)).toHaveCount(0);
+  });
+
+  test("falls back to the latest pass when the run reference is malformed", async ({ page }) => {
+    await signIn(page, email, password);
+
+    // Same treatment /coach and /decision give a bad reference: null, not a
+    // crash, and not a 404 page for a typo in a query string.
+    await page.goto("/opportunities?runId=not-a-uuid");
+
+    await expect(page.getByText(/from the latest broad market scan/)).toBeVisible({
+      timeout: 30_000,
+    });
+    await expect(page.getByText(/Viewing one pass/)).toHaveCount(0);
+  });
+
   test("stacks into a phone viewport without sideways scrolling", async ({ page }) => {
     test.setTimeout(120_000);
 
     await page.setViewportSize({ width: 390, height: 844 });
     await signIn(page, email, password);
-    await page.goto("/opportunities");
+    await page.goto(`/opportunities?runId=${runId}`);
 
     await expect(page.getByRole("heading", { name: /Top opportunities to review/ })).toBeVisible({
       timeout: 30_000,
