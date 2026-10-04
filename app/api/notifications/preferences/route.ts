@@ -23,6 +23,7 @@ const patchSchema = z
     dailySummary: z.boolean(),
     systemError: z.boolean(),
     confirmationAlerts: z.boolean(),
+    entryZoneReached: z.boolean(),
   })
   .strict()
   .partial();

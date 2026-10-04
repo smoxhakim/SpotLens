@@ -232,6 +232,7 @@ export async function getPreferences(userId: string): Promise<NotificationPrefer
     dailySummary: row.dailySummary,
     systemError: row.systemError,
     confirmationAlerts: row.confirmationAlerts,
+    entryZoneReached: row.entryZoneReached,
   };
 }
 
@@ -255,6 +256,7 @@ export async function updatePreferences(
     dailySummary: row.dailySummary,
     systemError: row.systemError,
     confirmationAlerts: row.confirmationAlerts,
+    entryZoneReached: row.entryZoneReached,
   };
 }
 

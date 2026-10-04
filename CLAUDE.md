@@ -138,6 +138,28 @@ make that unnecessary most of the time.
 WAITING_CONFIRMATION` is price arriving somewhere, not structure changing,
   and says nothing. Dedupe is Phase D's `SetupEvent.id`, enforced by a unique
   index, so re-observing an unchanged setup cannot notify twice.
+- **The entry-zone monitor reads a live price, and says one thing once.**
+  `ENTRY_ZONE_REACHED` is the one notification not derived from a closed
+  candle or a `SetupEvent` — a deliberate, scoped exception to the two rules
+  above, and a reversal of the old "price arriving somewhere says nothing" for
+  this one event. `npm run monitor` (`scripts/entry-zone-monitor.ts`) is its own
+  process and shares nothing with the scanner's schedule; `scanner:once` is
+  unchanged. It polls Binance's public `/api/v3/ticker/price` once per tick for
+  every watched symbol and compares against the setup's immutable
+  `entryLow`/`entryHigh` with the engine's own `isInZone` — it computes no
+  level. `lib/entry-zone` is pure: a setup is **armed** when seen outside (or
+  created at SETUP_FORMING, which proves its creating candle closed outside),
+  and an armed setup's first reading inside is the alert. Unarmed-and-inside is
+  silent; ABOVE → BELOW (gap-through) is silent. **One alert per setup id,
+  ever** — dedupe key `entry-zone:<setupId>`, enforced by the Notification
+  unique index, so re-entry, restart and concurrent monitors cannot repeat it.
+  `SetupEntryZoneWatch` holds only `armedAt` and `reachedAt`/`reachedPrice`;
+  nothing is written per tick. Freshness is the response's **receipt time**:
+  Binance's ticker `closeTime` is the stats recompute time, not quote age
+  (verified live), so it is not used; older than 15s is skipped. It changes no
+  lifecycle state, triggers no confirmation, creates no decision. Telegram (main
+  bot) only for `analysisStatus` POTENTIAL_SETUP, or WAIT_FOR_CONFIRMATION with
+  a measured reward; everything else is in-app.
 - **`TELEGRAM_BOT_TOKEN` is read in exactly one file**
   (`lib/notifications/telegram-provider.ts`) and never returned, logged, or
   stored. Errors are stripped of it before they reach a database row.
@@ -261,6 +283,7 @@ lib/
   research/     engine funnel vs decision counts, kept apart (pure)
   risk/         position sizing, caps, costs (pure; one source of the formula)
   regime/       market environment classifier (pure; outside the engine)
+  entry-zone/   live price vs stored entry zone: arming, once-per-setup (pure)
   coach/        educational reading of a recorded analysis (pure; owns no number)
 scripts/        the local scanner process (npm run scanner)
   market-data/  provider abstraction + Binance
@@ -275,6 +298,7 @@ npm run test                 # vitest — scope it: npx vitest run lib/analysis
 npm run e2e                  # playwright, serves on 3100 (3000 is often taken)
 npm run scanner              # local scanner: wakes after each candle close
 npm run scanner:once         # one pass over the universe, then exit
+npm run monitor              # live entry-zone monitor (public prices, 10s poll)
 npm run lint && npm run typecheck
 npx prisma migrate deploy    # apply migrations
 npm run prisma:seed          # assets, checklists, learn articles (idempotent)

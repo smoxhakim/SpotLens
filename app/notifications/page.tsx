@@ -13,8 +13,9 @@ export default function NotificationsPage() {
           Notifications
         </h1>
         <p className="text-sm text-muted-foreground">
-          What the scanner found while you were away. Every one describes something that already
-          happened on a closed candle — none of them is an instruction to trade.
+          What the scanner found while you were away. Each describes something that already happened
+          on a closed candle, except &ldquo;Entry zone reached&rdquo;, which reports a live price
+          arriving at a stored level — none of them is an instruction to trade.
         </p>
       </header>
 

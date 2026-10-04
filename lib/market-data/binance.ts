@@ -5,6 +5,7 @@ import {
   type CandleRange,
   type Market,
   type MarketDataProvider,
+  type PriceQuote,
   type Ticker,
   type Timeframe,
 } from "./provider";
@@ -42,6 +43,11 @@ interface RawExchangeInfo {
     quoteAsset: string;
     isSpotTradingAllowed: boolean;
   }[];
+}
+
+interface RawPrice {
+  symbol: string;
+  price: string;
 }
 
 interface RawTicker24h {
@@ -106,6 +112,34 @@ export class BinanceProvider implements MarketDataProvider {
       volume24h: num(raw.volume, "24h volume"),
       at: raw.closeTime,
     };
+  }
+
+  /**
+   * `/api/v3/ticker/price` with a `symbols` array: one request, weight 4 however
+   * many symbols, and no timestamp of its own — `PriceQuote` explains why the
+   * receipt time is the one that means anything.
+   */
+  async getPrices(symbols: string[]): Promise<PriceQuote[]> {
+    if (symbols.length === 0) return [];
+
+    const raw = await fetchJson<RawPrice[]>(
+      this.url("/api/v3/ticker/price", {
+        symbols: JSON.stringify(symbols.map((s) => s.toUpperCase())),
+      }),
+    );
+    const receivedAt = Date.now();
+
+    if (!Array.isArray(raw)) {
+      throw new MarketDataError("BAD_RESPONSE", "Provider returned an unexpected price list.", {
+        retryable: false,
+      });
+    }
+
+    return raw.map((row) => ({
+      symbol: row.symbol,
+      price: num(row.price, "price"),
+      receivedAt,
+    }));
   }
 
   async getCandles(

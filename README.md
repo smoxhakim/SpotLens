@@ -335,6 +335,72 @@ nothing at all the second time.
 same confirmation engine, the same setup lifecycle, the same market-data layer.
 There is no scanner-specific strategy, and no second exchange client.
 
+### The entry-zone monitor
+
+A second, separate process that watches the **live price** against the entry
+zone of every open tracked setup, and says once when price moves into one.
+
+```bash
+npm run monitor        # poll until stopped (Ctrl-C)
+npm run monitor:once   # load setups, poll once, report, exit
+```
+
+It does not replace or touch the scanner. The scanner reads closed candles and
+decides what a setup _is_; the monitor reads the current price and reports
+where it _is_. Run either, both, or neither — `scanner:once` behaves exactly as
+before.
+
+**What `ENTRY_ZONE_REACHED` means:** a price was observed outside a tracked
+setup's stored entry zone, and a later price was observed inside it
+(boundaries count as inside). **What it does not mean:** confirmation, a
+signal, or an instruction. It changes no lifecycle state, runs no confirmation
+check, creates no journal decision and rewrites no setup number — the zone it
+compares against is the setup's immutable snapshot. The message carries the
+confirmation state from the last closed-candle scan, labelled as such. Review
+the setup before deciding; SpotLens never places an order.
+
+**How it works.** Every 10 seconds, one request to Binance's public
+`/api/v3/ticker/price` covers every watched market (no API key, no account).
+Each price is checked in memory against every open setup on that market — H1
+and H4 separately, every owner separately. Open setups are reloaded from the
+database every 10 minutes, so the database is not queried per tick and a Neon
+compute can sleep between reloads. Writes happen only on two transitions: a
+setup first seen outside its zone, and its one alert.
+
+**Once per setup.** The alert is keyed on the setup id alone
+(`entry-zone:<setupId>`), and the notification table's unique index refuses a
+second row — so staying inside the zone, leaving and re-entering, restarting
+the monitor, or running two at once all produce one alert per channel. A
+replacement setup has a new id and can alert for itself.
+
+**When it stays silent.**
+
+- A setup first seen already inside its zone, with no evidence it was ever
+  outside, says nothing until it leaves and comes back. A setup created by a
+  closed candle outside its zone (`SETUP_FORMING`) counts as having been
+  outside — so if price entered while the monitor was not running, it alerts
+  once on startup.
+- **Gap-through.** Polling sees prices, not every trade. If one poll is above
+  the zone and the next is already below it, price crossed the zone without
+  being observed inside it, and nothing is raised. A move that enters and
+  leaves within one poll interval is likewise not seen.
+- **Stale or missing prices.** A price older than 15 seconds when evaluated is
+  skipped. Freshness is measured from when SpotLens _received_ the response:
+  Binance's ticker `closeTime` is the rolling-statistics recompute time, not
+  the quote's age (on a quiet pair it can lag the request by seconds, or sit
+  minutes after the last trade), so it is not used. A failed poll evaluates
+  nothing and fabricates nothing; the next tick retries.
+
+**Where it is delivered.** In-app always (subject to Settings →
+Notifications → Entry zone reached). Telegram — the main bot — only for setups
+whose verdict at creation was `POTENTIAL_SETUP`, or `WAIT_FOR_CONFIRMATION`
+with a measured reward; high-risk setups and synthetic rewards stay in-app.
+
+| Variable                   | Default  | Floor   |
+| -------------------------- | -------- | ------- |
+| `ENTRY_MONITOR_POLL_MS`    | `10000`  | `2000`  |
+| `ENTRY_MONITOR_REFRESH_MS` | `600000` | `60000` |
+
 ## Risk and position sizing
 
 The calculator answers one question: _if you decide to take this, how much?_
@@ -409,8 +475,9 @@ scan can create dozens of setups, and a channel that announces all of them
 stops being read. Change any of it in Settings → Notifications.
 
 **Nothing here is an instruction.** A notification says what already happened
-on a closed candle. SpotLens does not place orders, and no message will ever
-tell you to buy.
+on a closed candle — with one exception, the entry-zone alert above, which
+reports a live price and nothing more. SpotLens does not place orders, and no
+message will ever tell you to buy.
 
 ### Connecting Telegram
 

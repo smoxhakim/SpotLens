@@ -109,6 +109,20 @@ export function dedupeKeyForSystemError(input: {
   return `system-error:${input.category}:${input.symbol ?? "global"}:${hour}`;
 }
 
+/**
+ * One entry-zone alert per setup, ever.
+ *
+ * Keyed on the setup and nothing else — not the price, not the time, not the
+ * number of times the zone was entered. That is the whole dedupe policy: the
+ * unique index on `(userId, channel, dedupeKey)` makes a second alert for the
+ * same setup impossible, whether it comes from a re-entry, a restart or a
+ * second monitor running at the same moment. A replacement setup has a new id
+ * and so a new key, which is what lets a genuinely new level speak.
+ */
+export function dedupeKeyForEntryZone(trackedSetupId: string): string {
+  return `entry-zone:${trackedSetupId}`;
+}
+
 /** One summary per UTC day, however many times the job runs. */
 export function dedupeKeyForDailySummary(date: string): string {
   return `daily-summary:${date}`;
@@ -201,6 +215,25 @@ export function telegramPriorityFor(event: RoutingFacts): TelegramPriority {
 
     case "SYSTEM_ERROR":
       return "HIGH";
+
+    // Price reached a stored entry zone. Pushed only for setups whose own
+    // verdict at creation was worth acting on: every deterministic condition
+    // held, or the engine was waiting on confirmation against a *measured*
+    // reward. A high-risk setup, or one whose reward was the fallback ladder's
+    // constant, is recorded in-app and never interrupts a phone — price
+    // arriving at a level nobody should be acting on is not news.
+    //
+    // Reads `analysisStatus`, the snapshot verdict, because that is the only
+    // field that carries HIGH_RISK at all; the lifecycle has no such state.
+    case "ENTRY_ZONE_REACHED": {
+      const setup = event.setup;
+      if (!setup) return "LOW";
+      if (setup.analysisStatus === "POTENTIAL_SETUP") return "HIGH";
+      if (setup.analysisStatus === "WAIT_FOR_CONFIRMATION" && !setup.riskRewardIsSynthetic) {
+        return "MEDIUM";
+      }
+      return "LOW";
+    }
   }
 }
 

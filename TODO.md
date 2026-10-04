@@ -32,6 +32,24 @@ open items are collected here.
       image has still never been built.
 - [ ] Optional: tighten CSP off `unsafe-inline`/`unsafe-eval` via nonces.
 
+## Entry-zone monitor (implemented on `feat/entry-zone-monitor`, awaiting review)
+
+Live `ENTRY_ZONE_REACHED`: once per setup, when the public price moves from
+outside a tracked setup's stored entry zone to inside it. Separate process
+(`npm run monitor`); the scanner is untouched. See README → "The entry-zone
+monitor".
+
+- [x] Pure arming / once-per-setup rules (`lib/entry-zone`), shared batch price
+      poll, durable `SetupEntryZoneWatch`, routing, preference, settings toggle.
+- [x] Migration `20261003120000_entry_zone_monitor` (additive) tested on a
+      disposable local Postgres; no drift against the schema.
+- [ ] **Apply the migration to Neon** — `npm run prisma:deploy`, then restart
+      `npm run dev`. Not done: awaiting approval.
+- [ ] Known limits, by decision: polling (10s) misses a move that enters and
+      leaves between polls; gap-through (above → below) raises nothing; a
+      setup first seen inside with no proof it was ever outside stays silent
+      until it leaves and returns.
+
 ## Phase A — correctness (done, awaiting review)
 
 Branch `fix/phase-a-correctness`, on top of `chore/upgrade-next-16`.

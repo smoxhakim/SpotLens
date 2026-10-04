@@ -54,6 +54,7 @@ export const TELEGRAM_TITLES: Record<LifecycleNotificationEventType, string> = {
   STRUCTURE_CHANGED: "🟠 Structure signal",
   DAILY_SUMMARY: "📊 Daily summary",
   SYSTEM_ERROR: "⚠️ Scanner error",
+  ENTRY_ZONE_REACHED: "🔔 Entry zone reached",
 };
 
 /** A replacement is not an invalidation, and must not wear its title. */
@@ -445,6 +446,36 @@ export function formatStructureChange(event: NotificationEvent): string {
   ].join("\n");
 }
 
+/**
+ * Live price is inside a tracked setup's stored entry zone.
+ *
+ * Every figure is the snapshot's except the observed price, and the
+ * confirmation line is labelled as the last scan's — this alert re-checked
+ * nothing. It says plainly that price arriving is not confirmation, because a
+ * bell on a phone next to an entry level is exactly where that is easiest to
+ * forget.
+ */
+export function formatEntryZoneReached(event: NotificationEvent): string {
+  const setup = event.setup!;
+  const seen = event.entryZone!;
+
+  return [
+    ...header(event, TELEGRAM_TITLES.ENTRY_ZONE_REACHED),
+    "",
+    `${bold("Price")}: ${price(seen.observedPrice)}`,
+    `${bold("Entry zone")}: ${price(setup.entryLow)} – ${price(setup.entryHigh)}`,
+    `${bold("Seen at")}: ${escape(clock(seen.observedAt))}`,
+    `${bold("Confirmation")}: ${escape(labelFrom(LIFECYCLE_LABELS, setup.lifecycleStatus))} ${escape("(last scan)")}`,
+    `${bold("Quality")}: ${escape(setup.score)}/100 · ${escape(humanise(setup.scoreGrade))}`,
+    rewardLine(setup),
+    "",
+    escape(
+      "Price is inside the stored entry zone. This is not confirmation, and nothing about the setup has changed.",
+    ),
+    ...reviewFooter(),
+  ].join("\n");
+}
+
 export function formatDailySummary(event: NotificationEvent): string {
   const s = event.summary!;
 
@@ -527,6 +558,8 @@ export function formatForTelegram(event: NotificationEvent): string {
       return formatDailySummary(event);
     case "SYSTEM_ERROR":
       return formatSystemError(event);
+    case "ENTRY_ZONE_REACHED":
+      return formatEntryZoneReached(event);
   }
 }
 

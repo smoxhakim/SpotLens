@@ -83,6 +83,7 @@ function event(overrides: Partial<NotificationEvent> = {}): NotificationEvent {
     },
     summary: null,
     systemError: null,
+    entryZone: null,
     ...overrides,
   };
 }

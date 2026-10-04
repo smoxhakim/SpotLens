@@ -105,6 +105,11 @@ const EVENT_TOGGLES: {
     hint: "New confirmation evidence at a tracked level, and the moment the deterministic confirmation check has everything it requires. These go to the confirmation bot below — never to the main one.",
   },
   {
+    key: "entryZoneReached",
+    label: "Entry zone reached",
+    hint: "Live price moved into a tracked setup's entry zone. At most once per setup, and only while the entry-zone monitor (npm run monitor) is running. Pushed only when the setup's verdict at creation had every condition met, or was waiting with a measured reward — the rest stay here. Price arriving is not evidence.",
+  },
+  {
     key: "dailySummary",
     label: "Daily scanner summary",
     hint: "One message a day with what every market said, including the no-trade counts.",
