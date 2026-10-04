@@ -341,9 +341,11 @@ async jobs (backtests run synchronously under the candle ceiling).
 Sessions are JWT rather than database sessions — a library constraint, since
 Auth.js v5's Credentials provider does not support the database strategy.
 
-Nothing is outstanding on the security side: the 21 advisories recorded here
-were against Next 14 and were cleared by the Next 16 upgrade. `npm audit`
-reports zero across the whole tree. See `SECURITY.md`.
+The 21 advisories once recorded here were against Next 14 and were cleared by
+the Next 16 upgrade. `npm audit` is not clean: it reports one advisory with no
+published fix (`braces`, reached through Tailwind 3 and `eslint-config-next`,
+build-time only), and clearing it needs major-version changes that were
+deliberately not taken. See `SECURITY.md`.
 
 ## Git workflow
 

@@ -61,9 +61,28 @@ be reset directly in the database.
 
 ## Outstanding
 
-**Dependency advisories: none.** `npm audit` reports zero vulnerabilities, in
-the production tree and across dev dependencies alike. Verified on
-2026-09-10 against Next 16.3.4.
+**Dependency advisories: one, with no fix published.** Verified on
+2026-10-04 against Next 16.3.8: `npm audit` reports 7 high, 0 critical, and
+`npm audit --omit=dev` reports 5 high. Every one of them is the same advisory,
+[GHSA-vfj7-8cjw-p6xm](https://github.com/advisories/GHSA-vfj7-8cjw-p6xm) — a
+stack-exhaustion DoS in `braces` on deeply nested patterns — counted once per
+package that depends on it: `micromatch`, `chokidar`, `fast-glob`,
+`tailwindcss`, and on the dev side `@next/eslint-plugin-next` and
+`eslint-config-next`.
+
+It affects every published `braces` (`<=3.0.3`, and 3.0.3 is the latest), so
+neither `npm audit fix` nor an override can resolve it. The routes npm offers
+are both major-version changes, deliberately not taken: `tailwindcss@4` for the
+production-tree path, and a downgrade to `eslint-config-next@14` for the dev
+path (`@next/eslint-plugin-next` pins `fast-glob@3.3.1`, so Tailwind 4 alone
+would not clear it). None of the chain runs in production: Tailwind is a
+PostCSS plugin, its glob patterns are the repository's own `content` list, and
+none of these packages appears in the standalone server output. Re-check when
+`braces` publishes a fix or the Tailwind 4 migration happens.
+
+The October 2026 pass cleared a critical Next.js RCE in `next/og`
+`ImageResponse` (GHSA-vcvr-r3jv-pc5j, fixed in 16.3.6) and three
+`brace-expansion` DoS advisories (patch releases within existing ranges).
 
 The 21 advisories previously recorded here were against Next 14 and were
 cleared by the upgrade to Next 16, which also pulled in React 19. The dev-only
