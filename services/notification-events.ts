@@ -101,6 +101,7 @@ export async function eventsFromScan(input: {
       setup: transition.facts,
       summary: null,
       systemError: null,
+      entryZone: null,
     });
   }
 
@@ -214,6 +215,20 @@ async function loadLatestTransitions(setupIds: string[]): Promise<Map<string, Lo
   return map;
 }
 
+/**
+ * Notification facts for stored setups, read the same way a scan's are.
+ *
+ * Exported for the entry-zone monitor, so an alert describes a setup with
+ * exactly the fields, labels and snapshot reads every other message uses
+ * rather than a second, drifting copy of this mapping. `lifecycleStatus` is the
+ * latest transition's — where the last closed-candle scan left the setup.
+ */
+export async function loadSetupFacts(setupIds: string[]): Promise<Map<string, SetupFacts>> {
+  if (setupIds.length === 0) return new Map();
+  const transitions = await loadLatestTransitions(setupIds);
+  return new Map([...transitions].map(([id, transition]) => [id, transition.facts]));
+}
+
 type SetupWithLatestEvent = Awaited<
   ReturnType<typeof prisma.trackedSetup.findFirst<{ include: { events: true } }>>
 >;
@@ -318,6 +333,7 @@ function systemErrorEvent(
       message: scannerEvent.detail,
       affectedMarkets: 1,
     },
+    entryZone: null,
   };
 }
 
@@ -431,5 +447,6 @@ export async function buildDailySummary(input: {
     setup: null,
     summary,
     systemError: null,
+    entryZone: null,
   };
 }

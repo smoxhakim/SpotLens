@@ -1,3 +1,5 @@
+import { formatPrice } from "@/lib/format";
+
 import type { NotificationEvent, NotificationEventType } from "./types";
 
 /**
@@ -21,6 +23,8 @@ export const IN_APP_MARKERS = {
   confirmationDeveloping: "🟡",
   /** Phase Q — the deterministic engine has what it requires. Still not an instruction. */
   confirmationReached: "🟩",
+  /** Price reached a stored entry zone. A level in play, not a verdict on it. */
+  entryZoneReached: "🔔",
 } as const;
 
 /**
@@ -47,6 +51,8 @@ const TONE_BY_MARKER: [string, NotificationTone][] = [
   [IN_APP_MARKERS.structureSignal, "WARNING"],
   [IN_APP_MARKERS.dailySummary, "NEUTRAL"],
   [IN_APP_MARKERS.scannerError, "NEGATIVE"],
+  // Informational: price is somewhere, and nothing has been decided about it.
+  [IN_APP_MARKERS.entryZoneReached, "INFO"],
 ];
 
 /** What the tone was before the markers existed, for rows written back then. */
@@ -59,6 +65,7 @@ const TONE_BY_TYPE: Record<NotificationEventType, NotificationTone> = {
   SYSTEM_ERROR: "NEGATIVE",
   CONFIRMATION_EVIDENCE: "WARNING",
   CONFIRMATION_REACHED: "POSITIVE",
+  ENTRY_ZONE_REACHED: "INFO",
 };
 
 /**
@@ -78,6 +85,15 @@ export function toneForNotification(row: {
 
   return TONE_BY_TYPE[row.type] ?? "NEUTRAL";
 }
+
+/** Where the last closed-candle scan left the setup, in a few words. */
+const LIFECYCLE_SHORT: Record<string, string> = {
+  SETUP_FORMING: "forming",
+  WAITING_CONFIRMATION: "waiting for confirmation",
+  CONFIRMATION_DETECTED: "confirmation evidence present",
+  POTENTIAL_SETUP: "potential setup",
+  INVALIDATED: "invalidated",
+};
 
 /**
  * The short form shown in the app's own list.
@@ -159,6 +175,22 @@ export function renderInApp(event: NotificationEvent): { title: string; body: st
         // first time, where nothing changed at all.
         title: `${IN_APP_MARKERS.structureSignal} Structure signal — ${where}`,
         body: structural.map((s) => s.title).join("; ") || setup.statusReason,
+      };
+    }
+
+    case "ENTRY_ZONE_REACHED": {
+      const setup = event.setup!;
+      const seen = event.entryZone!;
+      return {
+        title: `${IN_APP_MARKERS.entryZoneReached} Entry zone reached — ${where}`,
+        // Says what it is not in the same breath as what it is: price arriving
+        // at a level is the moment to start reading, and the confirmation
+        // state shown is the last scan's, not something this alert re-checked.
+        body:
+          `Price ${formatPrice(seen.observedPrice)} is inside the entry zone ` +
+          `${formatPrice(setup.entryLow)} – ${formatPrice(setup.entryHigh)}. ` +
+          `Last scan: ${LIFECYCLE_SHORT[setup.lifecycleStatus] ?? setup.lifecycleStatus}. ` +
+          "This is not confirmation — review the setup before deciding.",
       };
     }
 

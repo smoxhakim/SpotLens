@@ -22,7 +22,12 @@ export type NotificationEventType =
   /** Phase Q — new positive evidence at a tracked level. */
   | "CONFIRMATION_EVIDENCE"
   /** Phase Q — the confirmation engine returned PRESENT for the first time. */
-  | "CONFIRMATION_REACHED";
+  | "CONFIRMATION_REACHED"
+  /**
+   * The live price moved from outside a tracked setup's stored entry zone to
+   * inside it. Once per setup, informational only — see `lib/entry-zone`.
+   */
+  | "ENTRY_ZONE_REACHED";
 
 /**
  * The two confirmation-watch types, in one place.
@@ -78,6 +83,9 @@ export const EVENT_PRIORITY: Record<NotificationEventType, NotificationPriority>
   // bot in order to catch.
   CONFIRMATION_EVIDENCE: "MEDIUM",
   CONFIRMATION_REACHED: "HIGH",
+  // Price arriving is worth reading; it is not evidence and not a verdict, so
+  // it does not rank beside a level failing.
+  ENTRY_ZONE_REACHED: "MEDIUM",
 };
 
 /** Levels and reasoning as they stood, copied from the stored setup snapshot. */
@@ -150,6 +158,18 @@ export interface DailySummaryFacts {
   topRanked: { symbol: string; timeframe: string; analysisStatus: string; score: number | null }[];
 }
 
+/**
+ * The observation behind an ENTRY_ZONE_REACHED event.
+ *
+ * Only the price and when it was seen. The zone it was compared against is the
+ * setup's own immutable `entryLow`/`entryHigh`, already on `SetupFacts`.
+ */
+export interface EntryZoneFacts {
+  observedPrice: number;
+  /** Epoch ms when the price was received. */
+  observedAt: number;
+}
+
 export interface SystemErrorFacts {
   category: string;
   symbol: string | null;
@@ -179,6 +199,8 @@ export interface NotificationEvent {
   setup: SetupFacts | null;
   summary: DailySummaryFacts | null;
   systemError: SystemErrorFacts | null;
+  /** Set only on ENTRY_ZONE_REACHED. */
+  entryZone: EntryZoneFacts | null;
 }
 
 /**
@@ -197,6 +219,7 @@ export const notificationEventTypeSchema = z.enum([
   "SYSTEM_ERROR",
   "CONFIRMATION_EVIDENCE",
   "CONFIRMATION_REACHED",
+  "ENTRY_ZONE_REACHED",
 ]);
 
 export const notificationChannelSchema = z.enum(["IN_APP", "TELEGRAM", "TELEGRAM_CONFIRMATION"]);
@@ -212,6 +235,8 @@ export interface NotificationPreferences {
   systemError: boolean;
   /** Phase Q — both confirmation-watch types at once. See the schema comment. */
   confirmationAlerts: boolean;
+  /** Live entry-zone alerts. One per setup at most. */
+  entryZoneReached: boolean;
 }
 
 /**
@@ -239,6 +264,9 @@ export const DEFAULT_PREFERENCES: NotificationPreferences = {
   // user had to create and connect on purpose, so connecting it is the opt-in
   // and a second switch off by default would just be a thing to discover later.
   confirmationAlerts: true,
+  // On: it fires at most once per setup, and Telegram still only carries the
+  // subset `telegramPriorityFor` admits.
+  entryZoneReached: true,
 };
 
 /** Which preference flag governs which event type. */
@@ -256,4 +284,5 @@ export const PREFERENCE_FOR_EVENT: Record<
   // complete" is not a preference anyone has.
   CONFIRMATION_EVIDENCE: "confirmationAlerts",
   CONFIRMATION_REACHED: "confirmationAlerts",
+  ENTRY_ZONE_REACHED: "entryZoneReached",
 };

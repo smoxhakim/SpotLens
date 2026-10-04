@@ -107,6 +107,7 @@ function event(overrides: Partial<NotificationEvent> = {}): NotificationEvent {
     setup: setupFacts(),
     summary: null,
     systemError: null,
+    entryZone: null,
     ...overrides,
   };
 }
@@ -1056,6 +1057,7 @@ describe("human-facing presentation", () => {
       STRUCTURE_CHANGED: "🟠 Structure signal",
       DAILY_SUMMARY: "📊 Daily summary",
       SYSTEM_ERROR: "⚠️ Scanner error",
+      ENTRY_ZONE_REACHED: "🔔 Entry zone reached",
     });
     expect(REPLACEMENT_TITLE).toBe("🔄 Setup re-anchored");
   });

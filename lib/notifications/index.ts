@@ -15,6 +15,7 @@ export {
   notificationChannelSchema,
   notificationEventTypeSchema,
   type DailySummaryFacts,
+  type EntryZoneFacts,
   type LifecycleNotificationEventType,
   type NotificationChannel,
   type NotificationEvent,
@@ -27,6 +28,7 @@ export {
 
 export {
   dedupeKeyForDailySummary,
+  dedupeKeyForEntryZone,
   dedupeKeyForSetupEvent,
   dedupeKeyForSystemError,
   eventTypeForTransition,
@@ -45,6 +47,7 @@ export {
   formatConfirmation,
   formatConnectionTest,
   formatDailySummary,
+  formatEntryZoneReached,
   formatForTelegram,
   formatInvalidation,
   formatPotentialSetup,

@@ -69,6 +69,25 @@ export interface Ticker {
   at: number;
 }
 
+/**
+ * A last-traded price, and when SpotLens received it.
+ *
+ * `receivedAt` is this process's clock at the moment the response arrived, and
+ * that is deliberate. Binance's ticker `closeTime` looks like a quote timestamp
+ * and is not one: checked against live data, it is neither the request time
+ * (on a quiet pair it stood still for seconds while the clock moved) nor the
+ * last trade (one pair's `closeTime` was 146s *after* its last trade). It is
+ * when the rolling 24h statistics were last recomputed. The last price in a
+ * response is the exchange's current last price when the response was made, so
+ * the receipt time is the honest measure of how old the reading is.
+ */
+export interface PriceQuote {
+  symbol: string;
+  price: number;
+  /** Epoch milliseconds, local clock, when the response arrived. */
+  receivedAt: number;
+}
+
 export interface Candle {
   /** Epoch milliseconds of the candle's open. */
   openTime: number;
@@ -92,6 +111,11 @@ export interface MarketDataProvider {
   /** All spot markets the provider currently lists as tradable. */
   getMarkets(): Promise<Market[]>;
   getTicker(symbol: string): Promise<Ticker>;
+  /**
+   * Last prices for several symbols in one request. A symbol the exchange
+   * omits is absent from the result rather than invented.
+   */
+  getPrices(symbols: string[]): Promise<PriceQuote[]>;
   getCandles(
     symbol: string,
     timeframe: Timeframe,

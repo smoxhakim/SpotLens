@@ -113,6 +113,11 @@ enum NotificationEventType {
   /// Phase Q. The deterministic confirmation engine returned PRESENT for this
   /// setup for the first time since the watcher began following it.
   CONFIRMATION_REACHED
+  /// The live price was observed moving from outside a tracked setup's stored
+  /// entry zone to inside it. Once per setup. Informational only: it is not
+  /// confirmation, it changes no lifecycle state, and it is the one event not
+  /// derived from a closed candle — see `lib/entry-zone`.
+  ENTRY_ZONE_REACHED
 }
 
 /// Where a notification was delivered.
@@ -599,6 +604,7 @@ model TrackedSetup {
   events            SetupEvent[]
   journalEntry      JournalEntry?
   confirmationWatch SetupConfirmationWatch?
+  entryZoneWatch    SetupEntryZoneWatch?
 
   @@index([userId, tradingPairId, timeframe, status])
   @@index([userId, createdAt])
@@ -784,6 +790,9 @@ model NotificationPreference {
   /// Defaults on, unlike `telegramEnabled`: these reach a bot that has to be
   /// deliberately created and connected, so connecting it *is* the opt-in.
   confirmationAlerts   Boolean @default(true)
+  /// Live entry-zone alerts. On by default: the event is at most one per setup,
+  /// and Telegram still only carries the subset `telegramPriorityFor` admits.
+  entryZoneReached     Boolean @default(true)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -881,6 +890,43 @@ model SetupConfirmationWatch {
   /// recorded as already known and announced nothing.
   baselinedAt     DateTime @default(now())
   updatedAt       DateTime @updatedAt
+
+  setup TrackedSetup @relation(fields: [trackedSetupId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+/// What the live entry-zone monitor knows about one tracked setup.
+///
+/// Holds only the two facts that must survive a restart: that the setup has
+/// been seen outside its zone (so entering it would be news), and that the one
+/// alert it is allowed has already been raised. The price's position on every
+/// poll is kept in memory and never written — a write per tick would turn a
+/// ten-second poll into a table of noise.
+///
+/// The zone itself is not copied. `TrackedSetup.entryLow/entryHigh` are written
+/// once and never updated, so a reference already reads the exact levels the
+/// alert was raised against, however the market moves afterwards.
+///
+/// No row means "the monitor has recorded nothing" — a setup created outside
+/// its zone is armed by its own `CREATED` event and needs no row to be armed.
+model SetupEntryZoneWatch {
+  /// One row per setup. A replacement setup is a different level and starts
+  /// with no history, which is what lets it raise its own alert.
+  trackedSetupId String @id
+  userId         String
+
+  /// When the monitor first saw price outside the zone. Null when the setup was
+  /// armed by its creation instead, or has never been seen outside.
+  armedAt      DateTime?
+  /// When the one ENTRY_ZONE_REACHED for this setup was raised, and the price
+  /// that raised it. Set once and never cleared: re-entering the zone is not
+  /// reaching it again.
+  reachedAt    DateTime?
+  reachedPrice Decimal?  @db.Decimal(24, 8)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   setup TrackedSetup @relation(fields: [trackedSetupId], references: [id], onDelete: Cascade)
 
