@@ -13,6 +13,12 @@
  *   ENTRY_MONITOR_POLL_MS           price poll interval        (default 10000, min 2000)
  *   ENTRY_MONITOR_REFRESH_MS        full open-setup reload     (default 600000, min 60000)
  *   ENTRY_MONITOR_SCANNER_CHECK_MS  new-scanner-run check      (default 60000, min 10000)
+ *   ENTRY_MONITOR_MAX_SETUP_AGE_CANDLES  freshness limit       (default 1, max 24)
+ *
+ * An alert is raised only for a setup a completed scan re-confirmed within that
+ * many candles of its own timeframe, plus 15 minutes (H1 ≤ 1h15m, H4 ≤ 4h15m at
+ * the default). A stale setup's alert is withheld and logged; nothing is
+ * written, so it can still alert once a fresh scan re-confirms it.
  *
  * Open setups are reloaded when a scan completes — at once when the engine
  * relays it, or at the next scanner-run check otherwise — and on the full
@@ -27,6 +33,9 @@ import {
   DEFAULT_POLL_INTERVAL_MS,
   DEFAULT_REFRESH_INTERVAL_MS,
   DEFAULT_SCANNER_CHECK_MS,
+  SETUP_AGE_GRACE_MS,
+  maxSetupAgeMs,
+  parseMaxSetupAgeCandles,
   planRefresh,
 } from "@/lib/entry-zone";
 import { getMarketDataProvider } from "@/lib/market-data";
@@ -42,6 +51,8 @@ const scannerCheckMs = readNumber(
   DEFAULT_SCANNER_CHECK_MS,
   10_000,
 );
+
+const maxSetupAge = parseMaxSetupAgeCandles(process.env.ENTRY_MONITOR_MAX_SETUP_AGE_CANDLES);
 
 const controller = new AbortController();
 let stopping = false;
@@ -74,13 +85,23 @@ for (const signal of ["SIGINT", "SIGTERM"] as const) {
 async function main() {
   holdLockOrExit("entry-zone", log);
 
-  const monitor = createEntryZoneMonitor({ provider: getMarketDataProvider(), log });
+  if (maxSetupAge.warning) log(maxSetupAge.warning);
+  const monitor = createEntryZoneMonitor({
+    provider: getMarketDataProvider(),
+    maxSetupAgeCandles: maxSetupAge.value,
+    log,
+  });
 
   log(
     `Polling every ${pollMs / 1000}s; reloading setups when a scan completes ` +
       `(checked every ${Math.round(scannerCheckMs / 1000)}s, or at once under the engine) ` +
       `and every ${Math.round(refreshMs / 60_000)}m regardless. ` +
       "Public prices only; informational alerts only.",
+  );
+  log(
+    `Alerting only on setups a completed scan re-confirmed within ${maxSetupAge.value} ` +
+      `candle(s) + ${SETUP_AGE_GRACE_MS / 60_000}m: H1 ≤ ${minutes(maxSetupAgeMs("H1", maxSetupAge.value))}m, ` +
+      `H4 ≤ ${minutes(maxSetupAgeMs("H4", maxSetupAge.value))}m. Older setups are watched but their alerts are withheld.`,
   );
 
   let lastRefresh = -Infinity;
@@ -154,8 +175,13 @@ function describe(o: TickOutcome): string {
   if (!o.polled) return `Poll failed for ${o.symbols} markets; nothing evaluated.`;
   return (
     `${o.quotes}/${o.symbols} prices · ${o.observed} observed · ${o.skipped} skipped · ` +
-    `${o.armed} armed · ${o.alerts} alerts · ${o.failed} retrying · ${o.gone} closed`
+    `${o.armed} armed · ${o.alerts} alerts · ${o.withheld} withheld (stale) · ` +
+    `${o.failed} retrying · ${o.gone} closed`
   );
+}
+
+function minutes(ms: number | null): number {
+  return ms === null ? 0 : Math.round(ms / 60_000);
 }
 
 function readNumber(name: string, fallback: number, min: number): number {

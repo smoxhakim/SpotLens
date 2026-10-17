@@ -168,6 +168,14 @@ export interface EntryZoneFacts {
   observedPrice: number;
   /** Epoch ms when the price was received. */
   observedAt: number;
+  /**
+   * When the completed scanner pass that last re-confirmed this setup finished,
+   * epoch ms. Shown so the reader can see how old the analysis behind the alert
+   * is; an alert is only raised when it is recent enough (`setupFreshness`).
+   */
+  scanCompletedAt: number;
+  /** When the setup was first tracked, epoch ms. */
+  setupCreatedAt: number;
 }
 
 export interface SystemErrorFacts {

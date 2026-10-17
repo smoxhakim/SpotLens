@@ -70,7 +70,13 @@ function event(setup: Partial<SetupFacts> = {}): NotificationEvent {
     setup: facts(setup),
     summary: null,
     systemError: null,
-    entryZone: { observedPrice: 81400, observedAt: Date.UTC(2026, 9, 3, 12, 5) },
+    entryZone: {
+      observedPrice: 81400,
+      observedAt: Date.UTC(2026, 9, 3, 12, 5),
+      // The completed scan that last re-confirmed the setup, 63 minutes earlier.
+      scanCompletedAt: Date.UTC(2026, 9, 3, 11, 2),
+      setupCreatedAt: Date.UTC(2026, 9, 1, 8, 0),
+    },
   };
 }
 
@@ -183,6 +189,13 @@ describe("what it says", () => {
     expect(telegram).toContain("87/100");
     expect(telegram).toContain("1:3\\.3");
     expect(telegram).toContain("3 Oct, 12:05 UTC");
+  });
+
+  it("says how old the analysis behind the alert is, in both channels", () => {
+    expect(inApp.body).toContain("3 Oct, 11:02 UTC (1 h 3 min before this alert)");
+    expect(inApp.body).toContain("tracked since 1 Oct, 08:00 UTC");
+    expect(telegram).toContain("*Last scan*: 3 Oct, 11:02 UTC \\(1 h 3 min before this alert\\)");
+    expect(telegram).toContain("*Tracked since*: 1 Oct, 08:00 UTC \\(2 d 4 h\\)");
   });
 
   it("does not present an unmeasured reward as measured", () => {

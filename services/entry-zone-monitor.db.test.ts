@@ -52,6 +52,35 @@ describe.skipIf(!url)("entry-zone monitor on a real database", () => {
   let price = 110;
   let symbol = "";
   let pairId = "";
+  const runIds: string[] = [];
+
+  /**
+   * What a completed scanner pass leaves behind for a setup it re-confirmed: a
+   * finished run and an OK result pointing at the setup. Real rows, so the
+   * freshness query is exercised against Postgres itself.
+   */
+  async function verifyByScan(trackedSetupId: string, at: number) {
+    const run = await prisma.scannerRun.create({
+      data: {
+        timeframes: ["H1"],
+        triggeredBy: "SCHEDULE",
+        status: "COMPLETED",
+        startedAt: new Date(at - 60_000),
+        completedAt: new Date(at),
+      },
+    });
+    runIds.push(run.id);
+    await prisma.scannerResult.create({
+      data: {
+        scannerRunId: run.id,
+        tradingPairId: pairId,
+        timeframe: "H1",
+        status: "OK",
+        trackedSetupId,
+        createdAt: new Date(at),
+      },
+    });
+  }
 
   // Quotes this test's own market and nothing else. The monitor watches every
   // open setup in the database, so a provider that priced every symbol would
@@ -119,10 +148,12 @@ describe.skipIf(!url)("entry-zone monitor on a real database", () => {
     setupId = setup.id;
     symbol = pair.exchangeSymbol;
     pairId = pair.id;
+    await verifyByScan(setupId, clock - 5 * 60_000);
   });
 
   afterAll(async () => {
     if (!prisma) return;
+    await prisma.scannerRun.deleteMany({ where: { id: { in: runIds } } });
     await prisma.user.deleteMany({ where: { email: `${RUN}@example.test` } });
     await prisma.asset.deleteMany({ where: { symbol: { startsWith: "EZM" } } });
     await prisma.$disconnect();
@@ -245,6 +276,54 @@ describe.skipIf(!url)("entry-zone monitor on a real database", () => {
     } finally {
       await prisma.scannerRun.delete({ where: { id: run.id } });
     }
+  });
+
+  it("a stale setup inside its zone is withheld on a real database: nothing written", async () => {
+    const stale = await prisma.trackedSetup.create({
+      data: {
+        userId,
+        tradingPairId: pairId,
+        timeframe: "H1",
+        status: "SETUP_FORMING",
+        entryLow: "120.00000000",
+        entryHigh: "125.00000000",
+        stopLoss: "118.00000000",
+        riskReward: "2.10",
+        riskRewardIsSynthetic: false,
+        score: 75,
+        scoreGrade: "STRONG",
+        analysisStatus: "WAIT_FOR_CONFIRMATION",
+        snapshot: { entryReason: "fixture", statusReason: "fixture", trend: "BULLISH" },
+        originZoneLow: "120.00000000",
+        originZoneHigh: "125.00000000",
+        events: { create: { type: "CREATED", toStatus: "SETUP_FORMING", detail: "fixture" } },
+      },
+    });
+    // Re-confirmed by a completed scan two hours ago: past H1's 1h15m limit.
+    await verifyByScan(stale.id, clock - 2 * 60 * 60_000);
+
+    const monitor = createEntryZoneMonitor({ provider, now: () => clock });
+    await monitor.refresh();
+    price = 122;
+    const outcome = await monitor.tick();
+
+    expect(outcome.withheld).toBe(1);
+    expect(await prisma.notification.count({ where: { trackedSetupId: stale.id } })).toBe(0);
+    const watch = await prisma.setupEntryZoneWatch.findUnique({
+      where: { trackedSetupId: stale.id },
+    });
+    expect(watch?.reachedAt ?? null).toBeNull();
+
+    // A fresh scan re-confirms it; the next tick, price still inside, alerts once.
+    await verifyByScan(stale.id, clock - 60_000);
+    await monitor.refresh();
+    expect((await monitor.tick()).alerts).toBe(1);
+    expect((await monitor.tick()).alerts).toBe(0);
+    expect(
+      await prisma.notification.count({
+        where: { trackedSetupId: stale.id, channel: "IN_APP" },
+      }),
+    ).toBe(1);
   });
 
   it("the database itself refuses a second row for the same setup and channel", async () => {

@@ -16,11 +16,16 @@ import type { PriceObservation, WatchedSetup } from "./types";
  *
  * The timestamp is the price's receipt time, so the message says when price
  * was seen in the zone rather than when the row happened to be written.
+ *
+ * `scanCompletedAt` is the verification the alert was cleared on — passed in by
+ * the caller from its alert-time check, not taken from the possibly older
+ * in-memory copy on the setup.
  */
 export function entryZoneEvent(input: {
   setup: WatchedSetup;
   facts: SetupFacts;
   observation: PriceObservation;
+  scanCompletedAt: number;
 }): NotificationEvent {
   const { setup, facts, observation } = input;
 
@@ -35,6 +40,11 @@ export function entryZoneEvent(input: {
     setup: facts,
     summary: null,
     systemError: null,
-    entryZone: { observedPrice: observation.price, observedAt: observation.receivedAt },
+    entryZone: {
+      observedPrice: observation.price,
+      observedAt: observation.receivedAt,
+      scanCompletedAt: input.scanCompletedAt,
+      setupCreatedAt: setup.createdAt,
+    },
   };
 }

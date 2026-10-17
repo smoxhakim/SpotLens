@@ -415,6 +415,19 @@ replacement setup has a new id and can alert for itself.
 
 **When it stays silent.**
 
+- **The setup's analysis is stale.** An alert is raised only if a completed
+  scanner pass re-confirmed the setup recently: within
+  `ENTRY_MONITOR_MAX_SETUP_AGE_CANDLES` candles of its own timeframe, plus 15
+  minutes (default 1 — H1 within 1h15m, H4 within 4h15m). "Re-confirmed" means a
+  successful `ScannerResult` pointing at this setup, on a run that finished as
+  COMPLETED or PARTIAL; a run in progress or a failed one counts for nothing,
+  and a setup with no such record — one tracked only from the analysis page —
+  never alerts. The alert is _withheld_, not spent: nothing is written, and if a
+  later scan re-confirms the setup while price is still inside, that is when it
+  alerts. It is checked from the reload and again from the database just before
+  delivery, so a restart or reload cannot bypass it. Every alert says when the
+  scan behind it finished and how long the setup has been tracked. With the
+  default, this means alerts need a running scanner — `npm run spotlens`.
 - A setup first seen already inside its zone, with no evidence it was ever
   outside, says nothing until it leaves and comes back. A setup created by a
   closed candle outside its zone (`SETUP_FORMING`) counts as having been
@@ -436,11 +449,12 @@ Notifications → Entry zone reached). Telegram — the main bot — only for se
 whose verdict at creation was `POTENTIAL_SETUP`, or `WAIT_FOR_CONFIRMATION`
 with a measured reward; high-risk setups and synthetic rewards stay in-app.
 
-| Variable                         | Default  | Floor   |
-| -------------------------------- | -------- | ------- |
-| `ENTRY_MONITOR_POLL_MS`          | `10000`  | `2000`  |
-| `ENTRY_MONITOR_REFRESH_MS`       | `600000` | `60000` |
-| `ENTRY_MONITOR_SCANNER_CHECK_MS` | `60000`  | `10000` |
+| Variable                              | Default  | Floor        |
+| ------------------------------------- | -------- | ------------ |
+| `ENTRY_MONITOR_POLL_MS`               | `10000`  | `2000`       |
+| `ENTRY_MONITOR_REFRESH_MS`            | `600000` | `60000`      |
+| `ENTRY_MONITOR_SCANNER_CHECK_MS`      | `60000`  | `10000`      |
+| `ENTRY_MONITOR_MAX_SETUP_AGE_CANDLES` | `1`      | ceiling `24` |
 
 **New setups are watched promptly.** Under `npm run spotlens` the scanner tells
 the monitor the moment a pass completes, and it reloads at once. Run on its own,

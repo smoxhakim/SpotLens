@@ -32,6 +32,17 @@ open items are collected here.
       image has still never been built.
 - [ ] Optional: tighten CSP off `unsafe-inline`/`unsafe-eval` via nonces.
 
+## Phase 01 — setup freshness guard (implemented, uncommitted, awaiting review)
+
+The monitor alerted on setups from a scan two weeks old. It now alerts only on
+setups a completed scan re-confirmed within one candle of their timeframe
+(+15 min), configurable via `ENTRY_MONITOR_MAX_SETUP_AGE_CANDLES`; everything
+else is withheld and logged. No migration.
+
+- [ ] Review; decide the default (1 = strictest; 2 tolerates one missed pass).
+- [ ] Setups tracked only from the analysis page (no scanner provenance) never
+      alert — by design (fail closed); revisit only if that is unwanted.
+
 ## Continuous engine (implemented on `feat/continuous-spotlens-engine`, awaiting review)
 
 `npm run spotlens` runs the scanner and the entry-zone monitor together, so no

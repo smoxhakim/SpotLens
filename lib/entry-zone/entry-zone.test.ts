@@ -33,6 +33,8 @@ function setup(overrides: Partial<WatchedSetup> = {}): WatchedSetup {
     entryLow: 100,
     entryHigh: 105,
     createdOutside: false,
+    createdAt: NOW - 3 * 60 * 60_000,
+    verifiedAt: NOW - 10 * 60_000,
     ...overrides,
   };
 }
@@ -269,6 +271,7 @@ describe("entryZoneEvent", () => {
       setup: setup({ userId: "owner-7" }),
       facts,
       observation: quote(101.5),
+      scanCompletedAt: NOW - 10 * 60_000,
     });
 
     expect(event).toMatchObject({
@@ -278,23 +281,38 @@ describe("entryZoneEvent", () => {
       timeframe: "H1",
       timestamp: NOW,
       dedupeKey: "entry-zone:setup-btc-h1",
-      entryZone: { observedPrice: 101.5, observedAt: NOW },
+      entryZone: {
+        observedPrice: 101.5,
+        observedAt: NOW,
+        scanCompletedAt: NOW - 10 * 60_000,
+        setupCreatedAt: NOW - 3 * 60 * 60_000,
+      },
     });
     // The levels are the stored facts, passed through untouched.
     expect(event.setup).toBe(facts);
   });
 
   it("the key does not depend on price or time, so a repeat cannot be new", () => {
-    const a = entryZoneEvent({ setup: setup(), facts, observation: quote(101) });
+    const a = entryZoneEvent({
+      setup: setup(),
+      facts,
+      observation: quote(101),
+      scanCompletedAt: NOW,
+    });
     const b = entryZoneEvent({
       setup: setup(),
       facts,
       observation: quote(104, { receivedAt: NOW + 3_600_000 }),
+      scanCompletedAt: NOW + 3_000_000,
     });
     expect(a.dedupeKey).toBe(b.dedupeKey);
     expect(
-      entryZoneEvent({ setup: setup({ setupId: "replacement" }), facts, observation: quote(101) })
-        .dedupeKey,
+      entryZoneEvent({
+        setup: setup({ setupId: "replacement" }),
+        facts,
+        observation: quote(101),
+        scanCompletedAt: NOW,
+      }).dedupeKey,
     ).not.toBe(a.dedupeKey);
   });
 });

@@ -1,5 +1,7 @@
 import { formatPrice } from "@/lib/format";
 
+import { formatAge, utcClock } from "./time";
+
 import type { NotificationEvent, NotificationEventType } from "./types";
 
 /**
@@ -189,7 +191,9 @@ export function renderInApp(event: NotificationEvent): { title: string; body: st
         body:
           `Price ${formatPrice(seen.observedPrice)} is inside the entry zone ` +
           `${formatPrice(setup.entryLow)} – ${formatPrice(setup.entryHigh)}. ` +
-          `Last scan: ${LIFECYCLE_SHORT[setup.lifecycleStatus] ?? setup.lifecycleStatus}. ` +
+          `Last scan: ${LIFECYCLE_SHORT[setup.lifecycleStatus] ?? setup.lifecycleStatus}, ` +
+          `${utcClock(seen.scanCompletedAt)} (${formatAge(seen.observedAt - seen.scanCompletedAt)} before this alert); ` +
+          `tracked since ${utcClock(seen.setupCreatedAt)}. ` +
           "This is not confirmation — review the setup before deciding.",
       };
     }

@@ -159,7 +159,17 @@ WAITING_CONFIRMATION` is price arriving somewhere, not structure changing,
   (verified live), so it is not used; older than 15s is skipped. It changes no
   lifecycle state, triggers no confirmation, creates no decision. Telegram (main
   bot) only for `analysisStatus` POTENTIAL_SETUP, or WAIT_FOR_CONFIRMATION with
-  a measured reward; everything else is in-app.
+  a measured reward; everything else is in-app. **No alert on stale analysis**
+  (`lib/entry-zone/freshness.ts`): a setup alerts only if a completed scan
+  re-confirmed it within `ENTRY_MONITOR_MAX_SETUP_AGE_CANDLES` (default 1) ×
+  its timeframe + 15 min. Provenance is `ScannerResult` (status OK,
+  `trackedSetupId` = the setup — the scanner writes the existing id on unchanged
+  passes) on a `ScannerRun` with `completedAt` and status COMPLETED/PARTIAL; the
+  time is the run's `completedAt`, never the setup's `createdAt`. Missing,
+  future or untrustworthy provenance fails closed. Checked from the reload and
+  re-checked from the database before delivery; a withheld alert writes nothing
+  and does not mark the setup reached. A monitor run for two weeks without a
+  scan once alerted on two-week-old setups — this is why.
 - **`npm run spotlens` supervises; it decides nothing.** `scripts/spotlens.ts`
   runs `scripts/scanner.ts --catch-up` and `scripts/entry-zone-monitor.ts` as
   child processes (`node --import tsx`, detached, one SIGINT each on Ctrl-C),
