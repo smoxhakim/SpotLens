@@ -55,6 +55,8 @@ const store = {
   prefs: new Map<string, Record<string, boolean>>(),
   chats: new Map<string, string>(),
   failNotificationWrites: false,
+  /** Completed scanner runs, newest last. */
+  scannerRuns: [] as string[],
 };
 
 function uniqueViolation() {
@@ -62,6 +64,12 @@ function uniqueViolation() {
 }
 
 const db = {
+  scannerRun: {
+    findFirst: vi.fn(async () => {
+      const id = store.scannerRuns.at(-1);
+      return id ? { id } : null;
+    }),
+  },
   trackedSetup: {
     findMany: vi.fn(async () =>
       store.setups
@@ -283,6 +291,7 @@ beforeEach(() => {
   store.prefs = new Map();
   store.chats = new Map();
   store.failNotificationWrites = false;
+  store.scannerRuns = [];
   clock = Date.UTC(2026, 9, 3, 12);
   vi.clearAllMocks();
   sendTelegramMessage.mockResolvedValue({ ok: true, attempts: 1, retryable: false });
@@ -687,6 +696,115 @@ describe("failure", () => {
 
     store.failNotificationWrites = false;
     expect((await monitor.tick()).alerts).toBe(1);
+    expect(rowsFor(setup.id)).toHaveLength(1);
+  });
+});
+
+describe("scanner handoff", () => {
+  it("a completed scanner run newer than the last reload is reported; the same run is not", async () => {
+    store.scannerRuns = ["run-1"];
+    const monitor = monitorFor(fakeProvider());
+    expect((await monitor.refresh()).scannerRunId).toBe("run-1");
+
+    expect(await monitor.newerScannerRun()).toBeNull();
+    store.scannerRuns.push("run-2");
+    expect(await monitor.newerScannerRun()).toBe("run-2");
+
+    await monitor.refresh();
+    expect(await monitor.newerScannerRun()).toBeNull();
+  });
+
+  it("a new scan's setup is watched as soon as the monitor reloads, not at the periodic reload", async () => {
+    addSetup({ symbol: "BTCUSDT" });
+    store.scannerRuns = ["run-1"];
+    const feed = fakeProvider();
+    const monitor = monitorFor(feed);
+    await monitor.refresh();
+    expect(monitor.watching()).toBe(1);
+
+    // The scanner completes a pass that creates a setup on another market.
+    const eth = addSetup({ symbol: "ETHUSDT", entryLow: 2000, entryHigh: 2010 });
+    store.scannerRuns.push("run-2");
+
+    expect(await monitor.newerScannerRun()).toBe("run-2");
+    await monitor.refresh();
+    expect(monitor.watching()).toBe(2);
+
+    feed.set("BTCUSDT", 110);
+    feed.set("ETHUSDT", 2050);
+    await monitor.tick();
+    feed.set("ETHUSDT", 2005);
+    expect((await monitor.tick()).alerts).toBe(1);
+    expect(rowsFor(eth.id)).toHaveLength(1);
+    expect(feed.requests.at(-1)).toEqual(["BTCUSDT", "ETHUSDT"]);
+  });
+
+  it("a reload after a new scan does not re-alert a setup that already alerted", async () => {
+    const setup = addSetup();
+    store.scannerRuns = ["run-1"];
+    const feed = fakeProvider();
+    const monitor = monitorFor(feed);
+    await monitor.refresh();
+    feed.set("BTCUSDT", 102);
+    expect((await monitor.tick()).alerts).toBe(1);
+
+    for (const run of ["run-2", "run-3"]) {
+      store.scannerRuns.push(run);
+      await monitor.refresh();
+      expect((await monitor.tick()).alerts).toBe(0);
+    }
+    expect(rowsFor(setup.id)).toHaveLength(1);
+    expect(store.watches.size).toBe(1);
+  });
+
+  it("a setup the scan replaced stops being watched; its replacement is watched and may alert", async () => {
+    const old = addSetup({ entryLow: 100, entryHigh: 105 });
+    store.scannerRuns = ["run-1"];
+    const feed = fakeProvider();
+    const monitor = monitorFor(feed);
+    await monitor.refresh();
+
+    // The pass re-anchors: old setup invalidated, a new one on a nearby level.
+    old.status = "INVALIDATED";
+    const replacement = addSetup({ entryLow: 95, entryHigh: 99 });
+    store.scannerRuns.push("run-2");
+    await monitor.refresh();
+    expect(monitor.watching()).toBe(1);
+
+    feed.set("BTCUSDT", 102); // inside the OLD zone only
+    expect((await monitor.tick()).alerts).toBe(0);
+    feed.set("BTCUSDT", 97); // inside the replacement's zone
+    expect((await monitor.tick()).alerts).toBe(1);
+
+    expect(rowsFor(old.id)).toHaveLength(0);
+    expect(rowsFor(replacement.id)).toHaveLength(1);
+    // The old setup is not deleted — only no longer watched.
+    expect(store.setups.find((s) => s.id === old.id)?.status).toBe("INVALIDATED");
+  });
+
+  it("a failed scanner-run check is not mistaken for a new run", async () => {
+    store.scannerRuns = ["run-1"];
+    const monitor = monitorFor(fakeProvider());
+    await monitor.refresh();
+    db.scannerRun.findFirst.mockRejectedValueOnce(new Error("connection closed"));
+    expect(await monitor.newerScannerRun()).toBeNull();
+  });
+
+  it("a restarted monitor (new process) reloads, sees the latest run, and stays idempotent", async () => {
+    const setup = addSetup();
+    store.scannerRuns = ["run-1"];
+    const feed = fakeProvider();
+    const first = monitorFor(feed);
+    await first.refresh();
+    feed.set("BTCUSDT", 102);
+    await first.tick();
+
+    store.scannerRuns.push("run-2");
+    const second = monitorFor(feed); // the engine restarted the monitor
+    expect((await second.refresh()).scannerRunId).toBe("run-2");
+    expect(await second.newerScannerRun()).toBeNull();
+    await second.tick();
+
     expect(rowsFor(setup.id)).toHaveLength(1);
   });
 });

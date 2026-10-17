@@ -46,6 +46,8 @@ export interface RefreshOutcome {
   ok: boolean;
   setups: number;
   symbols: number;
+  /** The latest completed scanner run this reload reflects, if any. */
+  scannerRunId: string | null;
 }
 
 export interface TickOutcome {
@@ -66,6 +68,12 @@ export interface TickOutcome {
 export interface EntryZoneMonitor {
   refresh(): Promise<RefreshOutcome>;
   tick(): Promise<TickOutcome>;
+  /**
+   * The id of a completed scanner run newer than the one the last reload
+   * reflects, or null. One single-row read; it changes nothing — the caller
+   * decides to reload.
+   */
+  newerScannerRun(): Promise<string | null>;
   /** Setups currently watched, for the process's own logging. */
   watching(): number;
 }
@@ -99,6 +107,10 @@ export function createEntryZoneMonitor(deps: MonitorDependencies): EntryZoneMoni
   // otherwise fail the shared request for every other market on every tick.
   // Cleared on refresh, so a transient refusal is retried.
   let unknownSymbols = new Set<string>();
+  // The latest completed scanner run as of the last successful reload. A run
+  // newer than this means setups may have been created, moved or invalidated
+  // since, and is the cue to reload rather than wait for the periodic one.
+  let scannerRunCursor: string | null = null;
 
   function forget(setupId: string) {
     setups = setups.filter((s) => s.setupId !== setupId);
@@ -107,6 +119,10 @@ export function createEntryZoneMonitor(deps: MonitorDependencies): EntryZoneMoni
 
   async function refresh(): Promise<RefreshOutcome> {
     try {
+      // Read the cursor before the setups. A run that completes in between is
+      // then newer than the cursor and costs one extra reload; the other order
+      // could record a run whose setups this reload never saw.
+      const latestRun = await latestCompletedScannerRun();
       const rows = await loadWatchedSetups();
       const next = new Map<string, WatchMemory>();
 
@@ -120,14 +136,40 @@ export function createEntryZoneMonitor(deps: MonitorDependencies): EntryZoneMoni
       setups = rows.map((r) => r.setup);
       memory = next;
       unknownSymbols = new Set();
+      scannerRunCursor = latestRun;
 
-      return { ok: true, setups: setups.length, symbols: groupBySymbol(setups).size };
+      return {
+        ok: true,
+        setups: setups.length,
+        symbols: groupBySymbol(setups).size,
+        scannerRunId: scannerRunCursor,
+      };
     } catch (err) {
       // Keep watching what was already loaded. A reload that fails is a reason
       // to try again later, not to stop watching levels that were fine a
       // minute ago.
       warnOnce("entry-zone:refresh", "[entry-zone] could not reload open setups.", err);
-      return { ok: false, setups: setups.length, symbols: groupBySymbol(setups).size };
+      return {
+        ok: false,
+        setups: setups.length,
+        symbols: groupBySymbol(setups).size,
+        scannerRunId: scannerRunCursor,
+      };
+    }
+  }
+
+  async function newerScannerRun(): Promise<string | null> {
+    try {
+      const latest = await latestCompletedScannerRun();
+      return latest !== null && latest !== scannerRunCursor ? latest : null;
+    } catch (err) {
+      // A failed check is not a new run. The periodic reload still happens.
+      warnOnce(
+        "entry-zone:scanner-check",
+        "[entry-zone] could not check for a new scanner run.",
+        err,
+      );
+      return null;
     }
   }
 
@@ -213,10 +255,27 @@ export function createEntryZoneMonitor(deps: MonitorDependencies): EntryZoneMoni
     return outcome;
   }
 
-  return { refresh, tick, watching: () => setups.length };
+  return { refresh, tick, newerScannerRun, watching: () => setups.length };
 }
 
 // --- reads -----------------------------------------------------------------
+
+/**
+ * The most recent scanner run that has finished, by id.
+ *
+ * Completed or partial — anything with a `completedAt`. A run still in progress
+ * is not a reason to reload: its setups are still being written, and its
+ * completion will be.
+ */
+export async function latestCompletedScannerRun(): Promise<string | null> {
+  if (!isDatabaseConfigured) return null;
+  const run = await prisma.scannerRun.findFirst({
+    where: { completedAt: { not: null } },
+    orderBy: { startedAt: "desc" },
+    select: { id: true },
+  });
+  return run?.id ?? null;
+}
 
 /**
  * Every open tracked setup, for every owner, with what is known about it.

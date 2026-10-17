@@ -51,6 +51,7 @@ describe.skipIf(!url)("entry-zone monitor on a real database", () => {
   let clock = Date.UTC(2026, 9, 3, 12);
   let price = 110;
   let symbol = "";
+  let pairId = "";
 
   // Quotes this test's own market and nothing else. The monitor watches every
   // open setup in the database, so a provider that priced every symbol would
@@ -117,6 +118,7 @@ describe.skipIf(!url)("entry-zone monitor on a real database", () => {
     });
     setupId = setup.id;
     symbol = pair.exchangeSymbol;
+    pairId = pair.id;
   });
 
   afterAll(async () => {
@@ -191,6 +193,58 @@ describe.skipIf(!url)("entry-zone monitor on a real database", () => {
     expect(
       await prisma.setupEntryZoneWatch.count({ where: { trackedSetupId: { not: setupId } } }),
     ).toBe(watchesBefore);
+  });
+
+  it("a completed scanner run is noticed, and the setup it created is watched on the reload", async () => {
+    const monitor = createEntryZoneMonitor({ provider, now: () => clock });
+    await monitor.refresh();
+    const before = monitor.watching();
+    expect(await monitor.newerScannerRun()).toBeNull();
+
+    // What a scanner pass leaves behind: a new open setup, then a completed run.
+    const created = await prisma.trackedSetup.create({
+      data: {
+        userId,
+        tradingPairId: pairId,
+        timeframe: "H4",
+        status: "SETUP_FORMING",
+        entryLow: "90.00000000",
+        entryHigh: "95.00000000",
+        stopLoss: "88.00000000",
+        riskReward: "2.10",
+        riskRewardIsSynthetic: false,
+        score: 75,
+        scoreGrade: "STRONG",
+        analysisStatus: "WAIT_FOR_CONFIRMATION",
+        snapshot: { entryReason: "fixture", statusReason: "fixture", trend: "BULLISH" },
+        originZoneLow: "90.00000000",
+        originZoneHigh: "95.00000000",
+        events: { create: { type: "CREATED", toStatus: "SETUP_FORMING", detail: "fixture" } },
+      },
+    });
+    const run = await prisma.scannerRun.create({
+      data: {
+        timeframes: ["H4"],
+        triggeredBy: "SCHEDULE",
+        status: "COMPLETED",
+        startedAt: new Date(Date.now() + 60_000),
+        completedAt: new Date(Date.now() + 61_000),
+      },
+    });
+
+    try {
+      expect(await monitor.newerScannerRun()).toBe(run.id);
+      expect((await monitor.refresh()).scannerRunId).toBe(run.id);
+      expect(monitor.watching()).toBe(before + 1);
+      expect(await monitor.newerScannerRun()).toBeNull();
+
+      // Nothing about the reload wrote anything for the new setup.
+      expect(
+        await prisma.setupEntryZoneWatch.count({ where: { trackedSetupId: created.id } }),
+      ).toBe(0);
+    } finally {
+      await prisma.scannerRun.delete({ where: { id: run.id } });
+    }
   });
 
   it("the database itself refuses a second row for the same setup and channel", async () => {

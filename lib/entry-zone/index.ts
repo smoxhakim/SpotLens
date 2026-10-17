@@ -24,6 +24,8 @@ export {
 
 export { entryZoneEvent } from "./event";
 
+export { DEFAULT_SCANNER_CHECK_MS, planRefresh, type RefreshPlan } from "./refresh";
+
 export type {
   PriceObservation,
   SkipReason,

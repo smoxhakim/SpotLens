@@ -6,8 +6,14 @@
  * moving parts than a single `setTimeout` that wakes when a candle closes, and
  * none of them would make the result more correct.
  *
+ *   npm run spotlens       — the usual way: run with the entry-zone monitor, under the engine
  *   npm run scanner        — schedule: wake after each candle close
  *   npm run scanner:once   — one pass over the universe, then exit
+ *
+ * `--catch-up` (the engine passes it) adds one pass on startup when no pass has
+ * started since the most recent scan window — so a machine that was off does not
+ * wait for the next close to refresh — and then follows the schedule unchanged.
+ * One scanner per machine: a second one exits rather than racing the first.
  *
  * Both load `.env` through Node's own `--env-file`, so the scanner reads the
  * same configuration the app does without a second copy of it anywhere.
@@ -15,6 +21,7 @@
  * Stop it with Ctrl-C; an in-flight pass is allowed to unwind first.
  */
 import { prisma } from "@/lib/db/prisma";
+import { holdLockOrExit, isCatchUpDue, scannerRunCompleted } from "@/lib/engine";
 import { TIMEFRAME_LABELS, type Timeframe } from "@/lib/market-data/provider";
 import {
   DEFAULT_CLOSE_DELAY_MS,
@@ -35,6 +42,7 @@ import {
 import { timeframeSchema } from "@/lib/market-data/schema";
 
 const once = process.argv.includes("--once");
+const catchUp = process.argv.includes("--catch-up");
 
 const timeframes = readTimeframes();
 const concurrency = readNumber("SCANNER_MAX_CONCURRENCY", DEFAULT_MAX_CONCURRENCY);
@@ -131,6 +139,12 @@ async function scan(triggeredBy: "SCHEDULE" | "MANUAL", due: Timeframe[], userId
   } else {
     log("   nothing met the shortlist bar this pass. That is a normal outcome.");
   }
+
+  // Under the engine, tell it the pass is complete: every setup this pass
+  // created, moved or invalidated is written by now, and the entry-zone monitor
+  // reloads on this instead of waiting for its next check. Run on its own, the
+  // scanner has no IPC channel and this does nothing.
+  process.send?.(scannerRunCompleted(summary.runId));
 }
 
 /**
@@ -218,7 +232,52 @@ async function maybeSendDailySummary(userId: string) {
   }
 }
 
+/**
+ * One pass on startup if the schedule has missed a window.
+ *
+ * Same settle delay, same pass, same notifications as any scheduled one; the
+ * only difference is that it does not wait for the next close. A failure is
+ * logged and the schedule carries on — a catch-up pass is a convenience.
+ */
+async function maybeCatchUp(userId: string) {
+  try {
+    const last = await prisma.scannerRun.findFirst({
+      where: { completedAt: { not: null } },
+      orderBy: { startedAt: "desc" },
+      select: { startedAt: true },
+    });
+
+    const due = isCatchUpDue({
+      lastCompletedRunStartedAt: last?.startedAt.getTime() ?? null,
+      timeframes,
+      now: Date.now(),
+      delayMs: closeDelayMs,
+    });
+
+    if (!due) {
+      log("Up to date with the schedule; no catch-up pass needed.");
+      return;
+    }
+
+    log(
+      `The last completed pass started ${last ? last.startedAt.toISOString() : "never"}, ` +
+        "before the most recent scan window. Catching up now.",
+    );
+
+    const settle = settlementDelayMs(timeframes, Date.now(), closeDelayMs);
+    if (settle > 0) await sleep(settle, controller.signal);
+    if (controller.signal.aborted) return;
+
+    await scan("SCHEDULE", timeframes, userId);
+    await maybeSendDailySummary(userId);
+  } catch (err) {
+    log(`Catch-up pass failed: ${err instanceof Error ? err.message : "unknown error"}`);
+  }
+}
+
 async function main() {
+  holdLockOrExit("scanner", log);
+
   const owner = await resolveScannerUser(process.env.SCANNER_USER_EMAIL);
 
   // Refused before anything is scanned, because the owner decides who every
@@ -261,6 +320,8 @@ async function main() {
     await maybeSendDailySummary(userId);
     return;
   }
+
+  if (catchUp) await maybeCatchUp(userId);
 
   log(`Scheduling ${closeDelayMs / 1000}s after each candle close. Ctrl-C to stop.`);
 

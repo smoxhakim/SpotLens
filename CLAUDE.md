@@ -160,6 +160,20 @@ WAITING_CONFIRMATION` is price arriving somewhere, not structure changing,
   lifecycle state, triggers no confirmation, creates no decision. Telegram (main
   bot) only for `analysisStatus` POTENTIAL_SETUP, or WAIT_FOR_CONFIRMATION with
   a measured reward; everything else is in-app.
+- **`npm run spotlens` supervises; it decides nothing.** `scripts/spotlens.ts`
+  runs `scripts/scanner.ts --catch-up` and `scripts/entry-zone-monitor.ts` as
+  child processes (`node --import tsx`, detached, one SIGINT each on Ctrl-C),
+  labels their output, and relays exactly one message: the scanner's
+  `scanner-run-completed` after a pass, which makes the monitor reload open
+  setups at once. The rules live in `lib/engine` (pure supervisor with injected
+  spawn/timers; restarts bounded at 3 per 15 minutes, never for
+  `EXIT_ALREADY_RUNNING`). One child failing never stops the other. Each role —
+  engine, scanner, entry-zone — holds a PID lock under `.spotlens/locks/`, so a
+  second scanner cannot race the first into duplicate setups; a dead holder's
+  lock is taken over. `--catch-up` runs one pass on startup only when no pass
+  has started since the latest close + settle delay, then the schedule is
+  unchanged. The monitor also checks the latest completed `ScannerRun` every
+  60s when run alone. No schema change; the engine writes nothing.
 - **`TELEGRAM_BOT_TOKEN` is read in exactly one file**
   (`lib/notifications/telegram-provider.ts`) and never returned, logged, or
   stored. Errors are stripped of it before they reach a database row.
@@ -284,6 +298,7 @@ lib/
   risk/         position sizing, caps, costs (pure; one source of the formula)
   regime/       market environment classifier (pure; outside the engine)
   entry-zone/   live price vs stored entry zone: arming, once-per-setup (pure)
+  engine/       npm run spotlens: supervisor, run locks, catch-up rule
   coach/        educational reading of a recorded analysis (pure; owns no number)
 scripts/        the local scanner process (npm run scanner)
   market-data/  provider abstraction + Binance
@@ -298,6 +313,7 @@ npm run test                 # vitest — scope it: npx vitest run lib/analysis
 npm run e2e                  # playwright, serves on 3100 (3000 is often taken)
 npm run scanner              # local scanner: wakes after each candle close
 npm run scanner:once         # one pass over the universe, then exit
+npm run spotlens             # the engine: scanner + entry-zone monitor, supervised
 npm run monitor              # live entry-zone monitor (public prices, 10s poll)
 npm run lint && npm run typecheck
 npx prisma migrate deploy    # apply migrations

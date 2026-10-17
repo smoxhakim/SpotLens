@@ -25,6 +25,8 @@ blob-report/
 .env*.local
 
 # misc
+# run locks for the local engine (npm run spotlens)
+.spotlens/
 .DS_Store
 *.pem
 *.tsbuildinfo

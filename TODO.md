@@ -32,6 +32,18 @@ open items are collected here.
       image has still never been built.
 - [ ] Optional: tighten CSP off `unsafe-inline`/`unsafe-eval` via nonces.
 
+## Continuous engine (implemented on `feat/continuous-spotlens-engine`, awaiting review)
+
+`npm run spotlens` runs the scanner and the entry-zone monitor together, so no
+pass has to be started by hand. See README → "Running SpotLens".
+
+- [x] Supervisor with bounded restarts, clean shutdown, labelled output.
+- [x] Scanner → monitor relay: a completed pass makes the monitor reload at once.
+- [x] Monitor checks for a newer completed `ScannerRun` when run on its own.
+- [x] Startup catch-up pass when a scan window was missed.
+- [x] One engine, scanner and monitor per machine (PID locks).
+- [ ] Controlled verification against Neon — awaiting approval.
+
 ## Entry-zone monitor (implemented on `feat/entry-zone-monitor`, awaiting review)
 
 Live `ENTRY_ZONE_REACHED`: once per setup, when the public price moves from
