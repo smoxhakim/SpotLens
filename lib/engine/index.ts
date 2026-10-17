@@ -29,6 +29,7 @@ export {
   acquireLock,
   defaultLockDir,
   holdLockOrExit,
+  liveLockHolder,
   processIsAlive,
   type LockResult,
   type LockRole,
@@ -42,3 +43,14 @@ export {
 } from "./messages";
 
 export { isCatchUpDue, latestDueScanWindow } from "./catch-up";
+
+export { SPAWN_FAILED, adaptChildProcess, type ChildProcessLike } from "./child";
+
+export {
+  SHUTDOWN_SIGNALS,
+  ignoreOutputErrors,
+  installEngineShutdown,
+  stopWhenEngineGone,
+  type ProcessLike,
+  type ShutdownSignal,
+} from "./shutdown";

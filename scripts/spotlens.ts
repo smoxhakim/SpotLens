@@ -15,8 +15,11 @@
  * The engine itself analyses nothing, reads no price and writes nothing. It
  * starts the two scripts, labels their output, relays that one message,
  * restarts a crashed child a bounded number of times (never endlessly), and on
- * Ctrl-C asks both to finish what they are doing and stop. One engine per
- * machine; each child also refuses to run twice.
+ * Ctrl-C, SIGTERM or a closed terminal (SIGHUP) asks both to finish what they
+ * are doing and stop. However the engine ends, it leaves no child behind: its
+ * own exit kills any survivor, and each child stops by itself when the engine's
+ * IPC channel closes. One engine per machine; each child also refuses to run
+ * twice, and a role held by another process is waited for, not abandoned.
  *
  * Public market data only. Nothing in SpotLens holds exchange credentials or
  * can place an order — the user reviews, decides, and trades by hand.
@@ -24,10 +27,11 @@
 import { spawn } from "node:child_process";
 
 import {
-  createLineSplitter,
+  adaptChildProcess,
   createSupervisor,
   holdLockOrExit,
-  isForceInterrupt,
+  installEngineShutdown,
+  liveLockHolder,
   type ChildHandle,
   type ChildSpec,
 } from "@/lib/engine";
@@ -52,40 +56,18 @@ function log(message: string) {
  * into its own process group so the terminal's Ctrl-C reaches the engine only,
  * and the engine sends each child exactly one SIGINT — a second one is the
  * child's "force quit". The environment, `.env` included, is inherited.
+ *
+ * Errors from the process — failing to spawn, to be signalled, to receive a
+ * message — are handled in `adaptChildProcess`, never left to crash the engine.
  */
 function spawnChild(spec: ChildSpec): ChildHandle {
   const child = spawn(process.execPath, ["--import", "tsx", spec.script, ...spec.args], {
     cwd: process.cwd(),
-    env: { ...process.env, SPOTLENS_ENGINE: "1" },
+    env: process.env,
     stdio: ["ignore", "pipe", "pipe", "ipc"],
     detached: true,
   });
-
-  const lineListeners: ((line: string, stream: "stdout" | "stderr") => void)[] = [];
-  const out = createLineSplitter((line) => lineListeners.forEach((l) => l(line, "stdout")));
-  const err = createLineSplitter((line) => lineListeners.forEach((l) => l(line, "stderr")));
-  child.stdout?.setEncoding("utf8").on("data", (chunk: string) => out.push(chunk));
-  child.stderr?.setEncoding("utf8").on("data", (chunk: string) => err.push(chunk));
-
-  return {
-    pid: child.pid,
-    onLine: (listener) => lineListeners.push(listener),
-    onMessage: (listener) => child.on("message", listener),
-    onExit: (listener) =>
-      child.on("exit", (code, signal) => {
-        out.flush();
-        err.flush();
-        listener(code, signal);
-      }),
-    send: (message) => (child.connected ? child.send(message as object) : false),
-    kill: (signal) => {
-      try {
-        child.kill(signal);
-      } catch {
-        // Already gone.
-      }
-    },
-  };
+  return adaptChildProcess(child, (message) => log(`${spec.name}: ${message}`));
 }
 
 async function main() {
@@ -97,24 +79,10 @@ async function main() {
     now: Date.now,
     setTimer: (fn, ms) => setTimeout(fn, ms),
     clearTimer: (handle) => clearTimeout(handle as NodeJS.Timeout),
+    lockHolder: (name) => liveLockHolder(name),
   });
 
-  let firstInterruptAt: number | null = null;
-  for (const signal of ["SIGINT", "SIGTERM"] as const) {
-    process.on(signal, () => {
-      const now = Date.now();
-      if (firstInterruptAt === null) {
-        firstInterruptAt = now;
-        void supervisor.stop(signal === "SIGINT" ? "Ctrl-C" : "SIGTERM");
-        return;
-      }
-      // The same keypress relayed a second time by a wrapper is not a request
-      // to force anything; see FORCE_INTERRUPT_AFTER_MS.
-      if (!isForceInterrupt(firstInterruptAt, now)) return;
-      log("Second interrupt: killing both children now.");
-      supervisor.forceStop();
-    });
-  }
+  installEngineShutdown({ proc: process, supervisor, log, now: Date.now });
 
   log(
     "SpotLens engine — scanner + entry-zone monitor. Analysis and alerts only: " +

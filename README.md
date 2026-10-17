@@ -323,7 +323,13 @@ is not confirmation and not a recommendation.
 
 Output is labelled by process: `[engine …]`, `[scanner …]`, `[entry-zone …]`.
 Ctrl-C asks both to finish what they are doing and stop (a scan in flight
-unwinds first); a second Ctrl-C kills them.
+unwinds first); pressing it again a moment later kills them. Closing the
+terminal window (SIGHUP) or `kill` (SIGTERM) takes the same graceful path.
+
+**Nothing is left running behind the engine.** However it ends — Ctrl-C, a
+closed terminal, a crash, even `kill -9` — the scanner and the monitor stop with
+it: the engine kills any survivor on its way out, and each child stops by
+itself when it notices the engine is gone.
 
 **If one process fails**, the other keeps running: a crashed scanner leaves the
 monitor watching the setups already in the database, and a crashed monitor
@@ -334,8 +340,11 @@ time, and then stops trying rather than restarting forever.
 **One of each per machine.** The engine, the scanner and the monitor each hold a
 lock file under `.spotlens/locks/`; starting a second copy — `npm run monitor`
 while the engine runs, say — exits with a message naming the running one. A lock
-left by a process that died is taken over automatically. The standalone commands
-below still work when the engine is not running.
+left by a process that died is taken over automatically. If the engine finds a
+role already held — a standalone `npm run monitor` you left running — it does
+not give up on it: it says so once, looks again every 30 seconds, and starts its
+own as soon as the other one stops. The standalone commands below still work
+when the engine is not running.
 
 ## The scanner
 

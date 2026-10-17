@@ -28,7 +28,7 @@
  * anywhere in SpotLens — can place an order.
  */
 import { prisma } from "@/lib/db/prisma";
-import { holdLockOrExit, isScannerRunCompleted } from "@/lib/engine";
+import { holdLockOrExit, isScannerRunCompleted, stopWhenEngineGone } from "@/lib/engine";
 import {
   DEFAULT_POLL_INTERVAL_MS,
   DEFAULT_REFRESH_INTERVAL_MS,
@@ -81,6 +81,16 @@ for (const signal of ["SIGINT", "SIGTERM"] as const) {
     log("Stopping after the current poll. Press Ctrl-C again to force.");
   });
 }
+
+// Under the engine: if the engine goes away — however it went — stop as if told
+// to, so no monitor is left alerting unsupervised and holding the role a new
+// engine is waiting for.
+stopWhenEngineGone(process, () => {
+  if (stopping) return;
+  stopping = true;
+  controller.abort();
+  log("The engine is gone; stopping after the current poll.");
+});
 
 async function main() {
   holdLockOrExit("entry-zone", log);

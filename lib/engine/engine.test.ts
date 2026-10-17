@@ -117,13 +117,20 @@ const POLICY: RestartPolicy = {
   windowMs: 15 * 60_000,
   backoffMs: [5_000, 30_000, 120_000],
   stopTimeoutMs: 60_000,
+  lockRecheckMs: 30_000,
 };
 
-function harness(policy: RestartPolicy = POLICY) {
+function harness(
+  policy: RestartPolicy = POLICY,
+  options: { withLockHolder?: boolean } = { withLockHolder: true },
+) {
   const clock = new FakeClock();
   const spawned: FakeChild[] = [];
   const logs: string[] = [];
+  /** Who holds each role's lock outside this engine; null = free. */
+  const held = new Map<ChildName, number | null>();
   const supervisor = createSupervisor(SPECS, {
+    ...(options.withLockHolder ? { lockHolder: (name: ChildName) => held.get(name) ?? null } : {}),
     spawn: (spec) => {
       const child = new FakeChild(spec.name);
       spawned.push(child);
@@ -146,7 +153,7 @@ function harness(policy: RestartPolicy = POLICY) {
     return exitCode;
   };
 
-  return { clock, spawned, logs, supervisor, latest, all, settled };
+  return { clock, spawned, logs, supervisor, latest, all, settled, held };
 }
 
 // --- supervisor --------------------------------------------------------------
@@ -324,22 +331,17 @@ describe("one child failing", () => {
     expect(h.supervisor.state().scanner).toBe("restarting");
   });
 
-  it("never retries a child whose role is already running elsewhere", () => {
-    const h = harness();
-    h.supervisor.start();
-    h.latest("scanner").exit(EXIT_ALREADY_RUNNING);
-
-    expect(h.supervisor.state().scanner).toBe("gave-up");
-    expect(h.logs.some((l) => /scanner is already running elsewhere/.test(l))).toBe(true);
-    h.clock.advance(60 * 60_000);
-    expect(h.all("scanner")).toHaveLength(1);
-  });
-
   it("exits non-zero when neither child is left", async () => {
     const h = harness();
     h.supervisor.start();
-    h.latest("scanner").exit(EXIT_ALREADY_RUNNING);
-    h.latest("entry-zone").exit(EXIT_ALREADY_RUNNING);
+    for (const name of ["scanner", "entry-zone"] as const) {
+      for (const wait of [5_000, 30_000, 120_000]) {
+        h.latest(name).exit(1);
+        h.clock.advance(wait);
+      }
+      h.latest(name).exit(1);
+    }
+    expect(h.supervisor.state()).toEqual({ scanner: "gave-up", "entry-zone": "gave-up" });
     expect(await h.settled()).toBe(1);
   });
 
@@ -354,6 +356,127 @@ describe("one child failing", () => {
     first.exit(1); // stale event
     expect(h.supervisor.state().scanner).toBe("running");
     expect(h.latest("scanner")).toBe(second);
+  });
+});
+
+describe("a role held by another process (M1 recovery)", () => {
+  it("waits instead of giving up, and spawns nothing while the role is held", async () => {
+    const h = harness();
+    h.supervisor.start();
+    h.held.set("entry-zone", 4242); // e.g. a monitor orphaned by an engine that died
+    h.latest("entry-zone").exit(EXIT_ALREADY_RUNNING);
+
+    expect(h.supervisor.state()["entry-zone"]).toBe("waiting");
+    h.clock.advance(10 * 60_000); // twenty re-checks
+    expect(h.all("entry-zone")).toHaveLength(1);
+    expect(
+      h.logs.filter((l) => /entry-zone is already running elsewhere \(pid 4242\)/.test(l)),
+    ).toHaveLength(1);
+    // Not a crash, and not reported as one.
+    expect(h.logs.some((l) => /entry-zone EXITED UNEXPECTEDLY/.test(l))).toBe(false);
+    // Waiting keeps the engine running.
+    expect(await h.settled()).toBeNull();
+  });
+
+  it("starts its own child as soon as the role is free again", () => {
+    const h = harness();
+    h.supervisor.start();
+    h.held.set("entry-zone", 4242);
+    h.latest("entry-zone").exit(EXIT_ALREADY_RUNNING);
+    h.clock.advance(60_000);
+    expect(h.all("entry-zone")).toHaveLength(1);
+
+    h.held.set("entry-zone", null); // the orphan finally died
+    h.clock.advance(30_000);
+
+    expect(h.all("entry-zone")).toHaveLength(2);
+    expect(h.supervisor.state()["entry-zone"]).toBe("running");
+    expect(h.logs.some((l) => /entry-zone's role is free again; starting it/.test(l))).toBe(true);
+  });
+
+  it("re-checks at a bounded rate: one look per lockRecheckMs", () => {
+    const h = harness();
+    h.supervisor.start();
+    h.held.set("scanner", 7);
+    h.latest("scanner").exit(EXIT_ALREADY_RUNNING);
+    expect(h.clock.pending()).toBe(1); // exactly one timer for the wait
+    h.clock.advance(29_999);
+    h.held.set("scanner", null);
+    expect(h.all("scanner")).toHaveLength(1); // not yet
+    h.clock.advance(1);
+    expect(h.all("scanner")).toHaveLength(2);
+  });
+
+  it("without a lock reader, retries by relaunching on the same schedule, announcing the wait once", () => {
+    const h = harness(POLICY, { withLockHolder: false });
+    h.supervisor.start();
+    for (let i = 0; i < 4; i += 1) {
+      h.latest("entry-zone").exit(EXIT_ALREADY_RUNNING);
+      h.clock.advance(30_000);
+    }
+    expect(h.all("entry-zone")).toHaveLength(5);
+    expect(h.logs.filter((l) => /entry-zone is already running elsewhere/.test(l))).toHaveLength(1);
+  });
+
+  it("a wait after the child really ran is announced again", () => {
+    const h = harness();
+    h.supervisor.start();
+    h.held.set("scanner", 9);
+    h.latest("scanner").exit(EXIT_ALREADY_RUNNING);
+    h.held.set("scanner", null);
+    h.clock.advance(30_000);
+    h.latest("scanner").exit(1); // ran, then crashed
+    h.clock.advance(5_000); // restarted
+    h.held.set("scanner", 10);
+    h.latest("scanner").exit(EXIT_ALREADY_RUNNING);
+    expect(h.logs.filter((l) => /scanner is already running elsewhere/.test(l))).toHaveLength(2);
+  });
+
+  it("a stop during the wait cancels it and the engine finishes cleanly", async () => {
+    const h = harness();
+    h.supervisor.start();
+    h.held.set("entry-zone", 4242);
+    h.latest("entry-zone").exit(EXIT_ALREADY_RUNNING);
+
+    void h.supervisor.stop("SIGHUP");
+    h.latest("scanner").exit(0);
+    h.held.set("entry-zone", null);
+    h.clock.advance(10 * 60_000);
+
+    expect(h.all("entry-zone")).toHaveLength(1);
+    expect(await h.settled()).toBe(0);
+  });
+});
+
+describe("killSurvivors (the engine's exit hook)", () => {
+  it("SIGKILLs every child still alive, and only those", () => {
+    const h = harness();
+    h.supervisor.start();
+    h.latest("scanner").exit(1); // down, waiting to restart
+
+    expect(h.supervisor.killSurvivors()).toBe(1);
+    expect(h.latest("entry-zone").signals).toEqual(["SIGKILL"]);
+    expect(h.latest("scanner").signals).toEqual([]);
+  });
+
+  it("is synchronous and side-effect free beyond the signal: no log, no timer", () => {
+    const h = harness();
+    h.supervisor.start();
+    const logsBefore = h.logs.length;
+    const timersBefore = h.clock.pending();
+    h.supervisor.killSurvivors();
+    expect(h.logs.length).toBe(logsBefore);
+    expect(h.clock.pending()).toBe(timersBefore);
+  });
+
+  it("after a clean stop there is nothing to kill", async () => {
+    const h = harness();
+    h.supervisor.start();
+    void h.supervisor.stop("Ctrl-C");
+    h.latest("scanner").exit(0);
+    h.latest("entry-zone").exit(0);
+    expect(await h.settled()).toBe(0);
+    expect(h.supervisor.killSurvivors()).toBe(0);
   });
 });
 

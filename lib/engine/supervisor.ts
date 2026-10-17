@@ -45,6 +45,11 @@ export interface RestartPolicy {
   backoffMs: number[];
   /** How long a child gets to stop after SIGINT before it is killed. */
   stopTimeoutMs: number;
+  /**
+   * How often to look again at a role another process holds. Reading a lock file
+   * costs nothing, so waiting has no bound on duration — only on rate.
+   */
+  lockRecheckMs: number;
 }
 
 export const DEFAULT_RESTART_POLICY: RestartPolicy = {
@@ -54,6 +59,7 @@ export const DEFAULT_RESTART_POLICY: RestartPolicy = {
   // A scan pass in flight is allowed to unwind; the scanner aborts its
   // remaining markets on SIGINT, so this is a ceiling rather than a wait.
   stopTimeoutMs: 60_000,
+  lockRecheckMs: 30_000,
 };
 
 export interface SupervisorDeps {
@@ -62,10 +68,23 @@ export interface SupervisorDeps {
   now(): number;
   setTimer(fn: () => void, ms: number): unknown;
   clearTimer(handle: unknown): void;
+  /**
+   * The PID of a live process holding this role's lock, or null when it is
+   * free. Lets the engine wait for a role held elsewhere without spawning a
+   * process just to be refused. Without it, the engine re-tries by starting the
+   * child on the same schedule.
+   */
+  lockHolder?(name: ChildName): number | null;
   policy?: RestartPolicy;
 }
 
-export type ChildState = "starting" | "running" | "restarting" | "stopped" | "gave-up";
+/**
+ * `waiting`: another process holds this role's lock — typically a scanner or
+ * monitor left running by an engine that died. The engine looks again every
+ * `lockRecheckMs` and starts its own as soon as the role is free, so a role is
+ * never abandoned just because someone else had it for a while.
+ */
+export type ChildState = "starting" | "running" | "restarting" | "waiting" | "stopped" | "gave-up";
 
 export interface Supervisor {
   start(): void;
@@ -73,6 +92,12 @@ export interface Supervisor {
   stop(reason: string): Promise<void>;
   /** Immediate SIGKILL to every child. For a second Ctrl-C. */
   forceStop(): void;
+  /**
+   * Synchronous last resort for the engine's own `exit`: SIGKILL to any child
+   * still running, and nothing else — no logging, no timers, no promises, since
+   * none of those run after `exit`. Returns how many were signalled.
+   */
+  killSurvivors(): number;
   state(): Record<ChildName, ChildState>;
   /** Resolves with the engine's exit code once nothing is left running. */
   readonly done: Promise<number>;
@@ -94,8 +119,8 @@ export function prefixLine(name: ChildName, line: string): string {
  *
  * Pure, so the bound is tested directly: restarts are counted inside a sliding
  * window, a child that keeps failing is given up on rather than restarted
- * forever, and "already running" is never retried — the lock it lost will not
- * be free the next time either.
+ * forever, and "already running" is not a restart at all — the supervisor waits
+ * for that role's lock to be released instead (see `ChildState`).
  */
 export function restartDecision(input: {
   exitCode: number | null;
@@ -122,6 +147,8 @@ interface ChildEntry {
   state: ChildState;
   restarts: number[];
   timer: unknown;
+  /** The "already running elsewhere" line has been logged for the current wait. */
+  announcedWait: boolean;
 }
 
 export function createSupervisor(specs: ChildSpec[], deps: SupervisorDeps): Supervisor {
@@ -129,7 +156,7 @@ export function createSupervisor(specs: ChildSpec[], deps: SupervisorDeps): Supe
   const children = new Map<ChildName, ChildEntry>(
     specs.map((spec) => [
       spec.name,
-      { spec, handle: null, state: "starting", restarts: [], timer: null },
+      { spec, handle: null, state: "starting", restarts: [], timer: null, announcedWait: false },
     ]),
   );
 
@@ -181,6 +208,14 @@ export function createSupervisor(specs: ChildSpec[], deps: SupervisorDeps): Supe
       return;
     }
 
+    // Not a crash: the role is held by another process. Wait for it rather than
+    // reporting a failure — and, on a refused re-check, rather than reporting
+    // the same "failure" every time.
+    if (code === EXIT_ALREADY_RUNNING) {
+      waitForLock(entry);
+      return;
+    }
+
     const others = [...children.values()].filter((c) => c !== entry && c.handle);
     const stillRunning = others.map((c) => c.spec.name).join(", ") || "nothing";
     log(`${entry.spec.name} EXITED UNEXPECTEDLY (${how}); still running: ${stillRunning}`);
@@ -192,13 +227,14 @@ export function createSupervisor(specs: ChildSpec[], deps: SupervisorDeps): Supe
       policy,
     });
 
+    // The child really ran, so a later wait is a new one worth announcing.
+    entry.announcedWait = false;
+
     if (!decision.restart) {
       entry.state = "gave-up";
       log(
-        decision.reason === "already-running"
-          ? `${entry.spec.name} is already running elsewhere; the engine will not start a second one.`
-          : `${entry.spec.name} failed ${policy.maxRestarts} times in ${Math.round(policy.windowMs / 60_000)} minutes; ` +
-              "giving up on it. Fix the cause and restart the engine.",
+        `${entry.spec.name} failed ${policy.maxRestarts} times in ${Math.round(policy.windowMs / 60_000)} minutes; ` +
+          "giving up on it. Fix the cause and restart the engine.",
       );
       settleIfIdle();
       return;
@@ -219,11 +255,41 @@ export function createSupervisor(specs: ChildSpec[], deps: SupervisorDeps): Supe
     }, decision.delayMs);
   }
 
-  /** Ends the engine once no child is running and none is waiting to restart. */
+  /**
+   * Another process holds this role. Not a failure and not a restart: look at
+   * the lock every `lockRecheckMs` and start our own child once it is free.
+   * Logged once on entering the wait and once on leaving it — a monitor that
+   * stays held for hours must not fill the log.
+   */
+  function waitForLock(entry: ChildEntry) {
+    const holder = deps.lockHolder?.(entry.spec.name) ?? null;
+    entry.state = "waiting";
+    if (!entry.announcedWait) {
+      entry.announcedWait = true;
+      log(
+        `${entry.spec.name} is already running elsewhere${holder ? ` (pid ${holder})` : ""}; ` +
+          `the engine will start its own as soon as that one stops ` +
+          `(checking every ${Math.round(policy.lockRecheckMs / 1000)}s).`,
+      );
+    }
+
+    entry.timer = deps.setTimer(() => {
+      entry.timer = null;
+      if (stopping) return;
+      if (deps.lockHolder && deps.lockHolder(entry.spec.name) !== null) {
+        waitForLock(entry);
+        return;
+      }
+      log(`${entry.spec.name}'s role is free again; starting it.`);
+      launch(entry);
+    }, policy.lockRecheckMs);
+  }
+
+  /** Ends the engine once no child is running and none is waiting to start. */
   function settleIfIdle() {
     if (finished) return;
     const active = [...children.values()].some(
-      (c) => c.handle !== null || c.state === "restarting",
+      (c) => c.handle !== null || c.state === "restarting" || c.state === "waiting",
     );
     if (active) return;
 
@@ -273,6 +339,16 @@ export function createSupervisor(specs: ChildSpec[], deps: SupervisorDeps): Supe
     forceStop() {
       stopping = true;
       for (const entry of children.values()) entry.handle?.kill("SIGKILL");
+    },
+
+    killSurvivors() {
+      let signalled = 0;
+      for (const entry of children.values()) {
+        if (!entry.handle) continue;
+        entry.handle.kill("SIGKILL");
+        signalled += 1;
+      }
+      return signalled;
     },
 
     state() {

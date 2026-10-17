@@ -21,7 +21,12 @@
  * Stop it with Ctrl-C; an in-flight pass is allowed to unwind first.
  */
 import { prisma } from "@/lib/db/prisma";
-import { holdLockOrExit, isCatchUpDue, scannerRunCompleted } from "@/lib/engine";
+import {
+  holdLockOrExit,
+  isCatchUpDue,
+  scannerRunCompleted,
+  stopWhenEngineGone,
+} from "@/lib/engine";
 import { TIMEFRAME_LABELS, type Timeframe } from "@/lib/market-data/provider";
 import {
   DEFAULT_CLOSE_DELAY_MS,
@@ -59,6 +64,15 @@ for (const signal of ["SIGINT", "SIGTERM"] as const) {
     log("Stopping after the current pass. Press Ctrl-C again to force.");
   });
 }
+
+// Under the engine: if the engine goes away — however it went — stop as if told
+// to, so no scanner is left running unsupervised with no one reading its output.
+stopWhenEngineGone(process, () => {
+  if (stopping) return;
+  stopping = true;
+  controller.abort();
+  log("The engine is gone; stopping after the current pass.");
+});
 
 async function scan(triggeredBy: "SCHEDULE" | "MANUAL", due: Timeframe[], userId: string) {
   const started = Date.now();
@@ -143,8 +157,10 @@ async function scan(triggeredBy: "SCHEDULE" | "MANUAL", due: Timeframe[], userId
   // Under the engine, tell it the pass is complete: every setup this pass
   // created, moved or invalidated is written by now, and the entry-zone monitor
   // reloads on this instead of waiting for its next check. Run on its own, the
-  // scanner has no IPC channel and this does nothing.
-  process.send?.(scannerRunCompleted(summary.runId));
+  // scanner has no IPC channel and this does nothing. The callback makes a
+  // channel that closed mid-pass a non-event rather than an unhandled error.
+  if (process.connected)
+    process.send?.(scannerRunCompleted(summary.runId), undefined, {}, () => undefined);
 }
 
 /**

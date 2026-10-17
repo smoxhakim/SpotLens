@@ -104,6 +104,21 @@ function readHolder(file: string): { pid: number; startedAt: string | null } | n
   }
 }
 
+/**
+ * The PID of a live process holding `role`'s lock, or null when the lock is
+ * free — absent, unreadable, or left by a process that is no longer running.
+ * Read-only: it never takes or clears a lock, so the engine can poll it while
+ * it waits for another process to let go of a role.
+ */
+export function liveLockHolder(
+  role: LockRole,
+  options: Pick<LockOptions, "dir" | "isAlive"> = {},
+): number | null {
+  const holder = readHolder(join(options.dir ?? defaultLockDir(), `${role}.lock`));
+  if (!holder) return null;
+  return (options.isAlive ?? processIsAlive)(holder.pid) ? holder.pid : null;
+}
+
 /** Removes the lock only if this process still holds it. */
 function releaseLock(file: string, pid: number) {
   if (readHolder(file)?.pid !== pid) return;

@@ -176,8 +176,17 @@ WAITING_CONFIRMATION` is price arriving somewhere, not structure changing,
   labels their output, and relays exactly one message: the scanner's
   `scanner-run-completed` after a pass, which makes the monitor reload open
   setups at once. The rules live in `lib/engine` (pure supervisor with injected
-  spawn/timers; restarts bounded at 3 per 15 minutes, never for
-  `EXIT_ALREADY_RUNNING`). One child failing never stops the other. Each role —
+  spawn/timers; restarts bounded at 3 per 15 minutes). `EXIT_ALREADY_RUNNING`
+  is not a crash: the supervisor waits, re-reading the role's lock every 30s
+  (`liveLockHolder`, read-only), and starts its own child once it is free — a
+  role held by an orphan is never abandoned. **No orphans:** SIGINT, SIGTERM and
+  SIGHUP (closed terminal) all take the graceful stop; the engine's `exit` hook
+  SIGKILLs any surviving child (`killSurvivors`, synchronous); each child stops
+  itself on IPC `disconnect` (`stopWhenEngineGone`, which also un-refs the
+  channel so a stopped child can exit); child-process `error` events are
+  handled in `adaptChildProcess`, a spawn failure becoming an exit the restart
+  policy sees. Real-process regressions: `lib/engine/orphans.process.test.ts`.
+  One child failing never stops the other. Each role —
   engine, scanner, entry-zone — holds a PID lock under `.spotlens/locks/`, so a
   second scanner cannot race the first into duplicate setups; a dead holder's
   lock is taken over. `--catch-up` runs one pass on startup only when no pass
