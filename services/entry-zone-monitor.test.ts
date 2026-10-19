@@ -64,8 +64,13 @@ const store = {
   prefs: new Map<string, Record<string, boolean>>(),
   chats: new Map<string, string>(),
   failNotificationWrites: false,
-  /** Completed scanner runs, newest last. */
-  scannerRuns: [] as string[],
+  /**
+   * Scanner runs, newest last. A bare id is a COMPLETED run; a run can also be
+   * given its status, and one still RUNNING has no `completedAt`.
+   */
+  scannerRuns: [] as (
+    string | { id: string; status: "RUNNING" | "COMPLETED" | "PARTIAL" | "FAILED" }
+  )[],
   /** Scanner results with their run, for the setup-freshness provenance. */
   results: [] as ResultRow[],
 };
@@ -105,11 +110,19 @@ const db = {
           })),
     ),
   },
+  // Applies the filters `latestCompletedScannerRun` sends, so a run the real
+  // query would skip — still running, or FAILED — is skipped here too.
   scannerRun: {
-    findFirst: vi.fn(async () => {
-      const id = store.scannerRuns.at(-1);
-      return id ? { id } : null;
-    }),
+    findFirst: vi.fn(
+      async ({ where }: { where: { completedAt: { not: null }; status: { in: string[] } } }) => {
+        const match = store.scannerRuns
+          .map((r) => (typeof r === "string" ? { id: r, status: "COMPLETED" } : r))
+          .map((r) => ({ ...r, completedAt: r.status === "RUNNING" ? null : new Date(clock) }))
+          .filter((r) => r.completedAt !== null && where.status.in.includes(r.status))
+          .at(-1);
+        return match ? { id: match.id } : null;
+      },
+    ),
   },
   trackedSetup: {
     findMany: vi.fn(async () =>
@@ -852,6 +865,30 @@ describe("scanner handoff", () => {
     expect(rowsFor(replacement.id)).toHaveLength(1);
     // The old setup is not deleted — only no longer watched.
     expect(store.setups.find((s) => s.id === old.id)?.status).toBe("INVALIDATED");
+  });
+
+  it("a FAILED run is never a new run to reload for; a PARTIAL one is", async () => {
+    store.scannerRuns = ["run-1"];
+    const monitor = monitorFor(fakeProvider());
+    expect((await monitor.refresh()).scannerRunId).toBe("run-1");
+
+    // Every market failed: the run finished, but there is nothing new to load.
+    store.scannerRuns.push({ id: "run-2", status: "FAILED" });
+    expect(await monitor.newerScannerRun()).toBeNull();
+    expect((await monitor.refresh()).scannerRunId).toBe("run-1");
+
+    // Still in progress: not yet.
+    store.scannerRuns.push({ id: "run-3", status: "RUNNING" });
+    expect(await monitor.newerScannerRun()).toBeNull();
+
+    // Some markets failed, the rest were scanned: that is a pass.
+    store.scannerRuns.push({ id: "run-4", status: "PARTIAL" });
+    expect(await monitor.newerScannerRun()).toBe("run-4");
+    expect(db.scannerRun.findFirst).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        where: { completedAt: { not: null }, status: { in: ["COMPLETED", "PARTIAL"] } },
+      }),
+    );
   });
 
   it("a failed scanner-run check is not mistaken for a new run", async () => {

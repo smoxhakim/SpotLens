@@ -15,6 +15,7 @@ import {
   failureEvent,
   mapWithConcurrency,
   rankResults,
+  successfulPassWhere,
   withRetries,
   type ClassifiedFailure,
   type ScannerEvent,
@@ -698,6 +699,21 @@ export async function getShortlist(input: { runId?: string; limit?: number } = {
     },
     shortlist,
   };
+}
+
+/**
+ * When the most recent successful pass started — what the startup catch-up
+ * compares against the latest scan window. COMPLETED or PARTIAL only: a pass in
+ * which every market failed is finished but produced nothing, and treating it
+ * as "a pass happened" skipped exactly the catch-up it should have caused.
+ */
+export async function lastSuccessfulPassStartedAt(): Promise<Date | null> {
+  const run = await prisma.scannerRun.findFirst({
+    where: successfulPassWhere(),
+    orderBy: { startedAt: "desc" },
+    select: { startedAt: true },
+  });
+  return run?.startedAt ?? null;
 }
 
 export async function listScannerRuns(limit: number) {

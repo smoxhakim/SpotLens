@@ -42,6 +42,7 @@ export {
   type ShortlistInput,
   type ShortlistSize,
 } from "./shortlist";
+export { SUCCESSFUL_RUN_STATUSES, successfulPassWhere, type SuccessfulRunStatus } from "./runs";
 export {
   eventsForOutcome,
   failureEvent,

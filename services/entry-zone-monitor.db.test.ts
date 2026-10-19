@@ -278,6 +278,37 @@ describe.skipIf(!url)("entry-zone monitor on a real database", () => {
     }
   });
 
+  it("a FAILED run — the newest finished run — is neither the reload cursor nor a catch-up pass", async () => {
+    const { lastSuccessfulPassStartedAt } = await import("./scanner");
+    const monitor = createEntryZoneMonitor({ provider, now: () => clock });
+    const cursor = (await monitor.refresh()).scannerRunId;
+    const lastPass = await lastSuccessfulPassStartedAt();
+
+    // Every market failed: finished, newer than anything else, and empty.
+    const failed = await prisma.scannerRun.create({
+      data: {
+        timeframes: ["H1", "H4"],
+        triggeredBy: "SCHEDULE",
+        status: "FAILED",
+        startedAt: new Date(Date.now() + 120_000),
+        completedAt: new Date(Date.now() + 121_000),
+      },
+    });
+
+    try {
+      expect(await monitor.newerScannerRun()).toBeNull();
+      expect((await monitor.refresh()).scannerRunId).toBe(cursor);
+      expect(await lastSuccessfulPassStartedAt()).toEqual(lastPass);
+
+      // The same run as PARTIAL is a pass, for both.
+      await prisma.scannerRun.update({ where: { id: failed.id }, data: { status: "PARTIAL" } });
+      expect(await monitor.newerScannerRun()).toBe(failed.id);
+      expect(await lastSuccessfulPassStartedAt()).toEqual(failed.startedAt);
+    } finally {
+      await prisma.scannerRun.delete({ where: { id: failed.id } });
+    }
+  });
+
   it("a stale setup inside its zone is withheld on a real database: nothing written", async () => {
     const stale = await prisma.trackedSetup.create({
       data: {

@@ -466,12 +466,15 @@ with a measured reward; high-risk setups and synthetic rewards stay in-app.
 | `ENTRY_MONITOR_MAX_SETUP_AGE_CANDLES` | `1`      | ceiling `24` |
 
 **New setups are watched promptly.** Under `npm run spotlens` the scanner tells
-the monitor the moment a pass completes, and it reloads at once. Run on its own,
-the monitor checks for a newer completed scanner run every 60 seconds (one
-single-row read) and reloads only when there is one; the 10-minute full reload
-remains as a safety net. Any check interval under five minutes keeps a Neon
-compute from auto-suspending — under the engine the handoff is already immediate,
-so a longer interval (e.g. `330000`) is reasonable if compute hours matter.
+the monitor the moment a pass completes, and it reloads at once. Separately, and
+whether or not the engine is running, the monitor checks for a newer successful
+scanner run (COMPLETED or PARTIAL — a run in which every market failed does not
+count) every 60 seconds (one single-row read) and reloads only when there is
+one; that is what catches a `scanner:once` from another terminal. The 10-minute
+full reload remains as a safety net. Any check interval under five minutes keeps
+a Neon compute from auto-suspending — under the engine the handoff is already
+immediate, so a longer interval (e.g. `330000`) is reasonable if compute hours
+matter.
 
 ## Risk and position sizing
 

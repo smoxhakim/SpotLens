@@ -157,8 +157,11 @@ describe("the engine leaves no child behind (M1)", () => {
     expect(readdirSync(run.lockDir)).toEqual([]);
   }, 60_000);
 
-  it("an uncaught error in the engine still takes both children with it", async () => {
-    const { run, scanner, monitor } = await startEngine({ FIXTURE_THROW_AFTER_MS: "2500" });
+  it("an uncaught error in the engine still takes both children with it — via its exit hook", async () => {
+    const { run, scanner, monitor } = await startEngine({ FIXTURE_THROW_ON_SIGUSR2: "1" });
+    // Both children have confirmed they are running; only now does the engine fail.
+    expect(processIsAlive(scanner) && processIsAlive(monitor)).toBe(true);
+    process.kill(run.proc.pid!, "SIGUSR2");
 
     const code = await exited(run.proc);
     expect(code).not.toBe(0);
@@ -167,6 +170,11 @@ describe("the engine leaves no child behind (M1)", () => {
       10_000,
       "children gone",
     );
+    // Killed by the engine's exit hook (SIGKILL, so no stop is recorded) — not
+    // stopped by noticing the engine was gone. Without the hook each child would
+    // record "engine gone" here, so this fails if the hook is removed.
+    expect(stoppedBecause(run, "scanner")).toBeNull();
+    expect(stoppedBecause(run, "entry-zone")).toBeNull();
   }, 60_000);
 
   it("a role held by an orphan is waited for, and taken back as soon as the orphan is gone", async () => {

@@ -41,6 +41,7 @@ import { deliverEvents } from "@/services/notifications";
 import {
   DEFAULT_MAX_CONCURRENCY,
   describeScannerUserFailure,
+  lastSuccessfulPassStartedAt,
   resolveScannerUser,
   runScan,
 } from "@/services/scanner";
@@ -257,14 +258,11 @@ async function maybeSendDailySummary(userId: string) {
  */
 async function maybeCatchUp(userId: string) {
   try {
-    const last = await prisma.scannerRun.findFirst({
-      where: { completedAt: { not: null } },
-      orderBy: { startedAt: "desc" },
-      select: { startedAt: true },
-    });
+    // A FAILED pass is finished but scanned nothing, so it does not count.
+    const last = await lastSuccessfulPassStartedAt();
 
     const due = isCatchUpDue({
-      lastCompletedRunStartedAt: last?.startedAt.getTime() ?? null,
+      lastCompletedRunStartedAt: last?.getTime() ?? null,
       timeframes,
       now: Date.now(),
       delayMs: closeDelayMs,
@@ -276,7 +274,7 @@ async function maybeCatchUp(userId: string) {
     }
 
     log(
-      `The last completed pass started ${last ? last.startedAt.toISOString() : "never"}, ` +
+      `The last successful pass started ${last ? last.toISOString() : "never"}, ` +
         "before the most recent scan window. Catching up now.",
     );
 

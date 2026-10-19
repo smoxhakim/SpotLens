@@ -25,7 +25,11 @@ import { join } from "node:path";
 
 export type LockRole = "engine" | "scanner" | "entry-zone";
 
-/** Exit code a child uses when its role is already running. Never restarted. */
+/**
+ * Exit code a child uses when its role is already running. Not a crash, so
+ * never counted as a restart: the engine waits for the role's lock to be free
+ * (re-reading it with `liveLockHolder`) and only then starts the child again.
+ */
 export const EXIT_ALREADY_RUNNING = 3;
 
 export type LockResult =
@@ -134,7 +138,7 @@ function releaseLock(file: string, pid: number) {
  *
  * The shared entry point for the scanner and monitor scripts. Exits with
  * `EXIT_ALREADY_RUNNING` so the engine can tell "already running" apart from a
- * crash and does not try to restart into a lock it can never get.
+ * crash, and waits for the lock instead of restarting into one it cannot get.
  */
 export function holdLockOrExit(role: LockRole, log: (message: string) => void): void {
   const lock = acquireLock(role);

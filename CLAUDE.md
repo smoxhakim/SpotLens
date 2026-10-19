@@ -189,10 +189,17 @@ WAITING_CONFIRMATION` is price arriving somewhere, not structure changing,
   One child failing never stops the other. Each role —
   engine, scanner, entry-zone — holds a PID lock under `.spotlens/locks/`, so a
   second scanner cannot race the first into duplicate setups; a dead holder's
-  lock is taken over. `--catch-up` runs one pass on startup only when no pass
-  has started since the latest close + settle delay, then the schedule is
-  unchanged. The monitor also checks the latest completed `ScannerRun` every
-  60s when run alone. No schema change; the engine writes nothing.
+  lock is taken over. `--catch-up` runs one pass on startup only when no
+  _successful_ pass has started since the latest close + settle delay, then the
+  schedule is unchanged. "Successful" is `successfulPassWhere`
+  (`lib/scanner/runs.ts`): COMPLETED or PARTIAL. A FAILED run has a
+  `completedAt` but scanned nothing, so it never cancels a catch-up, never
+  becomes the monitor's reload cursor and never makes a setup fresh. The
+  monitor checks the latest successful `ScannerRun` every 60s
+  (`ENTRY_MONITOR_SCANNER_CHECK_MS`) **whether or not it runs under the
+  engine** — the relay makes it redundant there, but `planRefresh` does not
+  know the engine exists, and the query keeps a Neon compute awake (open
+  follow-up in `TODO.md`). No schema change; the engine writes nothing.
 - **`TELEGRAM_BOT_TOKEN` is read in exactly one file**
   (`lib/notifications/telegram-provider.ts`) and never returned, logged, or
   stored. Errors are stripped of it before they reach a database row.

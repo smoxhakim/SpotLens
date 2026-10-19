@@ -34,7 +34,11 @@ export function latestDueScanWindow(
 }
 
 export function isCatchUpDue(input: {
-  /** When the most recent completed pass started, epoch ms. Null if none ever has. */
+  /**
+   * When the most recent successful pass (COMPLETED or PARTIAL — see
+   * `successfulPassWhere`) started, epoch ms. Null if none ever has. A FAILED
+   * pass does not count: it finished, but scanned nothing.
+   */
   lastCompletedRunStartedAt: number | null;
   timeframes: Timeframe[];
   now: number;

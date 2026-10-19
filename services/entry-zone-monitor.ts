@@ -22,6 +22,7 @@ import {
   type PriceQuote,
   type Timeframe,
 } from "@/lib/market-data";
+import { successfulPassWhere } from "@/lib/scanner/runs";
 import { loadSetupFacts } from "@/services/notification-events";
 import { deliverEvents, type DeliveryOutcome } from "@/services/notifications";
 
@@ -340,16 +341,16 @@ function describeVerdict(verdict: FreshnessVerdict): string {
 // --- reads -----------------------------------------------------------------
 
 /**
- * The most recent scanner run that has finished, by id.
+ * The most recent scanner run that finished successfully, by id.
  *
- * Completed or partial — anything with a `completedAt`. A run still in progress
- * is not a reason to reload: its setups are still being written, and its
- * completion will be.
+ * COMPLETED or PARTIAL (`successfulPassWhere`). A run still in progress is not a
+ * reason to reload: its setups are still being written, and its completion will
+ * be. A FAILED run produced nothing to reload, so it never becomes the cursor.
  */
 export async function latestCompletedScannerRun(): Promise<string | null> {
   if (!isDatabaseConfigured) return null;
   const run = await prisma.scannerRun.findFirst({
-    where: { completedAt: { not: null } },
+    where: successfulPassWhere(),
     orderBy: { startedAt: "desc" },
     select: { id: true },
   });
@@ -448,7 +449,7 @@ export async function latestVerifiedScans(
       trackedSetupId: { in: setupIds },
       status: "OK",
       createdAt: { gte: since },
-      scannerRun: { completedAt: { not: null }, status: { in: ["COMPLETED", "PARTIAL"] } },
+      scannerRun: successfulPassWhere(),
     },
     select: { trackedSetupId: true, scannerRun: { select: { completedAt: true } } },
   });

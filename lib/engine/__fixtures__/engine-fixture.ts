@@ -6,7 +6,9 @@
  *
  *   node --import tsx lib/engine/__fixtures__/engine-fixture.ts
  *   env: SPOTLENS_LOCK_DIR, FIXTURE_PID_DIR, FIXTURE_RECHECK_MS,
- *        FIXTURE_THROW_AFTER_MS (crash the engine with an uncaught error)
+ *        FIXTURE_THROW_ON_SIGUSR2=1 (crash the engine with an uncaught error
+ *        when sent SIGUSR2 — the test sends it once both children are running,
+ *        so there is no start-up timing to race)
  */
 import { spawn } from "node:child_process";
 
@@ -52,11 +54,10 @@ const supervisor = createSupervisor(specs, {
 installEngineShutdown({ proc: process, supervisor, log, now: Date.now });
 supervisor.start();
 
-const throwAfter = Number(process.env.FIXTURE_THROW_AFTER_MS ?? 0);
-if (throwAfter > 0) {
-  setTimeout(() => {
+if (process.env.FIXTURE_THROW_ON_SIGUSR2 === "1") {
+  process.on("SIGUSR2", () => {
     throw new Error("fixture: an unexpected engine failure");
-  }, throwAfter);
+  });
 }
 
 void supervisor.done.then((code) => {
