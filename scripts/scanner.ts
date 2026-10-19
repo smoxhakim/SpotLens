@@ -31,10 +31,16 @@ import { TIMEFRAME_LABELS, type Timeframe } from "@/lib/market-data/provider";
 import {
   DEFAULT_CLOSE_DELAY_MS,
   DEFAULT_SCAN_TIMEFRAMES,
-  markScanned,
+  FAILED_PASS_RETRY_DELAYS_MS,
+  classifyPass,
+  classifyPassError,
+  nextWake,
+  recordPass,
+  startSchedule,
+  type PassOutcome,
+  type ScheduleState,
   planScan,
   scanOnWake,
-  scannedThroughAt,
   settlementDelayMs,
   sleep,
 } from "@/lib/scanner";
@@ -167,6 +173,8 @@ async function scan(triggeredBy: "SCHEDULE" | "MANUAL", due: Timeframe[], userId
   // channel that closed mid-pass a non-event rather than an unhandled error.
   if (process.connected)
     process.send?.(scannerRunCompleted(summary.runId), undefined, {}, () => undefined);
+
+  return summary;
 }
 
 /**
@@ -254,6 +262,22 @@ async function maybeSendDailySummary(userId: string) {
   }
 }
 
+/** Says what the schedule will do about a pass that failed transiently, if anything. */
+function announceRetry(schedule: ScheduleState) {
+  if (schedule.retry) {
+    log(
+      `   every market failed, probably transiently (network, timeout, exchange or database ` +
+        `unavailable). Retrying in ${Math.round((schedule.retry.at - Date.now()) / 60_000)} min ` +
+        `(retry ${schedule.retry.attempt} of ${FAILED_PASS_RETRY_DELAYS_MS.length}).`,
+    );
+  } else if (schedule.notBefore !== null) {
+    log(
+      "   every market failed again; no more retries before the next window at " +
+        `${new Date(schedule.notBefore).toISOString()}, which rescans these timeframes too.`,
+    );
+  }
+}
+
 /** `closeAbandonedRuns`, logged. A failure here must never stop a scan. */
 async function recoverAbandonedRuns() {
   try {
@@ -273,9 +297,10 @@ async function recoverAbandonedRuns() {
  * only difference is that it does not wait for the next close. A failure is
  * logged and the schedule carries on — a catch-up pass is a convenience.
  */
-async function maybeCatchUp(userId: string): Promise<number | null> {
+async function maybeCatchUp(userId: string): Promise<CatchUpResult | null> {
   // When the catch-up pass was decided — what it covers. Null if none ran.
   let decidedAt: number | null = null;
+  let outcome: PassOutcome = "SUCCEEDED";
   try {
     // A FAILED pass is finished but scanned nothing, so it does not count.
     const last = await lastSuccessfulPassStartedAt();
@@ -302,12 +327,19 @@ async function maybeCatchUp(userId: string): Promise<number | null> {
     if (controller.signal.aborted) return null;
 
     decidedAt = Date.now();
-    await scan("SCHEDULE", timeframes, userId);
+    outcome = classifyPass(await scan("SCHEDULE", timeframes, userId));
     await maybeSendDailySummary(userId);
   } catch (err) {
     log(`Catch-up pass failed: ${err instanceof Error ? err.message : "unknown error"}`);
+    if (decidedAt !== null) outcome = classifyPassError(err, controller.signal.aborted);
   }
-  return decidedAt;
+  return decidedAt === null ? null : { decidedAt, finishedAt: Date.now(), outcome };
+}
+
+interface CatchUpResult {
+  decidedAt: number;
+  finishedAt: number;
+  outcome: PassOutcome;
 }
 
 async function main() {
@@ -360,53 +392,69 @@ async function main() {
     return;
   }
 
-  const caughtUpAt = catchUp ? await maybeCatchUp(userId) : null;
+  const caughtUp = catchUp ? await maybeCatchUp(userId) : null;
 
   log(`Scheduling ${closeDelayMs / 1000}s after each candle close. Ctrl-C to stop.`);
 
-  // What each timeframe has been scanned through. Everything up to now counts as
-  // covered (by the catch-up, or skipped as before); a close still settling does
-  // not, so the first plan takes it. A catch-up pass covers what had settled when
-  // it *started*: a window that arrived while it ran is still due. See
-  // `ScannedThrough`.
-  let scannedThrough = scannedThroughAt(timeframes, caughtUpAt ?? Date.now(), closeDelayMs);
+  // What each timeframe has been scanned through, and any retry of a failed
+  // pass. Everything up to now counts as covered (by the catch-up, or skipped as
+  // before); a close still settling does not, so the first plan takes it. A
+  // catch-up pass covers what had settled when it *started*, and one that failed
+  // transiently is retried like any other. See `ScannedThrough`, `recordPass`.
+  let schedule = startSchedule({
+    timeframes,
+    now: Date.now(),
+    delayMs: closeDelayMs,
+    catchUp: caughtUp,
+  });
+  announceRetry(schedule);
 
   while (!controller.signal.aborted) {
-    const window = planScan({ timeframes, scannedThrough, delayMs: closeDelayMs });
-    const waitMs = window.at - Date.now();
+    const wakeAt = nextWake({ state: schedule, timeframes, delayMs: closeDelayMs });
+    const waitMs = wakeAt.at - Date.now();
 
-    log(
-      `Next: ${window.timeframes.join(" + ")} at ${new Date(window.at).toISOString()} ` +
-        `(in ${Math.max(0, Math.round(waitMs / 1000))}s)`,
-    );
+    if (wakeAt.retryAttempt === null) {
+      const window = planScan({
+        timeframes,
+        scannedThrough: schedule.covered,
+        delayMs: closeDelayMs,
+      });
+      log(
+        `Next: ${window.timeframes.join(" + ")} at ${new Date(wakeAt.at).toISOString()} ` +
+          `(in ${Math.max(0, Math.round(waitMs / 1000))}s)`,
+      );
+    }
 
     await sleep(waitMs, controller.signal);
     if (controller.signal.aborted) break;
 
     // Recalculated from the clock, not taken from the plan: after a sleep, every
-    // timeframe that closed meanwhile is due, not just the one the plan named.
+    // timeframe that closed meanwhile is due, not just the one the plan named;
+    // on a retry, the timeframes the failed pass left uncovered.
     const now = Date.now();
     const wake = scanOnWake({
       timeframes,
-      scannedThrough,
-      plannedAt: window.at,
+      scannedThrough: schedule.covered,
+      plannedAt: wakeAt.at,
       now,
       delayMs: closeDelayMs,
     });
     // Only if the clock went backwards; plan again rather than scan.
-    if (wake.timeframes.length === 0) continue;
-    if (wake.late) {
+    if (wake.timeframes.length === 0) {
+      schedule = { ...schedule, retry: null };
+      continue;
+    }
+    if (wake.late && wakeAt.retryAttempt === null) {
       log(
         `Woke ${Math.round(wake.lateByMs / 60_000)} min after the planned window — the machine ` +
           `was probably asleep. Scanning ${wake.timeframes.join(" + ")}: every timeframe that ` +
           "closed meanwhile.",
       );
     }
-    // Recorded before the pass, as the plan always moved on whatever the pass did.
-    scannedThrough = markScanned(scannedThrough, wake.timeframes, now, closeDelayMs);
 
+    let outcome: PassOutcome;
     try {
-      await scan("SCHEDULE", wake.timeframes, userId);
+      outcome = classifyPass(await scan("SCHEDULE", wake.timeframes, userId));
       await maybeSendDailySummary(userId);
       // Between passes again: a run abandoned since startup is closed within
       // the hour it becomes old enough, not at the next restart.
@@ -415,7 +463,23 @@ async function main() {
       // A pass that blows up must not end the process — the next candle close
       // is another chance, and a scanner that dies overnight is useless.
       log(`Pass failed: ${err instanceof Error ? err.message : "unknown error"}`);
+      outcome = classifyPassError(err, controller.signal.aborted);
     }
+
+    schedule = recordPass(schedule, {
+      timeframes,
+      scanned: wake.timeframes,
+      decidedAt: now,
+      finishedAt: Date.now(),
+      outcome,
+      delayMs: closeDelayMs,
+    });
+    if (outcome === "FAILED_PERMANENT") {
+      log(
+        "   every market failed, for reasons a retry would not change; moving on to the next window.",
+      );
+    }
+    announceRetry(schedule);
 
     // Past the close we just handled, so the next window is the following one.
     await sleep(1_000, controller.signal);

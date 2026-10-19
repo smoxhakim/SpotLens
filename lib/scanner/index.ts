@@ -26,6 +26,16 @@ export {
 } from "./schedule";
 export { mapWithConcurrency, sleep } from "./concurrency";
 export {
+  FAILED_PASS_RETRY_DELAYS_MS,
+  classifyPass,
+  classifyPassError,
+  nextWake,
+  recordPass,
+  startSchedule,
+  type PassOutcome,
+  type ScheduleState,
+} from "./retry";
+export {
   MAX_ATTEMPTS,
   RETRY_BASE_DELAY_MS,
   classifyFailure,

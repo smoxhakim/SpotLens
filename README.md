@@ -374,6 +374,16 @@ exchange needs a moment to settle the final candle), scans every timeframe
 whose candle just closed, and sleeps again. An H4 close is also an H1 close, so
 those are handled in one pass rather than two.
 
+**It catches up after sleep, and retries a pass that failed.** A laptop that
+slept through closes scans every timeframe that closed meanwhile as soon as it
+wakes. A pass in which _every_ market failed for a reason that can pass — no
+network yet after waking, a timeout, the exchange or the database unavailable —
+is retried after 1, 2, 5 and 10 minutes, never past the next scheduled window
+(whose pass covers the failed timeframes too). At most four retries per window;
+a pass where only some markets failed is not retried, nor one whose failures
+will not change (bad data, an analysis error), nor one you stopped. While the
+exchange is down that is up to five failing passes an hour, each one quick.
+
 **It only ever reads closed candles.** The forming candle is dropped before the
 engine sees anything, which means a rejection wick that has not finished
 forming can never trigger a setup transition — and a scan repeated inside the
