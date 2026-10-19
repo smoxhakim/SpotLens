@@ -18,6 +18,7 @@
     "prisma:seed": "tsx prisma/seed.ts",
     "scanner": "tsx --env-file=.env scripts/scanner.ts",
     "scanner:once": "tsx --env-file=.env scripts/scanner.ts --once",
+    "spotlens": "tsx --env-file=.env scripts/spotlens.ts",
     "monitor": "tsx --env-file=.env scripts/entry-zone-monitor.ts",
     "monitor:once": "tsx --env-file=.env scripts/entry-zone-monitor.ts --once",
     "prisma:deploy": "prisma migrate deploy",

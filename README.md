@@ -297,6 +297,55 @@ Production refuses to start without `AUTH_SECRET` and a non-localhost
 
 ---
 
+## Running SpotLens
+
+Two terminals, and nothing else to start by hand:
+
+```bash
+npm run dev        # the app
+npm run spotlens   # the engine: scanner + entry-zone monitor
+```
+
+The engine runs the scanner and the entry-zone monitor as two supervised
+processes. On startup the scanner catches up once if a scan window was missed
+(a machine that was asleep overnight does not wait for the next close), then
+scans H1 and H4 after every candle close. When a pass completes, the engine
+tells the monitor, which reloads open setups at once — a setup that pass created
+is watched within seconds. The monitor then checks live public prices every 10
+seconds and raises one `ENTRY_ZONE_REACHED` per setup when price moves into its
+stored entry zone.
+
+What happens next is yours: open the setup, read the confirmation, ask the
+Coach, size it in the risk calculator, decide — and if you decide to trade, place
+the spot order yourself on the exchange. **SpotLens never places an order, holds
+no exchange credentials and uses public market data only.** An entry-zone alert
+is not confirmation and not a recommendation.
+
+Output is labelled by process: `[engine …]`, `[scanner …]`, `[entry-zone …]`.
+Ctrl-C asks both to finish what they are doing and stop (a scan in flight
+unwinds first); pressing it again a moment later kills them. Closing the
+terminal window (SIGHUP) or `kill` (SIGTERM) takes the same graceful path.
+
+**Nothing is left running behind the engine.** However it ends — Ctrl-C, a
+closed terminal, a crash, even `kill -9` — the scanner and the monitor stop with
+it: the engine kills any survivor on its way out, and each child stops by
+itself when it notices the engine is gone.
+
+**If one process fails**, the other keeps running: a crashed scanner leaves the
+monitor watching the setups already in the database, and a crashed monitor
+leaves the scanner on its schedule. The engine restarts a crashed process at
+most three times in fifteen minutes (after 5s, 30s, 2m), says so plainly each
+time, and then stops trying rather than restarting forever.
+
+**One of each per machine.** The engine, the scanner and the monitor each hold a
+lock file under `.spotlens/locks/`; starting a second copy — `npm run monitor`
+while the engine runs, say — exits with a message naming the running one. A lock
+left by a process that died is taken over automatically. If the engine finds a
+role already held — a standalone `npm run monitor` you left running — it does
+not give up on it: it says so once, looks again every 30 seconds, and starts its
+own as soon as the other one stops. The standalone commands below still work
+when the engine is not running.
+
 ## The scanner
 
 A separate local process that analyses the curated markets on its own, so you
@@ -375,6 +424,19 @@ replacement setup has a new id and can alert for itself.
 
 **When it stays silent.**
 
+- **The setup's analysis is stale.** An alert is raised only if a completed
+  scanner pass re-confirmed the setup recently: within
+  `ENTRY_MONITOR_MAX_SETUP_AGE_CANDLES` candles of its own timeframe, plus 15
+  minutes (default 1 — H1 within 1h15m, H4 within 4h15m). "Re-confirmed" means a
+  successful `ScannerResult` pointing at this setup, on a run that finished as
+  COMPLETED or PARTIAL; a run in progress or a failed one counts for nothing,
+  and a setup with no such record — one tracked only from the analysis page —
+  never alerts. The alert is _withheld_, not spent: nothing is written, and if a
+  later scan re-confirms the setup while price is still inside, that is when it
+  alerts. It is checked from the reload and again from the database just before
+  delivery, so a restart or reload cannot bypass it. Every alert says when the
+  scan behind it finished and how long the setup has been tracked. With the
+  default, this means alerts need a running scanner — `npm run spotlens`.
 - A setup first seen already inside its zone, with no evidence it was ever
   outside, says nothing until it leaves and comes back. A setup created by a
   closed candle outside its zone (`SETUP_FORMING`) counts as having been
@@ -396,10 +458,23 @@ Notifications → Entry zone reached). Telegram — the main bot — only for se
 whose verdict at creation was `POTENTIAL_SETUP`, or `WAIT_FOR_CONFIRMATION`
 with a measured reward; high-risk setups and synthetic rewards stay in-app.
 
-| Variable                   | Default  | Floor   |
-| -------------------------- | -------- | ------- |
-| `ENTRY_MONITOR_POLL_MS`    | `10000`  | `2000`  |
-| `ENTRY_MONITOR_REFRESH_MS` | `600000` | `60000` |
+| Variable                              | Default  | Floor        |
+| ------------------------------------- | -------- | ------------ |
+| `ENTRY_MONITOR_POLL_MS`               | `10000`  | `2000`       |
+| `ENTRY_MONITOR_REFRESH_MS`            | `600000` | `60000`      |
+| `ENTRY_MONITOR_SCANNER_CHECK_MS`      | `60000`  | `10000`      |
+| `ENTRY_MONITOR_MAX_SETUP_AGE_CANDLES` | `1`      | ceiling `24` |
+
+**New setups are watched promptly.** Under `npm run spotlens` the scanner tells
+the monitor the moment a pass completes, and it reloads at once. Separately, and
+whether or not the engine is running, the monitor checks for a newer successful
+scanner run (COMPLETED or PARTIAL — a run in which every market failed does not
+count) every 60 seconds (one single-row read) and reloads only when there is
+one; that is what catches a `scanner:once` from another terminal. The 10-minute
+full reload remains as a safety net. Any check interval under five minutes keeps
+a Neon compute from auto-suspending — under the engine the handoff is already
+immediate, so a longer interval (e.g. `330000`) is reasonable if compute hours
+matter.
 
 ## Risk and position sizing
 

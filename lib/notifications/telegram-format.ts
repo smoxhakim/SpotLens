@@ -1,6 +1,7 @@
 import { isPrimarySignal, type ConfirmationSignalType } from "@/lib/analysis/confirmation";
 import { ANALYSIS_DISCLAIMER, SPOT_ONLY_NOTE } from "@/lib/constants/disclaimers";
 
+import { formatAge, utcClock } from "./time";
 import type { LifecycleNotificationEventType, NotificationEvent, SetupFacts } from "./types";
 
 /**
@@ -133,8 +134,6 @@ function bold(text: string): string {
   return `*${escape(text)}*`;
 }
 
-const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-
 /**
  * When something happened, as a person would say it.
  *
@@ -150,12 +149,7 @@ const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "
  * re-rendering a stored event a year later produces the identical line.
  */
 function clock(at: number): string {
-  const d = new Date(at);
-  const day = d.getUTCDate();
-  const month = MONTHS[d.getUTCMonth()];
-  const hh = String(d.getUTCHours()).padStart(2, "0");
-  const mm = String(d.getUTCMinutes()).padStart(2, "0");
-  return `${day} ${month}, ${hh}:${mm} UTC`;
+  return utcClock(at);
 }
 
 /**
@@ -465,6 +459,10 @@ export function formatEntryZoneReached(event: NotificationEvent): string {
     `${bold("Price")}: ${price(seen.observedPrice)}`,
     `${bold("Entry zone")}: ${price(setup.entryLow)} – ${price(setup.entryHigh)}`,
     `${bold("Seen at")}: ${escape(clock(seen.observedAt))}`,
+    // How old the analysis behind this alert is. The alert is only raised when
+    // a recent completed scan re-confirmed the setup; this shows how recent.
+    `${bold("Last scan")}: ${escape(`${clock(seen.scanCompletedAt)} (${formatAge(seen.observedAt - seen.scanCompletedAt)} before this alert)`)}`,
+    `${bold("Tracked since")}: ${escape(`${clock(seen.setupCreatedAt)} (${formatAge(seen.observedAt - seen.setupCreatedAt)})`)}`,
     `${bold("Confirmation")}: ${escape(labelFrom(LIFECYCLE_LABELS, setup.lifecycleStatus))} ${escape("(last scan)")}`,
     `${bold("Quality")}: ${escape(setup.score)}/100 · ${escape(humanise(setup.scoreGrade))}`,
     rewardLine(setup),

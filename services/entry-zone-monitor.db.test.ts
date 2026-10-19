@@ -51,6 +51,36 @@ describe.skipIf(!url)("entry-zone monitor on a real database", () => {
   let clock = Date.UTC(2026, 9, 3, 12);
   let price = 110;
   let symbol = "";
+  let pairId = "";
+  const runIds: string[] = [];
+
+  /**
+   * What a completed scanner pass leaves behind for a setup it re-confirmed: a
+   * finished run and an OK result pointing at the setup. Real rows, so the
+   * freshness query is exercised against Postgres itself.
+   */
+  async function verifyByScan(trackedSetupId: string, at: number) {
+    const run = await prisma.scannerRun.create({
+      data: {
+        timeframes: ["H1"],
+        triggeredBy: "SCHEDULE",
+        status: "COMPLETED",
+        startedAt: new Date(at - 60_000),
+        completedAt: new Date(at),
+      },
+    });
+    runIds.push(run.id);
+    await prisma.scannerResult.create({
+      data: {
+        scannerRunId: run.id,
+        tradingPairId: pairId,
+        timeframe: "H1",
+        status: "OK",
+        trackedSetupId,
+        createdAt: new Date(at),
+      },
+    });
+  }
 
   // Quotes this test's own market and nothing else. The monitor watches every
   // open setup in the database, so a provider that priced every symbol would
@@ -117,10 +147,13 @@ describe.skipIf(!url)("entry-zone monitor on a real database", () => {
     });
     setupId = setup.id;
     symbol = pair.exchangeSymbol;
+    pairId = pair.id;
+    await verifyByScan(setupId, clock - 5 * 60_000);
   });
 
   afterAll(async () => {
     if (!prisma) return;
+    await prisma.scannerRun.deleteMany({ where: { id: { in: runIds } } });
     await prisma.user.deleteMany({ where: { email: `${RUN}@example.test` } });
     await prisma.asset.deleteMany({ where: { symbol: { startsWith: "EZM" } } });
     await prisma.$disconnect();
@@ -191,6 +224,137 @@ describe.skipIf(!url)("entry-zone monitor on a real database", () => {
     expect(
       await prisma.setupEntryZoneWatch.count({ where: { trackedSetupId: { not: setupId } } }),
     ).toBe(watchesBefore);
+  });
+
+  it("a completed scanner run is noticed, and the setup it created is watched on the reload", async () => {
+    const monitor = createEntryZoneMonitor({ provider, now: () => clock });
+    await monitor.refresh();
+    const before = monitor.watching();
+    expect(await monitor.newerScannerRun()).toBeNull();
+
+    // What a scanner pass leaves behind: a new open setup, then a completed run.
+    const created = await prisma.trackedSetup.create({
+      data: {
+        userId,
+        tradingPairId: pairId,
+        timeframe: "H4",
+        status: "SETUP_FORMING",
+        entryLow: "90.00000000",
+        entryHigh: "95.00000000",
+        stopLoss: "88.00000000",
+        riskReward: "2.10",
+        riskRewardIsSynthetic: false,
+        score: 75,
+        scoreGrade: "STRONG",
+        analysisStatus: "WAIT_FOR_CONFIRMATION",
+        snapshot: { entryReason: "fixture", statusReason: "fixture", trend: "BULLISH" },
+        originZoneLow: "90.00000000",
+        originZoneHigh: "95.00000000",
+        events: { create: { type: "CREATED", toStatus: "SETUP_FORMING", detail: "fixture" } },
+      },
+    });
+    const run = await prisma.scannerRun.create({
+      data: {
+        timeframes: ["H4"],
+        triggeredBy: "SCHEDULE",
+        status: "COMPLETED",
+        startedAt: new Date(Date.now() + 60_000),
+        completedAt: new Date(Date.now() + 61_000),
+      },
+    });
+
+    try {
+      expect(await monitor.newerScannerRun()).toBe(run.id);
+      expect((await monitor.refresh()).scannerRunId).toBe(run.id);
+      expect(monitor.watching()).toBe(before + 1);
+      expect(await monitor.newerScannerRun()).toBeNull();
+
+      // Nothing about the reload wrote anything for the new setup.
+      expect(
+        await prisma.setupEntryZoneWatch.count({ where: { trackedSetupId: created.id } }),
+      ).toBe(0);
+    } finally {
+      await prisma.scannerRun.delete({ where: { id: run.id } });
+    }
+  });
+
+  it("a FAILED run — the newest finished run — is neither the reload cursor nor a catch-up pass", async () => {
+    const { lastSuccessfulPassStartedAt } = await import("./scanner");
+    const monitor = createEntryZoneMonitor({ provider, now: () => clock });
+    const cursor = (await monitor.refresh()).scannerRunId;
+    const lastPass = await lastSuccessfulPassStartedAt();
+
+    // Every market failed: finished, newer than anything else, and empty.
+    const failed = await prisma.scannerRun.create({
+      data: {
+        timeframes: ["H1", "H4"],
+        triggeredBy: "SCHEDULE",
+        status: "FAILED",
+        startedAt: new Date(Date.now() + 120_000),
+        completedAt: new Date(Date.now() + 121_000),
+      },
+    });
+
+    try {
+      expect(await monitor.newerScannerRun()).toBeNull();
+      expect((await monitor.refresh()).scannerRunId).toBe(cursor);
+      expect(await lastSuccessfulPassStartedAt()).toEqual(lastPass);
+
+      // The same run as PARTIAL is a pass, for both.
+      await prisma.scannerRun.update({ where: { id: failed.id }, data: { status: "PARTIAL" } });
+      expect(await monitor.newerScannerRun()).toBe(failed.id);
+      expect(await lastSuccessfulPassStartedAt()).toEqual(failed.startedAt);
+    } finally {
+      await prisma.scannerRun.delete({ where: { id: failed.id } });
+    }
+  });
+
+  it("a stale setup inside its zone is withheld on a real database: nothing written", async () => {
+    const stale = await prisma.trackedSetup.create({
+      data: {
+        userId,
+        tradingPairId: pairId,
+        timeframe: "H1",
+        status: "SETUP_FORMING",
+        entryLow: "120.00000000",
+        entryHigh: "125.00000000",
+        stopLoss: "118.00000000",
+        riskReward: "2.10",
+        riskRewardIsSynthetic: false,
+        score: 75,
+        scoreGrade: "STRONG",
+        analysisStatus: "WAIT_FOR_CONFIRMATION",
+        snapshot: { entryReason: "fixture", statusReason: "fixture", trend: "BULLISH" },
+        originZoneLow: "120.00000000",
+        originZoneHigh: "125.00000000",
+        events: { create: { type: "CREATED", toStatus: "SETUP_FORMING", detail: "fixture" } },
+      },
+    });
+    // Re-confirmed by a completed scan two hours ago: past H1's 1h15m limit.
+    await verifyByScan(stale.id, clock - 2 * 60 * 60_000);
+
+    const monitor = createEntryZoneMonitor({ provider, now: () => clock });
+    await monitor.refresh();
+    price = 122;
+    const outcome = await monitor.tick();
+
+    expect(outcome.withheld).toBe(1);
+    expect(await prisma.notification.count({ where: { trackedSetupId: stale.id } })).toBe(0);
+    const watch = await prisma.setupEntryZoneWatch.findUnique({
+      where: { trackedSetupId: stale.id },
+    });
+    expect(watch?.reachedAt ?? null).toBeNull();
+
+    // A fresh scan re-confirms it; the next tick, price still inside, alerts once.
+    await verifyByScan(stale.id, clock - 60_000);
+    await monitor.refresh();
+    expect((await monitor.tick()).alerts).toBe(1);
+    expect((await monitor.tick()).alerts).toBe(0);
+    expect(
+      await prisma.notification.count({
+        where: { trackedSetupId: stale.id, channel: "IN_APP" },
+      }),
+    ).toBe(1);
   });
 
   it("the database itself refuses a second row for the same setup and channel", async () => {

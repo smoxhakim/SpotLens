@@ -26,6 +26,15 @@ interface SetupRow {
   createdStatus: string;
   analysisStatus: string;
   riskRewardIsSynthetic: boolean;
+  createdAt?: Date;
+}
+
+/** One `ScannerResult` joined to its run, as far as the freshness query reads it. */
+interface ResultRow {
+  trackedSetupId: string | null;
+  status: "OK" | "FAILED";
+  createdAt: Date;
+  run: { status: "RUNNING" | "COMPLETED" | "PARTIAL" | "FAILED"; completedAt: Date | null };
 }
 
 interface WatchRow {
@@ -55,6 +64,15 @@ const store = {
   prefs: new Map<string, Record<string, boolean>>(),
   chats: new Map<string, string>(),
   failNotificationWrites: false,
+  /**
+   * Scanner runs, newest last. A bare id is a COMPLETED run; a run can also be
+   * given its status, and one still RUNNING has no `completedAt`.
+   */
+  scannerRuns: [] as (
+    string | { id: string; status: "RUNNING" | "COMPLETED" | "PARTIAL" | "FAILED" }
+  )[],
+  /** Scanner results with their run, for the setup-freshness provenance. */
+  results: [] as ResultRow[],
 };
 
 function uniqueViolation() {
@@ -62,6 +80,50 @@ function uniqueViolation() {
 }
 
 const db = {
+  // Applies exactly the filters `latestVerifiedScans` sends, so a result the
+  // real query would ignore is ignored here too.
+  scannerResult: {
+    findMany: vi.fn(
+      async ({
+        where,
+      }: {
+        where: {
+          trackedSetupId: { in: string[] };
+          status: string;
+          createdAt: { gte: Date };
+          scannerRun: { completedAt: { not: null }; status: { in: string[] } };
+        };
+      }) =>
+        store.results
+          .filter(
+            (r) =>
+              r.trackedSetupId !== null &&
+              where.trackedSetupId.in.includes(r.trackedSetupId) &&
+              r.status === where.status &&
+              r.createdAt >= where.createdAt.gte &&
+              r.run.completedAt !== null &&
+              where.scannerRun.status.in.includes(r.run.status),
+          )
+          .map((r) => ({
+            trackedSetupId: r.trackedSetupId,
+            scannerRun: { completedAt: r.run.completedAt },
+          })),
+    ),
+  },
+  // Applies the filters `latestCompletedScannerRun` sends, so a run the real
+  // query would skip — still running, or FAILED — is skipped here too.
+  scannerRun: {
+    findFirst: vi.fn(
+      async ({ where }: { where: { completedAt: { not: null }; status: { in: string[] } } }) => {
+        const match = store.scannerRuns
+          .map((r) => (typeof r === "string" ? { id: r, status: "COMPLETED" } : r))
+          .map((r) => ({ ...r, completedAt: r.status === "RUNNING" ? null : new Date(clock) }))
+          .filter((r) => r.completedAt !== null && where.status.in.includes(r.status))
+          .at(-1);
+        return match ? { id: match.id } : null;
+      },
+    ),
+  },
   trackedSetup: {
     findMany: vi.fn(async () =>
       store.setups
@@ -72,6 +134,7 @@ const db = {
           timeframe: s.timeframe,
           entryLow: s.entryLow,
           entryHigh: s.entryHigh,
+          createdAt: s.createdAt ?? new Date(clock - 2 * 60 * 60_000),
           tradingPair: { exchangeSymbol: s.symbol },
           events: [{ toStatus: s.createdStatus }],
           entryZoneWatch: store.watches.get(s.id)
@@ -250,7 +313,35 @@ function monitorFor(feed: ReturnType<typeof fakeProvider>) {
   return createEntryZoneMonitor({ provider: feed.provider, now: () => clock });
 }
 
-function addSetup(overrides: Partial<SetupRow> = {}): SetupRow {
+/** Records that a completed (by default) scan re-confirmed `setup` at `at`. */
+function verify(
+  setup: SetupRow,
+  at: number,
+  options: {
+    runStatus?: ResultRow["run"]["status"];
+    resultStatus?: "OK" | "FAILED";
+    completed?: boolean;
+  } = {},
+) {
+  store.results.push({
+    trackedSetupId: setup.id,
+    status: options.resultStatus ?? "OK",
+    createdAt: new Date(at),
+    run: {
+      status: options.runStatus ?? "COMPLETED",
+      completedAt: options.completed === false ? null : new Date(at),
+    },
+  });
+}
+
+/**
+ * A setup as the scanner leaves it: tracked, and re-confirmed by a completed
+ * pass five minutes ago. Pass `{ verified: false }` for one with no provenance.
+ */
+function addSetup(
+  overrides: Partial<SetupRow> = {},
+  options: { verified?: boolean } = {},
+): SetupRow {
   const row: SetupRow = {
     id: `setup-${store.setups.length + 1}`,
     userId: "user-1",
@@ -265,6 +356,7 @@ function addSetup(overrides: Partial<SetupRow> = {}): SetupRow {
     ...overrides,
   };
   store.setups.push(row);
+  if (options.verified !== false) verify(row, clock - 5 * 60_000);
   return row;
 }
 
@@ -283,6 +375,8 @@ beforeEach(() => {
   store.prefs = new Map();
   store.chats = new Map();
   store.failNotificationWrites = false;
+  store.scannerRuns = [];
+  store.results = [];
   clock = Date.UTC(2026, 9, 3, 12);
   vi.clearAllMocks();
   sendTelegramMessage.mockResolvedValue({ ok: true, attempts: 1, retryable: false });
@@ -688,6 +782,348 @@ describe("failure", () => {
     store.failNotificationWrites = false;
     expect((await monitor.tick()).alerts).toBe(1);
     expect(rowsFor(setup.id)).toHaveLength(1);
+  });
+});
+
+describe("scanner handoff", () => {
+  it("a completed scanner run newer than the last reload is reported; the same run is not", async () => {
+    store.scannerRuns = ["run-1"];
+    const monitor = monitorFor(fakeProvider());
+    expect((await monitor.refresh()).scannerRunId).toBe("run-1");
+
+    expect(await monitor.newerScannerRun()).toBeNull();
+    store.scannerRuns.push("run-2");
+    expect(await monitor.newerScannerRun()).toBe("run-2");
+
+    await monitor.refresh();
+    expect(await monitor.newerScannerRun()).toBeNull();
+  });
+
+  it("a new scan's setup is watched as soon as the monitor reloads, not at the periodic reload", async () => {
+    addSetup({ symbol: "BTCUSDT" });
+    store.scannerRuns = ["run-1"];
+    const feed = fakeProvider();
+    const monitor = monitorFor(feed);
+    await monitor.refresh();
+    expect(monitor.watching()).toBe(1);
+
+    // The scanner completes a pass that creates a setup on another market.
+    const eth = addSetup({ symbol: "ETHUSDT", entryLow: 2000, entryHigh: 2010 });
+    store.scannerRuns.push("run-2");
+
+    expect(await monitor.newerScannerRun()).toBe("run-2");
+    await monitor.refresh();
+    expect(monitor.watching()).toBe(2);
+
+    feed.set("BTCUSDT", 110);
+    feed.set("ETHUSDT", 2050);
+    await monitor.tick();
+    feed.set("ETHUSDT", 2005);
+    expect((await monitor.tick()).alerts).toBe(1);
+    expect(rowsFor(eth.id)).toHaveLength(1);
+    expect(feed.requests.at(-1)).toEqual(["BTCUSDT", "ETHUSDT"]);
+  });
+
+  it("a reload after a new scan does not re-alert a setup that already alerted", async () => {
+    const setup = addSetup();
+    store.scannerRuns = ["run-1"];
+    const feed = fakeProvider();
+    const monitor = monitorFor(feed);
+    await monitor.refresh();
+    feed.set("BTCUSDT", 102);
+    expect((await monitor.tick()).alerts).toBe(1);
+
+    for (const run of ["run-2", "run-3"]) {
+      store.scannerRuns.push(run);
+      await monitor.refresh();
+      expect((await monitor.tick()).alerts).toBe(0);
+    }
+    expect(rowsFor(setup.id)).toHaveLength(1);
+    expect(store.watches.size).toBe(1);
+  });
+
+  it("a setup the scan replaced stops being watched; its replacement is watched and may alert", async () => {
+    const old = addSetup({ entryLow: 100, entryHigh: 105 });
+    store.scannerRuns = ["run-1"];
+    const feed = fakeProvider();
+    const monitor = monitorFor(feed);
+    await monitor.refresh();
+
+    // The pass re-anchors: old setup invalidated, a new one on a nearby level.
+    old.status = "INVALIDATED";
+    const replacement = addSetup({ entryLow: 95, entryHigh: 99 });
+    store.scannerRuns.push("run-2");
+    await monitor.refresh();
+    expect(monitor.watching()).toBe(1);
+
+    feed.set("BTCUSDT", 102); // inside the OLD zone only
+    expect((await monitor.tick()).alerts).toBe(0);
+    feed.set("BTCUSDT", 97); // inside the replacement's zone
+    expect((await monitor.tick()).alerts).toBe(1);
+
+    expect(rowsFor(old.id)).toHaveLength(0);
+    expect(rowsFor(replacement.id)).toHaveLength(1);
+    // The old setup is not deleted — only no longer watched.
+    expect(store.setups.find((s) => s.id === old.id)?.status).toBe("INVALIDATED");
+  });
+
+  it("a FAILED run is never a new run to reload for; a PARTIAL one is", async () => {
+    store.scannerRuns = ["run-1"];
+    const monitor = monitorFor(fakeProvider());
+    expect((await monitor.refresh()).scannerRunId).toBe("run-1");
+
+    // Every market failed: the run finished, but there is nothing new to load.
+    store.scannerRuns.push({ id: "run-2", status: "FAILED" });
+    expect(await monitor.newerScannerRun()).toBeNull();
+    expect((await monitor.refresh()).scannerRunId).toBe("run-1");
+
+    // Still in progress: not yet.
+    store.scannerRuns.push({ id: "run-3", status: "RUNNING" });
+    expect(await monitor.newerScannerRun()).toBeNull();
+
+    // Some markets failed, the rest were scanned: that is a pass.
+    store.scannerRuns.push({ id: "run-4", status: "PARTIAL" });
+    expect(await monitor.newerScannerRun()).toBe("run-4");
+    expect(db.scannerRun.findFirst).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        where: { completedAt: { not: null }, status: { in: ["COMPLETED", "PARTIAL"] } },
+      }),
+    );
+  });
+
+  it("a failed scanner-run check is not mistaken for a new run", async () => {
+    store.scannerRuns = ["run-1"];
+    const monitor = monitorFor(fakeProvider());
+    await monitor.refresh();
+    db.scannerRun.findFirst.mockRejectedValueOnce(new Error("connection closed"));
+    expect(await monitor.newerScannerRun()).toBeNull();
+  });
+
+  it("a restarted monitor (new process) reloads, sees the latest run, and stays idempotent", async () => {
+    const setup = addSetup();
+    store.scannerRuns = ["run-1"];
+    const feed = fakeProvider();
+    const first = monitorFor(feed);
+    await first.refresh();
+    feed.set("BTCUSDT", 102);
+    await first.tick();
+
+    store.scannerRuns.push("run-2");
+    const second = monitorFor(feed); // the engine restarted the monitor
+    expect((await second.refresh()).scannerRunId).toBe("run-2");
+    expect(await second.newerScannerRun()).toBeNull();
+    await second.tick();
+
+    expect(rowsFor(setup.id)).toHaveLength(1);
+  });
+});
+
+describe("setup freshness guard", () => {
+  const H = 60 * 60_000;
+
+  /** A setup sitting inside its zone, armed by creation, with a chosen provenance. */
+  async function insideWithProvenance(
+    provenance: (setup: SetupRow) => void,
+    overrides: Partial<SetupRow> = {},
+  ) {
+    connectTelegram("user-1");
+    const setup = addSetup(overrides, { verified: false });
+    provenance(setup);
+    const feed = fakeProvider();
+    const logs: string[] = [];
+    const monitor = createEntryZoneMonitor({
+      provider: feed.provider,
+      now: () => clock,
+      log: (m) => logs.push(m),
+    });
+    await monitor.refresh();
+    feed.set("BTCUSDT", 102);
+    return { setup, feed, monitor, logs };
+  }
+
+  const nothingWritten = (setupId: string) => {
+    expect(rowsFor(setupId)).toHaveLength(0);
+    expect(store.watches.get(setupId)?.reachedAt ?? null).toBeNull();
+    expect(sendTelegramMessage).not.toHaveBeenCalled();
+  };
+
+  it("1. a setup re-confirmed by a completed scan still alerts, with the scan time on it", async () => {
+    const { setup, monitor } = await insideWithProvenance((s) => verify(s, clock - 20 * 60_000));
+    expect((await monitor.tick()).alerts).toBe(1);
+
+    expect(
+      rowsFor(setup.id)
+        .map((n) => n.channel)
+        .sort(),
+    ).toEqual(["IN_APP", "TELEGRAM"]);
+    const inApp = rowsFor(setup.id).find((n) => n.channel === "IN_APP")!;
+    expect(inApp.body).toContain("(20 min before this alert)");
+  });
+
+  it("2. a stale setup is withheld: no notification, no Telegram, not marked reached", async () => {
+    // H1, last re-confirmed two hours ago: limit is 1h15m.
+    const { setup, monitor, logs } = await insideWithProvenance((s) => verify(s, clock - 2 * H));
+
+    const out = await monitor.tick();
+    expect(out).toMatchObject({ alerts: 0, withheld: 1 });
+    nothingWritten(setup.id);
+    expect(
+      logs.some((l) =>
+        /alert WITHHELD: BTCUSDT H1 .* last re-confirmed by a scan 120 min ago, limit 75 min/.test(
+          l,
+        ),
+      ),
+    ).toBe(true);
+  });
+
+  it("2b. the audit's case — a two-week-old H4 setup — is withheld", async () => {
+    const { setup, monitor } = await insideWithProvenance((s) => verify(s, clock - 14 * 24 * H), {
+      timeframe: "H4",
+    });
+    expect((await monitor.tick()).withheld).toBe(1);
+    nothingWritten(setup.id);
+  });
+
+  it("2c. a withheld alert is logged once, not every tick, and costs no query per tick", async () => {
+    const { monitor, logs } = await insideWithProvenance((s) => verify(s, clock - 2 * H));
+    const before = db.scannerResult.findMany.mock.calls.length;
+    for (let i = 0; i < 5; i += 1) {
+      clock += 10_000;
+      await monitor.tick();
+    }
+    expect(logs.filter((l) => /WITHHELD/.test(l))).toHaveLength(1);
+    expect(db.scannerResult.findMany.mock.calls.length).toBe(before);
+  });
+
+  it("3. no provenance at all fails closed", async () => {
+    const { setup, monitor, logs } = await insideWithProvenance(() => undefined);
+    expect((await monitor.tick()).withheld).toBe(1);
+    nothingWritten(setup.id);
+    expect(logs.some((l) => /no completed scan has re-confirmed this setup/.test(l))).toBe(true);
+  });
+
+  it("3b. a verification timestamp from the future fails closed", async () => {
+    const { setup, monitor } = await insideWithProvenance((s) => verify(s, clock + 2 * H));
+    expect((await monitor.tick()).withheld).toBe(1);
+    nothingWritten(setup.id);
+  });
+
+  it.each([
+    ["a run still in progress", { runStatus: "RUNNING" as const, completed: false }],
+    ["a run with no completion time", { runStatus: "COMPLETED" as const, completed: false }],
+    ["a FAILED run", { runStatus: "FAILED" as const }],
+    ["a failed result for this market", { resultStatus: "FAILED" as const }],
+  ])("4. %s cannot make a setup fresh", async (_label, options) => {
+    const { setup, monitor } = await insideWithProvenance((s) =>
+      verify(s, clock - 5 * 60_000, options),
+    );
+    expect((await monitor.tick()).withheld).toBe(1);
+    nothingWritten(setup.id);
+  });
+
+  it("4b. a PARTIAL run counts when this market's own result succeeded", async () => {
+    const { setup, monitor } = await insideWithProvenance((s) =>
+      verify(s, clock - 5 * 60_000, { runStatus: "PARTIAL" }),
+    );
+    expect((await monitor.tick()).alerts).toBe(1);
+    expect(rowsFor(setup.id).length).toBeGreaterThan(0);
+  });
+
+  it("4c. the newest trusted verification wins over older ones", async () => {
+    const { monitor } = await insideWithProvenance((s) => {
+      verify(s, clock - 3 * H);
+      verify(s, clock - 10 * 60_000, { runStatus: "FAILED" }); // newer, but untrusted
+      verify(s, clock - 30 * 60_000); // newest trusted
+    });
+    expect((await monitor.tick()).alerts).toBe(1);
+  });
+
+  it("5. a restart does not let a stale setup through", async () => {
+    const { setup, feed } = await insideWithProvenance((s) => verify(s, clock - 2 * H));
+    for (let i = 0; i < 3; i += 1) {
+      const restarted = monitorFor(feed);
+      await restarted.refresh();
+      expect((await restarted.tick()).withheld).toBe(1);
+    }
+    nothingWritten(setup.id);
+  });
+
+  it("5b. a fresh setup that ages past the limit without a reload is withheld", async () => {
+    const { setup, feed, monitor } = await insideWithProvenance((s) =>
+      verify(s, clock - 10 * 60_000),
+    );
+    feed.set("BTCUSDT", 110); // outside: nothing to alert yet
+    await monitor.tick();
+    clock += 2 * H; // no scan, no reload
+    feed.set("BTCUSDT", 102);
+    expect((await monitor.tick()).withheld).toBe(1);
+    nothingWritten(setup.id);
+  });
+
+  it("5c. the alert-time check reads the database, not the reload's copy", async () => {
+    const { setup, monitor } = await insideWithProvenance((s) => verify(s, clock - 10 * 60_000));
+    // After the reload, the verification disappears (e.g. the run was deleted).
+    store.results = [];
+    expect((await monitor.tick()).withheld).toBe(1);
+    nothingWritten(setup.id);
+  });
+
+  it("6. withheld, then a fresh scan re-confirms it with price still inside: one alert, then no duplicate", async () => {
+    const { setup, monitor } = await insideWithProvenance((s) => verify(s, clock - 2 * H));
+    expect((await monitor.tick()).withheld).toBe(1);
+
+    clock += 60_000;
+    verify(setup, clock); // the scanner's next pass re-confirms the setup
+    await monitor.refresh();
+    expect((await monitor.tick()).alerts).toBe(1);
+
+    for (let i = 0; i < 3; i += 1) {
+      clock += 10_000;
+      expect((await monitor.tick()).alerts).toBe(0);
+    }
+    expect(
+      rowsFor(setup.id)
+        .map((n) => n.channel)
+        .sort(),
+    ).toEqual(["IN_APP", "TELEGRAM"]);
+    expect(sendTelegramMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it("a stale setup still records price facts: it can be armed", async () => {
+    const setup = addSetup({ createdStatus: "WAITING_CONFIRMATION" }, { verified: false });
+    verify(setup, clock - 3 * H);
+    const feed = fakeProvider();
+    const monitor = monitorFor(feed);
+    await monitor.refresh();
+    feed.set("BTCUSDT", 110);
+    expect((await monitor.tick()).armed).toBe(1);
+    expect(store.watches.get(setup.id)?.armedAt).not.toBeNull();
+  });
+
+  it("7. preferences still apply to a fresh setup: switched off writes nothing", async () => {
+    store.prefs.set("user-1", { ...DEFAULT_PREFERENCES, entryZoneReached: false });
+    const setup = addSetup();
+    const feed = fakeProvider();
+    const monitor = monitorFor(feed);
+    await monitor.refresh();
+    feed.set("BTCUSDT", 102);
+    await monitor.tick();
+    expect(rowsFor(setup.id)).toHaveLength(0);
+  });
+
+  it("the configured multiplier is honoured", async () => {
+    connectTelegram("user-1");
+    const setup = addSetup({}, { verified: false });
+    verify(setup, clock - 2 * H);
+    const feed = fakeProvider();
+    const monitor = createEntryZoneMonitor({
+      provider: feed.provider,
+      now: () => clock,
+      maxSetupAgeCandles: 3,
+    });
+    await monitor.refresh();
+    feed.set("BTCUSDT", 102);
+    expect((await monitor.tick()).alerts).toBe(1);
   });
 });
 

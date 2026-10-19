@@ -32,6 +32,65 @@ open items are collected here.
       image has still never been built.
 - [ ] Optional: tighten CSP off `unsafe-inline`/`unsafe-eval` via nonces.
 
+## Phase 01 — setup freshness guard (committed on `feat/continuous-spotlens-engine` as `f90c34b`, awaiting review)
+
+The monitor alerted on setups from a scan two weeks old. It now alerts only on
+setups a completed scan re-confirmed within one candle of their timeframe
+(+15 min), configurable via `ENTRY_MONITOR_MAX_SETUP_AGE_CANDLES`; everything
+else is withheld and logged. No migration.
+
+- [ ] Review; decide the default (1 = strictest; 2 tolerates one missed pass).
+- [ ] Setups tracked only from the analysis page (no scanner provenance) never
+      alert — by design (fail closed); revisit only if that is unwanted.
+
+## Continuous engine (committed on `feat/continuous-spotlens-engine`, awaiting review)
+
+`npm run spotlens` runs the scanner and the entry-zone monitor together, so no
+pass has to be started by hand. See README → "Running SpotLens". Commits:
+`326d268` (engine), `f90c34b` (freshness guard), `572a379` (no orphans), and a
+follow-up fixing FAILED-run handling, docs and the orphan test.
+
+- [x] Supervisor with bounded restarts, clean shutdown, labelled output.
+- [x] Scanner → monitor relay: a completed pass makes the monitor reload at once.
+- [x] Monitor checks for a newer successful `ScannerRun` every 60s — standalone
+      **and** under the engine (see the Neon follow-up below).
+- [x] Startup catch-up pass when a scan window was missed.
+- [x] One engine, scanner and monitor per machine (PID locks).
+- [x] No orphans: SIGHUP handled like SIGTERM, the engine's exit kills
+      survivors, children stop when the engine's IPC channel closes, child
+      `error` events handled, a role held elsewhere is waited for (30s
+      re-check) instead of abandoned. Real-process tests in
+      `lib/engine/orphans.process.test.ts`.
+- [x] A FAILED scanner run (finished, nothing scanned) no longer counts as a
+      pass: catch-up, the monitor's reload cursor and freshness all use
+      `successfulPassWhere` (COMPLETED or PARTIAL).
+- [ ] CI has never run on this branch: it triggers only on a pull request or a
+      push to `main`. The real-process tests have run on macOS / Node 25 only;
+      CI is Linux / Node 20.
+- [ ] Controlled verification against Neon — awaiting approval.
+
+Open follow-ups, by priority:
+
+- [ ] **Before running the engine continuously against Neon:** the monitor's
+      60s scanner-run check also runs under the engine, where the relay
+      already makes it redundant, and a check more often than every five
+      minutes keeps a Neon compute from auto-suspending. Skip or lengthen the
+      check under the engine without changing standalone behaviour; until
+      then, set `ENTRY_MONITOR_SCANNER_CHECK_MS=330000` for engine runs.
+- [ ] Stale-lock takeover race (`lib/engine/lock.ts`, `acquireLock`): two
+      processes that find the same dead holder at the same instant can both
+      end up holding the lock. Needs a coincidence; worst case two scanners
+      and duplicate setups. Guard the stale-lock removal with a second
+      exclusive-create step.
+- [ ] PID reuse: a stale lock whose PID now belongs to an unrelated live
+      process is obeyed — standalone refuses to start, the engine waits
+      indefinitely (logged once, naming the PID). Record the holder's start
+      time in the lock.
+- [ ] An engine crash SIGKILLs healthy children (the exit hook cannot wait),
+      so a scanner killed mid-pass leaves its `ScannerRun` RUNNING forever.
+      Same as a second Ctrl-C or the 60s stop timeout today. Consider
+      finalising abandoned RUNNING runs on scanner startup.
+
 ## Entry-zone monitor (implemented on `feat/entry-zone-monitor`, awaiting review)
 
 Live `ENTRY_ZONE_REACHED`: once per setup, when the public price moves from

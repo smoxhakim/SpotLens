@@ -159,7 +159,47 @@ WAITING_CONFIRMATION` is price arriving somewhere, not structure changing,
   (verified live), so it is not used; older than 15s is skipped. It changes no
   lifecycle state, triggers no confirmation, creates no decision. Telegram (main
   bot) only for `analysisStatus` POTENTIAL_SETUP, or WAIT_FOR_CONFIRMATION with
-  a measured reward; everything else is in-app.
+  a measured reward; everything else is in-app. **No alert on stale analysis**
+  (`lib/entry-zone/freshness.ts`): a setup alerts only if a completed scan
+  re-confirmed it within `ENTRY_MONITOR_MAX_SETUP_AGE_CANDLES` (default 1) ×
+  its timeframe + 15 min. Provenance is `ScannerResult` (status OK,
+  `trackedSetupId` = the setup — the scanner writes the existing id on unchanged
+  passes) on a `ScannerRun` with `completedAt` and status COMPLETED/PARTIAL; the
+  time is the run's `completedAt`, never the setup's `createdAt`. Missing,
+  future or untrustworthy provenance fails closed. Checked from the reload and
+  re-checked from the database before delivery; a withheld alert writes nothing
+  and does not mark the setup reached. A monitor run for two weeks without a
+  scan once alerted on two-week-old setups — this is why.
+- **`npm run spotlens` supervises; it decides nothing.** `scripts/spotlens.ts`
+  runs `scripts/scanner.ts --catch-up` and `scripts/entry-zone-monitor.ts` as
+  child processes (`node --import tsx`, detached, one SIGINT each on Ctrl-C),
+  labels their output, and relays exactly one message: the scanner's
+  `scanner-run-completed` after a pass, which makes the monitor reload open
+  setups at once. The rules live in `lib/engine` (pure supervisor with injected
+  spawn/timers; restarts bounded at 3 per 15 minutes). `EXIT_ALREADY_RUNNING`
+  is not a crash: the supervisor waits, re-reading the role's lock every 30s
+  (`liveLockHolder`, read-only), and starts its own child once it is free — a
+  role held by an orphan is never abandoned. **No orphans:** SIGINT, SIGTERM and
+  SIGHUP (closed terminal) all take the graceful stop; the engine's `exit` hook
+  SIGKILLs any surviving child (`killSurvivors`, synchronous); each child stops
+  itself on IPC `disconnect` (`stopWhenEngineGone`, which also un-refs the
+  channel so a stopped child can exit); child-process `error` events are
+  handled in `adaptChildProcess`, a spawn failure becoming an exit the restart
+  policy sees. Real-process regressions: `lib/engine/orphans.process.test.ts`.
+  One child failing never stops the other. Each role —
+  engine, scanner, entry-zone — holds a PID lock under `.spotlens/locks/`, so a
+  second scanner cannot race the first into duplicate setups; a dead holder's
+  lock is taken over. `--catch-up` runs one pass on startup only when no
+  _successful_ pass has started since the latest close + settle delay, then the
+  schedule is unchanged. "Successful" is `successfulPassWhere`
+  (`lib/scanner/runs.ts`): COMPLETED or PARTIAL. A FAILED run has a
+  `completedAt` but scanned nothing, so it never cancels a catch-up, never
+  becomes the monitor's reload cursor and never makes a setup fresh. The
+  monitor checks the latest successful `ScannerRun` every 60s
+  (`ENTRY_MONITOR_SCANNER_CHECK_MS`) **whether or not it runs under the
+  engine** — the relay makes it redundant there, but `planRefresh` does not
+  know the engine exists, and the query keeps a Neon compute awake (open
+  follow-up in `TODO.md`). No schema change; the engine writes nothing.
 - **`TELEGRAM_BOT_TOKEN` is read in exactly one file**
   (`lib/notifications/telegram-provider.ts`) and never returned, logged, or
   stored. Errors are stripped of it before they reach a database row.
@@ -284,6 +324,7 @@ lib/
   risk/         position sizing, caps, costs (pure; one source of the formula)
   regime/       market environment classifier (pure; outside the engine)
   entry-zone/   live price vs stored entry zone: arming, once-per-setup (pure)
+  engine/       npm run spotlens: supervisor, run locks, catch-up rule
   coach/        educational reading of a recorded analysis (pure; owns no number)
 scripts/        the local scanner process (npm run scanner)
   market-data/  provider abstraction + Binance
@@ -298,6 +339,7 @@ npm run test                 # vitest — scope it: npx vitest run lib/analysis
 npm run e2e                  # playwright, serves on 3100 (3000 is often taken)
 npm run scanner              # local scanner: wakes after each candle close
 npm run scanner:once         # one pass over the universe, then exit
+npm run spotlens             # the engine: scanner + entry-zone monitor, supervised
 npm run monitor              # live entry-zone monitor (public prices, 10s poll)
 npm run lint && npm run typecheck
 npx prisma migrate deploy    # apply migrations

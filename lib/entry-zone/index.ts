@@ -24,6 +24,19 @@ export {
 
 export { entryZoneEvent } from "./event";
 
+export { DEFAULT_SCANNER_CHECK_MS, planRefresh, type RefreshPlan } from "./refresh";
+
+export {
+  DEFAULT_MAX_SETUP_AGE_CANDLES,
+  MAX_SETUP_AGE_CANDLES_CEILING,
+  SETUP_AGE_GRACE_MS,
+  maxSetupAgeMs,
+  parseMaxSetupAgeCandles,
+  setupFreshness,
+  type FreshnessVerdict,
+  type StaleReason,
+} from "./freshness";
+
 export type {
   PriceObservation,
   SkipReason,

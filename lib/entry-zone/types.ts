@@ -33,6 +33,13 @@ export interface WatchedSetup {
    * to have seen it. Any other creation state proves nothing either way.
    */
   createdOutside: boolean;
+  /** When the setup was first tracked, epoch ms. Shown on the alert; never a freshness signal. */
+  createdAt: number;
+  /**
+   * When a completed scanner pass last re-confirmed this setup, epoch ms — the
+   * freshness signal (see `setupFreshness`). Null when none ever has.
+   */
+  verifiedAt: number | null;
 }
 
 /**

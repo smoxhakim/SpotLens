@@ -74,3 +74,5 @@ export {
 } from "./telegram-provider";
 
 export { IN_APP_MARKERS, renderInApp, toneForNotification, type NotificationTone } from "./render";
+
+export { formatAge, utcClock } from "./time";
