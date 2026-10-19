@@ -273,7 +273,9 @@ async function recoverAbandonedRuns() {
  * only difference is that it does not wait for the next close. A failure is
  * logged and the schedule carries on — a catch-up pass is a convenience.
  */
-async function maybeCatchUp(userId: string) {
+async function maybeCatchUp(userId: string): Promise<number | null> {
+  // When the catch-up pass was decided — what it covers. Null if none ran.
+  let decidedAt: number | null = null;
   try {
     // A FAILED pass is finished but scanned nothing, so it does not count.
     const last = await lastSuccessfulPassStartedAt();
@@ -287,7 +289,7 @@ async function maybeCatchUp(userId: string) {
 
     if (!due) {
       log("Up to date with the schedule; no catch-up pass needed.");
-      return;
+      return null;
     }
 
     log(
@@ -297,13 +299,15 @@ async function maybeCatchUp(userId: string) {
 
     const settle = settlementDelayMs(timeframes, Date.now(), closeDelayMs);
     if (settle > 0) await sleep(settle, controller.signal);
-    if (controller.signal.aborted) return;
+    if (controller.signal.aborted) return null;
 
+    decidedAt = Date.now();
     await scan("SCHEDULE", timeframes, userId);
     await maybeSendDailySummary(userId);
   } catch (err) {
     log(`Catch-up pass failed: ${err instanceof Error ? err.message : "unknown error"}`);
   }
+  return decidedAt;
 }
 
 async function main() {
@@ -356,14 +360,16 @@ async function main() {
     return;
   }
 
-  if (catchUp) await maybeCatchUp(userId);
+  const caughtUpAt = catchUp ? await maybeCatchUp(userId) : null;
 
   log(`Scheduling ${closeDelayMs / 1000}s after each candle close. Ctrl-C to stop.`);
 
   // What each timeframe has been scanned through. Everything up to now counts as
   // covered (by the catch-up, or skipped as before); a close still settling does
-  // not, so the first plan takes it. See `ScannedThrough`.
-  let scannedThrough = scannedThroughAt(timeframes, Date.now(), closeDelayMs);
+  // not, so the first plan takes it. A catch-up pass covers what had settled when
+  // it *started*: a window that arrived while it ran is still due. See
+  // `ScannedThrough`.
+  let scannedThrough = scannedThroughAt(timeframes, caughtUpAt ?? Date.now(), closeDelayMs);
 
   while (!controller.signal.aborted) {
     const window = planScan({ timeframes, scannedThrough, delayMs: closeDelayMs });

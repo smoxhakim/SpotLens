@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   DEFAULT_CLOSE_DELAY_MS,
@@ -9,6 +9,7 @@ import {
   planScan,
   scanOnWake,
   scannedThroughAt,
+  sleep,
   type ScannedThrough,
 } from "@/lib/scanner";
 import type { Timeframe } from "@/lib/market-data/provider";
@@ -157,5 +158,155 @@ describe("edges", () => {
   it("latestScanWindow: the close's window once it has settled, the previous one until then", () => {
     expect(latestScanWindow("H1", at(10, 1, 30), DELAY)).toBe(at(10) + DELAY);
     expect(latestScanWindow("H1", at(10, 1, 29), DELAY)).toBe(at(9) + DELAY);
+  });
+});
+
+describe("startup at the settle boundary", () => {
+  it("a second before a close settles, that close is the first window", () => {
+    expect(loop(at(10, 1, 29)).plan()).toEqual({ at: at(10) + DELAY, timeframes: ["H1"] });
+  });
+
+  it("at the moment it settles or after, it counts as covered — the catch-up's job, as before", () => {
+    expect(loop(at(10, 1, 30)).plan()).toEqual({ at: at(11) + DELAY, timeframes: ["H1"] });
+    expect(loop(at(10, 1, 31)).plan()).toEqual({ at: at(11) + DELAY, timeframes: ["H1"] });
+  });
+
+  it("a catch-up pass covers what had settled when it started, not when it finished", () => {
+    // Catch-up decided at 10:59:10, finished at 11:01:40 — the 11:00 close settled
+    // (11:01:30) while it ran, so it is still due when the loop starts.
+    const covered = scannedThroughAt(BOTH, at(10, 59, 10), DELAY);
+    expect(planScan({ timeframes: BOTH, scannedThrough: covered, delayMs: DELAY })).toEqual({
+      at: at(11) + DELAY,
+      timeframes: ["H1"],
+    });
+    // Starting from the finish time instead would have skipped it to 12:01:30.
+    expect(
+      planScan({ timeframes: BOTH, scannedThrough: scannedThroughAt(BOTH, at(11, 1, 40), DELAY) })
+        .at,
+    ).toBe(at(12) + DELAY);
+  });
+});
+
+describe("over many cycles: nothing repeated, nothing skipped, nothing early", () => {
+  /** A small seeded PRNG, so the run is the same every time. */
+  function rng(seed: number) {
+    return () => {
+      seed = (seed + 0x6d2b79f5) | 0;
+      let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+
+  it("5,000 wake cycles with random passes, short delays and long sleeps", () => {
+    const random = rng(46);
+    let covered = scannedThroughAt(BOTH, at(0, 17), DELAY);
+    let clock = at(0, 17);
+    const scans: Partial<Record<Timeframe, number[]>> = { H1: [], H4: [] };
+
+    for (let i = 0; i < 5_000; i += 1) {
+      const plan = planScan({ timeframes: BOTH, scannedThrough: covered, delayMs: DELAY });
+      // The loop sleeps until the plan, or wakes late: timer jitter, a settle-period
+      // landing, or a lid shut for hours.
+      const roll = random();
+      const late =
+        roll < 0.6
+          ? random() * 50
+          : roll < 0.8
+            ? random() * 120_000
+            : roll < 0.95
+              ? random() * 4 * 60 * 60_000
+              : random() * 3 * 24 * 60 * 60_000;
+      const now = Math.max(clock, plan.at) + late;
+
+      const due = scanOnWake({
+        timeframes: BOTH,
+        scannedThrough: covered,
+        plannedAt: plan.at,
+        now,
+        delayMs: DELAY,
+      }).timeframes;
+
+      for (const tf of BOTH) {
+        const latest = latestScanWindow(tf, now, DELAY);
+        const prev = covered[tf]!;
+        // Nothing early: only settled windows exist to be due.
+        expect(latest).toBeLessThanOrEqual(now);
+        // Nothing repeated, nothing skipped: due exactly when a newer window settled.
+        expect(due.includes(tf)).toBe(latest > prev);
+        if (due.includes(tf)) scans[tf]!.push(latest);
+      }
+
+      covered = markScanned(covered, due, now, DELAY);
+      // After every wake, every settled window is covered — none left behind.
+      for (const tf of BOTH) expect(covered[tf]).toBe(latestScanWindow(tf, now, DELAY));
+      // The pass itself takes up to five minutes before the loop plans again.
+      clock = now + random() * 5 * 60_000;
+    }
+
+    for (const tf of BOTH) {
+      // Strictly increasing: no window was scanned twice.
+      const list = scans[tf]!;
+      expect(list.every((w, i) => i === 0 || w > list[i - 1])).toBe(true);
+    }
+    expect(scans.H1!.length).toBeGreaterThan(1_000);
+  });
+
+  it("on schedule for a week: H1 once an hour, H4 once every four, each at its settled window", () => {
+    let covered = scannedThroughAt(BOTH, at(0, 17), DELAY);
+    const scanned: string[] = [];
+    for (let i = 0; i < 7 * 24; i += 1) {
+      const plan = planScan({ timeframes: BOTH, scannedThrough: covered, delayMs: DELAY });
+      const due = scanOnWake({
+        timeframes: BOTH,
+        scannedThrough: covered,
+        plannedAt: plan.at,
+        now: plan.at,
+        delayMs: DELAY,
+      }).timeframes;
+      expect(due).toEqual(plan.timeframes);
+      expect((plan.at - DELAY) % (60 * 60_000)).toBe(0); // exactly close + settle delay
+      for (const tf of due) scanned.push(tf);
+      covered = markScanned(covered, due, plan.at, DELAY);
+    }
+    expect(scanned.filter((t) => t === "H1")).toHaveLength(7 * 24);
+    expect(scanned.filter((t) => t === "H4")).toHaveLength(7 * 6);
+  });
+});
+
+describe("stopping during a wait", () => {
+  // `sleep` is how the loop waits for a window and how the catch-up waits for a
+  // close to settle; Ctrl-C, SIGTERM and the engine going away all abort it.
+  afterEach(() => vi.useRealTimers());
+
+  it("an abort ends a long wait at once", async () => {
+    vi.useFakeTimers();
+    const controller = new AbortController();
+    let done = false;
+    const wait = sleep(4 * 60 * 60_000, controller.signal).then(() => (done = true));
+
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(done).toBe(false);
+    controller.abort();
+    await wait;
+    expect(done).toBe(true);
+    expect(vi.getTimerCount()).toBe(0); // the timer is cleared, nothing keeps the process up
+  });
+
+  it("an abort that came first means no wait at all", async () => {
+    vi.useFakeTimers();
+    const controller = new AbortController();
+    controller.abort();
+    await sleep(60_000, controller.signal);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("a plan already in the past waits zero, not a negative or NaN time", async () => {
+    vi.useFakeTimers();
+    let done = false;
+    const wait = sleep(-5_000).then(() => (done = true));
+    await vi.advanceTimersByTimeAsync(0);
+    await wait;
+    expect(done).toBe(true);
   });
 });
