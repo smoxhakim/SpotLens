@@ -645,9 +645,10 @@ export function describeScannerUserFailure(failure: ScannerUserFailure): string 
 }
 
 /**
- * How long a RUNNING run is believed to be a pass in progress. A pass takes a
- * minute or two; a RUNNING row older than this was left by a scanner that was
- * killed, and is closed as FAILED the next time a scanner starts.
+ * How long a RUNNING run is reported as a pass in progress. A pass takes a
+ * minute or two; a RUNNING row older than this was almost certainly left by a
+ * scanner that was killed. Display only — such a row is closed as FAILED by
+ * `closeAbandonedRuns`, on its own, more conservative bound.
  */
 export const PASS_IN_PROGRESS_MAX_AGE_MS = 30 * 60_000;
 
@@ -731,6 +732,42 @@ export async function getShortlist(input: { runId?: string; limit?: number; now?
     passInProgress: inProgress ? { startedAt: inProgress.startedAt.toISOString() } : null,
     shortlist,
   };
+}
+
+/**
+ * How old a RUNNING run must be before it is presumed abandoned.
+ *
+ * Longer than any pass can take: in the worst case every request times out —
+ * 15 s, three HTTP attempts, three scanner attempts, two candle fetches per
+ * analysis, 90 analyses four at a time — which is about 100 minutes. A live
+ * scanner on another machine pointed at the same database (the PID lock is
+ * local) is the only owner this process cannot rule out, and no pass of its can
+ * be this old.
+ */
+export const ABANDONED_RUN_AFTER_MS = 3 * 60 * 60_000;
+
+/**
+ * Closes runs that a scanner started and never finished — killed mid-pass by a
+ * second Ctrl-C, the engine's stop timeout or its crash hook, or `kill -9`.
+ * Left alone they stay RUNNING for ever.
+ *
+ * Called only by the process holding the scanner lock, and only between its own
+ * passes, so none of this process's runs is live; the age bound covers anyone
+ * else's. Such a run has no results — they are written only when a pass
+ * finishes — so FAILED is what it was. `completedAt` is when it was closed:
+ * when the process died is not recorded anywhere.
+ */
+export async function closeAbandonedRuns(now: number = Date.now()): Promise<number> {
+  if (!isDatabaseConfigured) return 0;
+  const result = await prisma.scannerRun.updateMany({
+    where: {
+      status: "RUNNING",
+      completedAt: null,
+      startedAt: { lt: new Date(now - ABANDONED_RUN_AFTER_MS) },
+    },
+    data: { status: "FAILED", completedAt: new Date(now) },
+  });
+  return result.count;
 }
 
 /**

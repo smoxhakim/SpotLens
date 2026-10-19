@@ -40,6 +40,7 @@ import { buildDailySummary, eventsFromScan } from "@/services/notification-event
 import { deliverEvents } from "@/services/notifications";
 import {
   DEFAULT_MAX_CONCURRENCY,
+  closeAbandonedRuns,
   describeScannerUserFailure,
   lastSuccessfulPassStartedAt,
   resolveScannerUser,
@@ -249,6 +250,18 @@ async function maybeSendDailySummary(userId: string) {
   }
 }
 
+/** `closeAbandonedRuns`, logged. A failure here must never stop a scan. */
+async function recoverAbandonedRuns() {
+  try {
+    const closed = await closeAbandonedRuns();
+    if (closed > 0) {
+      log(`Closed ${closed} scanner run(s) left RUNNING by a scanner that was stopped mid-pass.`);
+    }
+  } catch (err) {
+    log(`Could not close abandoned runs: ${err instanceof Error ? err.message : "unknown error"}`);
+  }
+}
+
 /**
  * One pass on startup if the schedule has missed a window.
  *
@@ -305,6 +318,10 @@ async function main() {
 
   const userId = owner.userId;
 
+  // This process holds the scanner lock and has not started a pass, so no run of
+  // its own is live; see `closeAbandonedRuns` for everyone else's.
+  await recoverAbandonedRuns();
+
   log(
     `Universe: every active curated market · timeframes ${timeframes.join(", ")} · ` +
       `concurrency ${concurrency}`,
@@ -354,6 +371,9 @@ async function main() {
     try {
       await scan("SCHEDULE", window.timeframes, userId);
       await maybeSendDailySummary(userId);
+      // Between passes again: a run abandoned since startup is closed within
+      // the hour it becomes old enough, not at the next restart.
+      await recoverAbandonedRuns();
     } catch (err) {
       // A pass that blows up must not end the process — the next candle close
       // is another chance, and a scanner that dies overnight is useless.

@@ -86,10 +86,10 @@ Open follow-ups, by priority:
       process is obeyed — standalone refuses to start, the engine waits
       indefinitely (logged once, naming the PID). Record the holder's start
       time in the lock.
-- [ ] An engine crash SIGKILLs healthy children (the exit hook cannot wait),
-      so a scanner killed mid-pass leaves its `ScannerRun` RUNNING forever.
-      Same as a second Ctrl-C or the 60s stop timeout today. Consider
-      finalising abandoned RUNNING runs on scanner startup.
+- [x] A scanner killed mid-pass (engine crash hook, second Ctrl-C, 60s stop
+      timeout, `kill -9`) left its `ScannerRun` RUNNING forever. The scanner
+      now closes RUNNING runs older than 3h as FAILED, after taking its lock
+      and between passes (`closeAbandonedRuns`); `fix/scanner-recovery`.
 
 ## Entry-zone monitor (implemented on `feat/entry-zone-monitor`, awaiting review)
 
