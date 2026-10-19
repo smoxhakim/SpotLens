@@ -9,12 +9,20 @@
 export {
   DEFAULT_CLOSE_DELAY_MS,
   DEFAULT_SCAN_TIMEFRAMES,
+  LATE_WAKE_TOLERANCE_MS,
   closedCandlesOnly,
   currentCandleOpen,
   nextCandleClose,
   nextScanWindow,
+  latestScanWindow,
+  markScanned,
+  planScan,
+  scanOnWake,
+  scannedThroughAt,
   settlementDelayMs,
+  type ScannedThrough,
   type ScanWindow,
+  type WakeScan,
 } from "./schedule";
 export { mapWithConcurrency, sleep } from "./concurrency";
 export {

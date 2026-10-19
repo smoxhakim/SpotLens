@@ -31,7 +31,10 @@ import { TIMEFRAME_LABELS, type Timeframe } from "@/lib/market-data/provider";
 import {
   DEFAULT_CLOSE_DELAY_MS,
   DEFAULT_SCAN_TIMEFRAMES,
-  nextScanWindow,
+  markScanned,
+  planScan,
+  scanOnWake,
+  scannedThroughAt,
   settlementDelayMs,
   sleep,
 } from "@/lib/scanner";
@@ -357,8 +360,13 @@ async function main() {
 
   log(`Scheduling ${closeDelayMs / 1000}s after each candle close. Ctrl-C to stop.`);
 
+  // What each timeframe has been scanned through. Everything up to now counts as
+  // covered (by the catch-up, or skipped as before); a close still settling does
+  // not, so the first plan takes it. See `ScannedThrough`.
+  let scannedThrough = scannedThroughAt(timeframes, Date.now(), closeDelayMs);
+
   while (!controller.signal.aborted) {
-    const window = nextScanWindow(timeframes, Date.now(), closeDelayMs);
+    const window = planScan({ timeframes, scannedThrough, delayMs: closeDelayMs });
     const waitMs = window.at - Date.now();
 
     log(
@@ -369,8 +377,30 @@ async function main() {
     await sleep(waitMs, controller.signal);
     if (controller.signal.aborted) break;
 
+    // Recalculated from the clock, not taken from the plan: after a sleep, every
+    // timeframe that closed meanwhile is due, not just the one the plan named.
+    const now = Date.now();
+    const wake = scanOnWake({
+      timeframes,
+      scannedThrough,
+      plannedAt: window.at,
+      now,
+      delayMs: closeDelayMs,
+    });
+    // Only if the clock went backwards; plan again rather than scan.
+    if (wake.timeframes.length === 0) continue;
+    if (wake.late) {
+      log(
+        `Woke ${Math.round(wake.lateByMs / 60_000)} min after the planned window — the machine ` +
+          `was probably asleep. Scanning ${wake.timeframes.join(" + ")}: every timeframe that ` +
+          "closed meanwhile.",
+      );
+    }
+    // Recorded before the pass, as the plan always moved on whatever the pass did.
+    scannedThrough = markScanned(scannedThrough, wake.timeframes, now, closeDelayMs);
+
     try {
-      await scan("SCHEDULE", window.timeframes, userId);
+      await scan("SCHEDULE", wake.timeframes, userId);
       await maybeSendDailySummary(userId);
       // Between passes again: a run abandoned since startup is closed within
       // the hour it becomes old enough, not at the next restart.

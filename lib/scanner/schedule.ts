@@ -82,6 +82,138 @@ export function nextScanWindow(
 }
 
 /**
+ * How late a wake can be and still count as on time. Timers fire a few
+ * milliseconds late routinely; a wake later than this means the process could
+ * not run — in practice, a laptop asleep with its lid shut.
+ */
+export const LATE_WAKE_TOLERANCE_MS = 60_000;
+
+/** The most recent scan window (a close plus the settle delay) at or before `now`. */
+export function latestScanWindow(
+  timeframe: Timeframe,
+  now: number,
+  delayMs: number = DEFAULT_CLOSE_DELAY_MS,
+): number {
+  const lastClose = currentCandleOpen(timeframe, now);
+  return lastClose + delayMs <= now
+    ? lastClose + delayMs
+    : lastClose - TIMEFRAME_MS[timeframe] + delayMs;
+}
+
+/**
+ * The scheduled scanner's memory: for each timeframe, the latest scan window a
+ * pass has covered.
+ *
+ * The loop used to plan from the clock alone — "the next close after now" — and
+ * scan whatever that plan named when the wait ended. Two windows fell through
+ * it. A plan made inside the settle period after a close skipped that close
+ * (it is not "after now", and its window had not arrived), so a scanner started
+ * at 10:00:30 waited for 11:01:30. And a plan made before the machine slept was
+ * stale when it woke: shut at 17:10 with "H1 at 18:01:30" planned, woken at
+ * 22:10, it scanned H1 only, though H4 closed at 20:00 — and H4 then waited for
+ * the 00:00 close, its setups unverified and their entry-zone alerts withheld
+ * for four hours. Remembering what was scanned closes both: the next plan is
+ * the first window after it, whenever that is, and a wake scans every timeframe
+ * with a newer window than it.
+ */
+export type ScannedThrough = Partial<Record<Timeframe, number>>;
+
+/**
+ * Where a scheduled scanner starts: every window up to `now` counts as covered —
+ * by the startup catch-up when it ran, or deliberately skipped when it did not,
+ * exactly as before. A close still inside its settle period is not covered, so
+ * the first plan takes it.
+ */
+export function scannedThroughAt(
+  timeframes: Timeframe[],
+  now: number,
+  delayMs: number = DEFAULT_CLOSE_DELAY_MS,
+): ScannedThrough {
+  return Object.fromEntries(timeframes.map((tf) => [tf, latestScanWindow(tf, now, delayMs)]));
+}
+
+/**
+ * The next window worth waking for: the earliest first-window-after-covered
+ * among the timeframes, and every timeframe sharing it. `at` may already be in
+ * the past — then the wait is zero and the scan is due now.
+ */
+export function planScan(input: {
+  timeframes: Timeframe[];
+  scannedThrough: ScannedThrough;
+  delayMs?: number;
+}): ScanWindow {
+  const delayMs = input.delayMs ?? DEFAULT_CLOSE_DELAY_MS;
+  const next = input.timeframes.map((timeframe) => {
+    const covered = input.scannedThrough[timeframe] ?? -Infinity;
+    return {
+      timeframe,
+      at: Number.isFinite(covered)
+        ? nextCandleClose(timeframe, covered - delayMs) + delayMs
+        : -Infinity,
+    };
+  });
+  const at = Math.min(...next.map((n) => n.at));
+  return {
+    at,
+    timeframes: next
+      .filter((n) => n.at === at)
+      .map((n) => n.timeframe)
+      .sort((a, b) => TIMEFRAME_MS[a] - TIMEFRAME_MS[b]),
+  };
+}
+
+export interface WakeScan {
+  /** Every timeframe with a window newer than what was covered. Empty: nothing is due. */
+  timeframes: Timeframe[];
+  /** How long after the planned window the wake came, ms (never negative). */
+  lateByMs: number;
+  /** Later than `LATE_WAKE_TOLERANCE_MS`: worth saying so in the log. */
+  late: boolean;
+}
+
+/**
+ * What to scan when the wait ends — recalculated from the clock, not taken from
+ * the plan. On time it is exactly the plan's timeframes; after a sleep it is
+ * every timeframe that closed meanwhile. Empty only if the clock went
+ * backwards; the loop then plans again rather than scanning.
+ */
+export function scanOnWake(input: {
+  timeframes: Timeframe[];
+  scannedThrough: ScannedThrough;
+  plannedAt: number;
+  now: number;
+  delayMs?: number;
+}): WakeScan {
+  const delayMs = input.delayMs ?? DEFAULT_CLOSE_DELAY_MS;
+  const lateByMs = Math.max(0, input.now - input.plannedAt);
+  return {
+    timeframes: input.timeframes
+      .filter(
+        (timeframe) =>
+          latestScanWindow(timeframe, input.now, delayMs) >
+          (input.scannedThrough[timeframe] ?? -Infinity),
+      )
+      .sort((a, b) => TIMEFRAME_MS[a] - TIMEFRAME_MS[b]),
+    lateByMs,
+    late: lateByMs > LATE_WAKE_TOLERANCE_MS,
+  };
+}
+
+/** Records a pass over `timeframes` at `now`. Never moves a timeframe backwards. */
+export function markScanned(
+  scannedThrough: ScannedThrough,
+  timeframes: Timeframe[],
+  now: number,
+  delayMs: number = DEFAULT_CLOSE_DELAY_MS,
+): ScannedThrough {
+  const next = { ...scannedThrough };
+  for (const tf of timeframes) {
+    next[tf] = Math.max(next[tf] ?? -Infinity, latestScanWindow(tf, now, delayMs));
+  }
+  return next;
+}
+
+/**
  * How long to wait before the most recently closed candle is safe to analyse.
  *
  * The same settlement policy the schedule uses, expressed for a scan that is

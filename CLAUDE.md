@@ -202,7 +202,12 @@ WAITING_CONFIRMATION` is price arriving somewhere, not structure changing,
   stopped part-way (Ctrl-C, SIGTERM, the engine going away) is FAILED too —
   `ScanSummary.interrupted` — even though the markets it reached keep their
   rows: it did not cover the universe. PARTIAL means markets failed on their
-  own. RUNNING runs older than 3h are closed as FAILED (`closeAbandonedRuns`). The
+  own. RUNNING runs older than 3h are closed as FAILED (`closeAbandonedRuns`).
+  The scheduled loop remembers what each timeframe was scanned through
+  (`ScannedThrough`, `lib/scanner/schedule.ts`): it plans the first window after
+  that, and on waking scans every timeframe with a newer window — so a laptop
+  that slept through an H4 close scans H4 on waking, and a close still settling
+  at startup is not skipped. On schedule it plans exactly what it always did. The
   monitor checks the latest successful `ScannerRun` every 60s
   (`ENTRY_MONITOR_SCANNER_CHECK_MS`) **whether or not it runs under the
   engine** — the relay makes it redundant there, but `planRefresh` does not
