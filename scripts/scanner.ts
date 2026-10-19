@@ -91,7 +91,8 @@ async function scan(triggeredBy: "SCHEDULE" | "MANUAL", due: Timeframe[], userId
   const seconds = ((Date.now() - started) / 1000).toFixed(1);
 
   log(
-    `${summary.status} in ${seconds}s — ${summary.succeeded}/${summary.analysed} analysed` +
+    `${summary.status}${summary.interrupted ? " (interrupted)" : ""} in ${seconds}s — ` +
+      `${summary.succeeded}/${summary.analysed} analysed` +
       (summary.failed > 0 ? `, ${summary.failed} failed` : ""),
   );
   // No-trade outcomes are the majority and are reported as such: a scan where

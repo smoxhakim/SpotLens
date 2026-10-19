@@ -198,7 +198,11 @@ WAITING_CONFIRMATION` is price arriving somewhere, not structure changing,
   schedule is unchanged. "Successful" is `successfulPassWhere`
   (`lib/scanner/runs.ts`): COMPLETED or PARTIAL. A FAILED run has a
   `completedAt` but scanned nothing, so it never cancels a catch-up, never
-  becomes the monitor's reload cursor and never makes a setup fresh. The
+  becomes the monitor's reload cursor and never makes a setup fresh. A pass
+  stopped part-way (Ctrl-C, SIGTERM, the engine going away) is FAILED too —
+  `ScanSummary.interrupted` — even though the markets it reached keep their
+  rows: it did not cover the universe. PARTIAL means markets failed on their
+  own. RUNNING runs older than 3h are closed as FAILED (`closeAbandonedRuns`). The
   monitor checks the latest successful `ScannerRun` every 60s
   (`ENTRY_MONITOR_SCANNER_CHECK_MS`) **whether or not it runs under the
   engine** — the relay makes it redundant there, but `planRefresh` does not

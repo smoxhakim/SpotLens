@@ -80,7 +80,19 @@ export interface MarketScanOutcome {
 
 export interface ScanSummary {
   runId: string | null;
+  /**
+   * FAILED when every market failed, or when the pass was interrupted (see
+   * `interrupted`); PARTIAL when some markets failed on their own; else COMPLETED.
+   */
   status: "COMPLETED" | "PARTIAL" | "FAILED";
+  /**
+   * The pass was stopped (Ctrl-C, SIGTERM, the engine going away) before every
+   * market succeeded. Recorded as FAILED: an interrupted pass did not cover the
+   * universe, and as PARTIAL it would count as a successful pass — cancelling
+   * the next startup catch-up and vouching for setup freshness. Not stored; the
+   * stored status says it.
+   */
+  interrupted: boolean;
   timeframes: Timeframe[];
   marketCount: number;
   analysed: number;
@@ -156,7 +168,18 @@ export async function runScan(options: ScanOptions): Promise<ScanSummary> {
   const observations = outcomes
     .map((outcome) => outcome.observation)
     .filter((observation): observation is ConfirmationObservation => observation !== null);
-  const summary = summarise(results, events, timeframes, markets.length, Date.now() - startedAt);
+  // Stopped before every market succeeded: skipped markets, and requests cut off
+  // in flight, both fail. A stop that arrived after the last market succeeded
+  // interrupted nothing, and the pass keeps its status.
+  const interrupted = options.signal?.aborted === true && results.some((r) => !r.ok);
+  const summary = summarise(
+    results,
+    events,
+    timeframes,
+    markets.length,
+    Date.now() - startedAt,
+    interrupted,
+  );
 
   await finishRun(runId, summary, results);
 
@@ -448,6 +471,7 @@ function summarise(
   timeframes: Timeframe[],
   marketCount: number,
   durationMs: number,
+  interrupted: boolean,
 ): Omit<ScanSummary, "runId" | "results" | "shortlist" | "observations"> {
   const succeeded = results.filter((r) => r.ok).length;
   const failed = results.length - succeeded;
@@ -456,7 +480,14 @@ function summarise(
     results.filter((r) => r.analysisStatus === status).length;
 
   return {
-    status: failed === 0 ? "COMPLETED" : succeeded === 0 ? "FAILED" : "PARTIAL",
+    status: interrupted
+      ? "FAILED"
+      : failed === 0
+        ? "COMPLETED"
+        : succeeded === 0
+          ? "FAILED"
+          : "PARTIAL",
+    interrupted,
     timeframes,
     marketCount,
     analysed: results.length,
