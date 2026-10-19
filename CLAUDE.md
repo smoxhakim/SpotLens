@@ -130,6 +130,10 @@ make that unnecessary most of the time.
   ETH. The daily summary is the one deliberate exception — it is a day-scoped
   aggregate — and it takes the most recent read per market and then ranks it
   through the same `buildShortlist`, rather than ordering in SQL as it used to.
+  With no `runId`, that run is the newest _successful_ one (COMPLETED or
+  PARTIAL); a newer pass still RUNNING is reported as `passInProgress`, never
+  shown — its results do not exist until it finishes, and showing it emptied
+  Opportunities for the length of every pass.
 - **The notification layer consumes truth, it never re-derives it.**
   `lib/notifications` maps Phase D lifecycle events onto messages; Phase D
   decides whether a setup moved and Phase C decides what the market did.

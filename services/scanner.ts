@@ -645,6 +645,13 @@ export function describeScannerUserFailure(failure: ScannerUserFailure): string 
 }
 
 /**
+ * How long a RUNNING run is believed to be a pass in progress. A pass takes a
+ * minute or two; a RUNNING row older than this was left by a scanner that was
+ * killed, and is closed as FAILED the next time a scanner starts.
+ */
+export const PASS_IN_PROGRESS_MAX_AGE_MS = 30 * 60_000;
+
+/**
  * The shortlist for one stored pass.
  *
  * Run-scoped by construction: every row comes from a single `scannerRunId`, so
@@ -653,14 +660,37 @@ export function describeScannerUserFailure(failure: ScannerUserFailure): string 
  * scanner process and any UI all read one list rather than three that agree
  * today.
  *
- * `runId` omitted means the most recent run, which is what a dashboard wants.
+ * `runId` omitted means the most recent *successful* pass (COMPLETED or
+ * PARTIAL, `successfulPassWhere`). It used to mean the most recent run of any
+ * status, so for the minute or two of every pass — its results are written
+ * only when it finishes — and after any FAILED or killed one, the page showed
+ * an empty list as if nothing were worth reading. A newer pass still running is
+ * reported as `passInProgress` instead, so the page can say so. An explicit
+ * `runId` is returned as it is, whatever its status.
  */
-export async function getShortlist(input: { runId?: string; limit?: number } = {}) {
+export async function getShortlist(input: { runId?: string; limit?: number; now?: number } = {}) {
   const run = input.runId
     ? await prisma.scannerRun.findUnique({ where: { id: input.runId } })
-    : await prisma.scannerRun.findFirst({ orderBy: { startedAt: "desc" } });
+    : await prisma.scannerRun.findFirst({
+        where: successfulPassWhere(),
+        orderBy: { startedAt: "desc" },
+      });
 
   if (!run) return null;
+
+  const now = input.now ?? Date.now();
+  const inProgress = input.runId
+    ? null
+    : await prisma.scannerRun.findFirst({
+        where: {
+          status: "RUNNING",
+          startedAt: {
+            gt: new Date(Math.max(run.startedAt.getTime(), now - PASS_IN_PROGRESS_MAX_AGE_MS)),
+          },
+        },
+        orderBy: { startedAt: "desc" },
+        select: { startedAt: true },
+      });
 
   const rows = await prisma.scannerResult.findMany({
     where: { scannerRunId: run.id },
@@ -697,6 +727,8 @@ export async function getShortlist(input: { runId?: string; limit?: number } = {
       /// shortlist was drawn from rather than only the few it kept.
       marketCount: run.marketCount,
     },
+    /** A newer pass that has started and not finished, or null. */
+    passInProgress: inProgress ? { startedAt: inProgress.startedAt.toISOString() } : null,
     shortlist,
   };
 }

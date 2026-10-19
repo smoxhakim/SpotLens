@@ -10,7 +10,7 @@ import { getShortlist } from "@/services/scanner";
 export const dynamic = "force-dynamic";
 
 const querySchema = z.object({
-  /** Omitted means the most recent pass. */
+  /** Omitted means the most recent successful pass (COMPLETED or PARTIAL). */
   runId: z.string().uuid().optional(),
   size: z.enum(["PRIMARY", "EXPANDED", "EXTENDED", "ALL"]).default("PRIMARY"),
 });
@@ -42,12 +42,13 @@ export async function GET(req: NextRequest) {
     const { runId, size } = querySchema.parse(Object.fromEntries(req.nextUrl.searchParams));
 
     const result = await getShortlist({ runId });
-    if (!result) return apiError("NOT_FOUND", "No scanner run has been recorded yet.", 404);
+    if (!result) return apiError("NOT_FOUND", "No scanner pass has completed yet.", 404);
 
-    const { run, shortlist } = result;
+    const { run, passInProgress, shortlist } = result;
 
     return NextResponse.json({
       run,
+      passInProgress,
       size,
       // Counts first, because "eight of ninety" is the honest headline and a
       // list of five on its own hides how much was looked at and refused.

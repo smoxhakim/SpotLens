@@ -196,6 +196,13 @@ function ScanContext({ data, pinned }: { data: ShortlistResponse; pinned: boolea
             time belongs. Naming the pass is what stops two runs being mixed. */}
         <span className="sm:ml-auto">Scanned {new Date(when).toLocaleString()}</span>
 
+        {data.passInProgress && (
+          <span className="w-full">
+            A new pass started {new Date(data.passInProgress.startedAt).toLocaleTimeString()} and is
+            still running; this is the last completed one.
+          </span>
+        )}
+
         {pinned && (
           // A pinned pass is not necessarily the newest one, and a reader who
           // followed a link here deserves to be told that rather than left to

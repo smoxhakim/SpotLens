@@ -173,6 +173,25 @@ describe("states", () => {
     }
   });
 
+  it("says when a newer pass is still running, and that this is the last completed one", async () => {
+    fetchApi.mockResolvedValue({
+      ...response(manyCandidates(3)),
+      passInProgress: { startedAt: "2026-09-12T19:01:30.000Z" },
+    });
+    renderView();
+    expect(
+      await screen.findByText(/is still running; this is the last completed one/),
+    ).toBeInTheDocument();
+    expect(screen.getAllByRole("heading", { level: 3 })).toHaveLength(3);
+  });
+
+  it("says nothing about a running pass when there is none", async () => {
+    fetchApi.mockResolvedValue({ ...response(manyCandidates(3)), passInProgress: null });
+    renderView();
+    await screen.findAllByRole("heading", { level: 3 });
+    expect(screen.queryByText(/still running/)).not.toBeInTheDocument();
+  });
+
   it("asks an unauthenticated reader to sign in", async () => {
     useSession.mockReturnValue({ status: "unauthenticated" });
     renderView();
