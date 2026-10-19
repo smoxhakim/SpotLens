@@ -239,6 +239,53 @@ describe("failure isolation", () => {
     expect(sendTelegramMessage).not.toHaveBeenCalled();
   });
 
+  it("a database error looking up the chat marks the row FAILED — it no longer stays PENDING", async () => {
+    db.telegramConnection.findUnique.mockRejectedValue(new Error("connection closed"));
+
+    const outcome = await deliverEvents([event()]);
+
+    expect(sendTelegramMessage).not.toHaveBeenCalled();
+    expect(db.notification.update).toHaveBeenCalledWith({
+      where: { id: "n1" },
+      data: expect.objectContaining({
+        status: "FAILED",
+        attempts: 0,
+        error: expect.stringMatching(/^Not sent/),
+      }),
+    });
+    expect(outcome.failed).toBe(1);
+  });
+
+  it("a timeout is recorded FAILED with the provider's may-have-been-delivered message", async () => {
+    const error = "Telegram did not answer in time. It may have been delivered; not sent again.";
+    sendTelegramMessage.mockResolvedValue({
+      ok: false,
+      error,
+      retryable: false,
+      deliveryUnknown: true,
+      attempts: 1,
+    });
+
+    const outcome = await deliverEvents([event()]);
+
+    expect(sendTelegramMessage).toHaveBeenCalledTimes(1);
+    expect(db.notification.update.mock.calls[0][0].data).toMatchObject({
+      status: "FAILED",
+      error,
+    });
+    expect(outcome.failed).toBe(1);
+  });
+
+  it("the database refusing to record the outcome does not throw or resend", async () => {
+    db.notification.update.mockRejectedValue(new Error("connection closed"));
+
+    const outcome = await deliverEvents([event()]);
+
+    expect(sendTelegramMessage).toHaveBeenCalledTimes(1);
+    expect(db.notification.update).toHaveBeenCalledTimes(2);
+    expect(outcome.sent).toBe(2); // in-app, and the Telegram message that did go out
+  });
+
   it("never throws, whatever goes wrong underneath", async () => {
     db.notificationPreference.findUnique.mockRejectedValue(new Error("database on fire"));
 

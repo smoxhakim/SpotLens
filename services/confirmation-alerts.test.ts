@@ -337,6 +337,72 @@ describe("failure isolation", () => {
     );
   });
 
+  it("a database error looking up the chat marks the row FAILED — it no longer stays PENDING", async () => {
+    db.setupConfirmationWatch.findFirst.mockResolvedValue(watched(""));
+    db.telegramConnection.findUnique.mockRejectedValue(new Error("connection closed"));
+
+    const outcome = await deliverConfirmationAlerts({
+      userId: "user-1",
+      observations: [observation()],
+    });
+
+    expect(sendTelegramMessage).not.toHaveBeenCalled();
+    expect(db.notification.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          status: "FAILED",
+          error: expect.stringMatching(/^Not sent/),
+        }),
+      }),
+    );
+    expect(outcome.failed).toBe(1);
+    // The pass carried on and recorded what it announced, so the next pass
+    // does not re-derive the alert into a duplicate row.
+    expect(db.setupConfirmationWatch.upsert).toHaveBeenCalled();
+  });
+
+  it("a timeout is recorded FAILED, sent once, and not repeated on the next pass", async () => {
+    db.setupConfirmationWatch.findFirst.mockResolvedValue(watched(""));
+    const error = "Telegram did not answer in time. It may have been delivered; not sent again.";
+    sendTelegramMessage.mockResolvedValue({
+      ok: false,
+      error,
+      retryable: false,
+      deliveryUnknown: true,
+      attempts: 1,
+    });
+
+    const first = await deliverConfirmationAlerts({
+      userId: "user-1",
+      observations: [observation()],
+    });
+    expect(first.failed).toBe(1);
+    expect(sendTelegramMessage).toHaveBeenCalledTimes(1);
+    expect(db.notification.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ status: "FAILED", error }) }),
+    );
+
+    // The same evidence again: the unique index refuses the row, nothing is sent.
+    db.notification.create.mockRejectedValue(uniqueViolation());
+    sendTelegramMessage.mockClear();
+    await deliverConfirmationAlerts({ userId: "user-1", observations: [observation()] });
+    expect(sendTelegramMessage).not.toHaveBeenCalled();
+  });
+
+  it("the database refusing to record the outcome does not throw or resend", async () => {
+    db.setupConfirmationWatch.findFirst.mockResolvedValue(watched(""));
+    db.notification.update.mockRejectedValue(new Error("connection closed"));
+
+    const outcome = await deliverConfirmationAlerts({
+      userId: "user-1",
+      observations: [observation()],
+    });
+
+    expect(sendTelegramMessage).toHaveBeenCalledTimes(1);
+    expect(db.notification.update).toHaveBeenCalledTimes(2);
+    expect(outcome.sent).toBe(1);
+  });
+
   it("marks the row failed and names the right bot when the confirmation bot is not connected", async () => {
     db.setupConfirmationWatch.findFirst.mockResolvedValue(watched(""));
     db.telegramConnection.findUnique.mockResolvedValue(null);

@@ -595,7 +595,7 @@ describe("Telegram provider", () => {
     expect(result.ok).toBe(false);
   });
 
-  it("treats a network failure as retryable and never throws", async () => {
+  it("a network failure that may have reached Telegram is tried once, never thrown", async () => {
     withToken("123:FAKE");
     const fetchImpl = vi.fn().mockRejectedValue(new Error("fetch failed"));
 
@@ -603,7 +603,115 @@ describe("Telegram provider", () => {
     restore();
 
     expect(result.ok).toBe(false);
-    expect(fetchImpl).toHaveBeenCalledTimes(MAX_SEND_ATTEMPTS);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({ retryable: false, deliveryUnknown: true });
+    expect(result.error).toMatch(/may have been delivered/);
+  });
+
+  it.each(["ECONNREFUSED", "ENOTFOUND", "EAI_AGAIN", "UND_ERR_CONNECT_TIMEOUT"])(
+    "a request that provably never reached Telegram (%s) is retried",
+    async (code) => {
+      withToken("123:FAKE");
+      const fetchImpl = vi
+        .fn()
+        .mockRejectedValueOnce(new TypeError("fetch failed", { cause: { code } }))
+        .mockResolvedValueOnce(ok());
+
+      const result = await sendTelegramMessage({ chatId: "1", text: "hi", fetchImpl });
+      restore();
+
+      expect(result.ok).toBe(true);
+      expect(fetchImpl).toHaveBeenCalledTimes(2);
+    },
+  );
+
+  it("a connection that broke after the request went out is not retried", async () => {
+    withToken("123:FAKE");
+    const fetchImpl = vi
+      .fn()
+      .mockRejectedValue(new TypeError("fetch failed", { cause: { code: "ECONNRESET" } }));
+
+    const result = await sendTelegramMessage({ chatId: "1", text: "hi", fetchImpl });
+    restore();
+
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(result.deliveryUnknown).toBe(true);
+  });
+
+  it("a request that times out is not retried — Telegram may have delivered it", async () => {
+    vi.useFakeTimers();
+    withToken("123:FAKE");
+    // Never answers, but honours the abort the provider sends after 10 s.
+    const fetchImpl = vi.fn(
+      (_url: string, init: { signal: AbortSignal }) =>
+        new Promise<Response>((_, reject) => {
+          init.signal.addEventListener("abort", () =>
+            reject(Object.assign(new Error("aborted"), { name: "AbortError" })),
+          );
+        }),
+    );
+
+    const pending = sendTelegramMessage({
+      chatId: "1",
+      text: "hi",
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+    await vi.advanceTimersByTimeAsync(10_000);
+    const result = await pending;
+    restore();
+    vi.useRealTimers();
+
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({
+      ok: false,
+      retryable: false,
+      deliveryUnknown: true,
+      attempts: 1,
+    });
+    expect(result.error).toMatch(/did not answer in time.*may have been delivered/);
+  });
+
+  it.each([500, 502, 503])("Telegram answering %i is retried, as before", async (status) => {
+    withToken("123:FAKE");
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce({ ok: false, status, json: async () => ({ ok: false }) })
+      .mockResolvedValueOnce(ok());
+
+    const result = await sendTelegramMessage({ chatId: "1", text: "hi", fetchImpl });
+    restore();
+
+    expect(result.ok).toBe(true);
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  it("a 504 from a gateway is not retried: Telegram may still have sent it", async () => {
+    withToken("123:FAKE");
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValue({ ok: false, status: 504, json: async () => ({ ok: false }) });
+
+    const result = await sendTelegramMessage({ chatId: "1", text: "hi", fetchImpl });
+    restore();
+
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({ retryable: false, deliveryUnknown: true });
+  });
+
+  it("an ambiguous failure never carries the token into its message", async () => {
+    const token = "7654321:AAHsuperSecretTokenValue";
+    withToken(token);
+    const fetchImpl = vi
+      .fn()
+      .mockRejectedValue(
+        new Error(`socket hang up for https://api.telegram.org/bot${token}/sendMessage`),
+      );
+
+    const result = await sendTelegramMessage({ chatId: "1", text: "hi", fetchImpl });
+    restore();
+
+    expect(result.error).not.toContain(token);
+    expect(result.deliveryUnknown).toBe(true);
   });
 
   it("survives a malformed response body", async () => {

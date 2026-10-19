@@ -220,6 +220,16 @@ WAITING_CONFIRMATION` is price arriving somewhere, not structure changing,
 - **`TELEGRAM_BOT_TOKEN` is read in exactly one file**
   (`lib/notifications/telegram-provider.ts`) and never returned, logged, or
   stored. Errors are stripped of it before they reach a database row.
+- **Telegram is at most once, never exactly once.** A row is written PENDING
+  first (its unique index is the dedupe), then `sendAndRecord`
+  (`services/telegram-delivery.ts`) sends and always writes the outcome — an
+  error before sending is FAILED "not sent", never left PENDING; only a
+  database refusing the update twice leaves one, logged. Telegram has no
+  idempotency key, so the provider retries only what provably was not
+  delivered (429, 500, 502, 503, connection never opened) and never a timeout,
+  a dropped connection or a 504 — those are FAILED "may have been delivered".
+  An alert occasionally lost (still in-app) beats one sent twice. Old
+  FAILED/PENDING rows are not retried in the background, by decision.
 - **A backtest reports its own assumptions.** Fees, slippage, the entry policy
   and the same-candle stop/target policy travel on the report, because a result
   is uninterpretable without them. Fees are charged on both legs and **never
