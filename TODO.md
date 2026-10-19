@@ -77,15 +77,14 @@ Open follow-ups, by priority:
       minutes keeps a Neon compute from auto-suspending. Skip or lengthen the
       check under the engine without changing standalone behaviour; until
       then, set `ENTRY_MONITOR_SCANNER_CHECK_MS=330000` for engine runs.
-- [ ] Stale-lock takeover race (`lib/engine/lock.ts`, `acquireLock`): two
-      processes that find the same dead holder at the same instant can both
-      end up holding the lock. Needs a coincidence; worst case two scanners
-      and duplicate setups. Guard the stale-lock removal with a second
-      exclusive-create step.
-- [ ] PID reuse: a stale lock whose PID now belongs to an unrelated live
-      process is obeyed — standalone refuses to start, the engine waits
-      indefinitely (logged once, naming the PID). Record the holder's start
-      time in the lock.
+- [x] Stale-lock takeover race (`lib/engine/lock.ts`, `acquireLock`): fixed on
+      `fix/scanner-recovery` — an exclusive claim per lock nonce, a re-read
+      under it, then an atomic rename; nothing deletes a lock on a stale read.
+      Residual: a process dying inside the millisecond takeover leaves a claim
+      cleared after 30s, and two processes clearing it at once could both win.
+- [x] PID reuse: each lock records its holder's process start time, checked
+      against `ps -o etime`; a live PID that started at another time is not the
+      holder. Unverifiable (no `ps`, older lock format) is still obeyed.
 - [x] A scanner killed mid-pass (engine crash hook, second Ctrl-C, 60s stop
       timeout, `kill -9`) left its `ScannerRun` RUNNING forever. The scanner
       now closes RUNNING runs older than 3h as FAILED, after taking its lock

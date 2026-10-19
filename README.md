@@ -340,7 +340,9 @@ time, and then stops trying rather than restarting forever.
 **One of each per machine.** The engine, the scanner and the monitor each hold a
 lock file under `.spotlens/locks/`; starting a second copy — `npm run monitor`
 while the engine runs, say — exits with a message naming the running one. A lock
-left by a process that died is taken over automatically. If the engine finds a
+left by a process that died is taken over automatically — by exactly one process
+if several start at once — and so is one whose PID now belongs to an unrelated
+process (each lock records when its holder started). If the engine finds a
 role already held — a standalone `npm run monitor` you left running — it does
 not give up on it: it says so once, looks again every 30 seconds, and starts its
 own as soon as the other one stops. The standalone commands below still work

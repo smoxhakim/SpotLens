@@ -192,10 +192,13 @@ WAITING_CONFIRMATION` is price arriving somewhere, not structure changing,
   policy sees. Real-process regressions: `lib/engine/orphans.process.test.ts`.
   One child failing never stops the other. Each role —
   engine, scanner, entry-zone — holds a PID lock under `.spotlens/locks/`, so a
-  second scanner cannot race the first into duplicate setups; a dead holder's
-  lock is taken over. `--catch-up` runs one pass on startup only when no
-  _successful_ pass has started since the latest close + settle delay, then the
-  schedule is unchanged. "Successful" is `successfulPassWhere`
+  second scanner cannot race the first into duplicate setups; a stale lock
+  (dead holder, or a PID now another process's — each lock records its
+  holder's start time, checked with `ps` etime) is taken over by exactly one
+  process: an exclusive claim file per lock nonce, a re-read under the claim,
+  then an atomic rename. Nothing deletes a lock on a stale read. `--catch-up`
+  runs one pass on startup only when no _successful_ pass has started since
+  the latest close + settle delay, then the schedule is unchanged. "Successful" is `successfulPassWhere`
   (`lib/scanner/runs.ts`): COMPLETED or PARTIAL. A FAILED run has a
   `completedAt` but scanned nothing, so it never cancels a catch-up, never
   becomes the monitor's reload cursor and never makes a setup fresh. A pass
