@@ -83,6 +83,24 @@ make that unnecessary most of the time.
   `lib/scanner`. It reads **closed candles only** — the forming candle is
   dropped before the engine sees it, which is what makes a repeated scan
   idempotent. It knows nothing about notifications.
+- **A potential setup needs its higher timeframe; without it, fail closed.** H1
+  reads H4 and H4 reads D1 (`defaultHigherTimeframe`), and the counter-trend
+  veto lives there. `assessHigherTimeframe` (`lib/analysis/higher-timeframe.ts`)
+  calls a higher series UNAVAILABLE, STALE (cache served it, or the newest
+  closed candle is missing past 15 min), INSUFFICIENT (< 60 closed) or INVALID.
+  The scanner then fails the market (`HigherTimeframeUnavailableError`,
+  retryable only for UNAVAILABLE/STALE) — no row, no tracking, no confirmation,
+  no entry-zone re-verification; it never analyses single-timeframe instead.
+  Stale entry candles (`StaleCandlesError`) fail the market the same way. The
+  manual routes instead pass an `AnalysisShortfall` (`lib/analysis/incomplete.ts`,
+  scope ENTRY for stale entry candles — which take precedence — or HIGHER) as
+  `runAnalysis`'s `incomplete` option, which holds a would-be POTENTIAL_SETUP at
+  WAIT and marks the result `incomplete`. An incomplete result is never tracked,
+  offers no risk calculator, draws no chart levels (`chartLevelsFor`), and is
+  marked in the status bar and beside its levels — all in the words of
+  `lib/analysis/incomplete.ts`. `/api/analysis/run` is single-timeframe, so for
+  any timeframe with a higher one it is NOT_CHECKED. Callers declaring nothing
+  (the backtester) are unchanged.
 - **The scanner picks an owner only when there is nothing to pick between.** The
   owner decides who every `TrackedSetup`, `SetupEvent` and `Notification`
   belongs to, so `resolveScannerUser` resolves `SCANNER_USER_EMAIL` exactly,

@@ -7,6 +7,7 @@ import { escape } from "@/lib/notifications";
 import {
   formatConfirmationAlert,
   formatConfirmationConnectionTest,
+  NOT_APPROVAL_TO_TRADE,
   renderConfirmationInApp,
   type SetupNumbers,
 } from "./format";
@@ -99,6 +100,18 @@ const SHAPES: [string, string][] = [
   ],
   ["developing with no stored levels", formatConfirmationAlert(alert(), null)],
   ["reached", formatConfirmationAlert(REACHED, NUMBERS)],
+  ...(["POTENTIAL_SETUP", "WAIT_FOR_CONFIRMATION", "HIGH_RISK", "AVOID", null] as const).flatMap(
+    (status): [string, string][] => [
+      [
+        `reached, ${status}`,
+        formatConfirmationAlert({ ...REACHED, analysisStatus: status }, NUMBERS),
+      ],
+      [
+        `developing, ${status}`,
+        formatConfirmationAlert(alert({ analysisStatus: status }), NUMBERS),
+      ],
+    ],
+  ),
   ["connection test", formatConfirmationConnectionTest()],
 ];
 
@@ -218,7 +231,9 @@ describe("the numbers", () => {
 describe("the in-app copy", () => {
   it("marks the two levels apart so the list can colour them", () => {
     expect(renderConfirmationInApp(alert(), NUMBERS).title.startsWith("🟡")).toBe(true);
-    expect(renderConfirmationInApp(REACHED, NUMBERS).title.startsWith("🟩")).toBe(true);
+    // Green only when the engine itself promoted the setup.
+    const potential = { ...REACHED, analysisStatus: "POTENTIAL_SETUP" as const };
+    expect(renderConfirmationInApp(potential, NUMBERS).title.startsWith("🟩")).toBe(true);
   });
 
   it("names the market and uses no instruction language", () => {
@@ -237,5 +252,96 @@ describe("determinism", () => {
     expect(formatConfirmationAlert(alert(), NUMBERS)).toBe(
       formatConfirmationAlert(alert(), NUMBERS),
     );
+  });
+});
+
+/**
+ * The verdict the evidence sits under, in every message.
+ *
+ * Confirmation is a gate and cannot lift a verdict, so "confirmation reached"
+ * on a HIGH_RISK setup without the verdict read as a green light. Each case is
+ * rendered in full, in both channels.
+ */
+describe("the verdict, named in every confirmation message", () => {
+  const telegram = (status: ConfirmationAlert["analysisStatus"], base = REACHED) =>
+    formatConfirmationAlert({ ...base, analysisStatus: status }, NUMBERS);
+  const inApp = (status: ConfirmationAlert["analysisStatus"], base = REACHED) =>
+    renderConfirmationInApp({ ...base, analysisStatus: status }, NUMBERS);
+  /** The Telegram text with MarkdownV2 escapes removed, for reading. */
+  const plain = (text: string) => text.replace(/\\(.)/g, "$1");
+
+  it("Potential setup: green, named, and still not approval to trade", () => {
+    const text = plain(telegram("POTENTIAL_SETUP"));
+    expect(text.split("\n")[0]).toBe("🟢 *Confirmation reached*");
+    expect(text).toContain("*Verdict*: Potential setup");
+    expect(text).toContain("candidate to review, not an instruction");
+    expect(text).toContain(NOT_APPROVAL_TO_TRADE);
+
+    expect(inApp("POTENTIAL_SETUP").title).toBe("🟩 Confirmation reached — PYTHUSDT H4");
+    expect(inApp("POTENTIAL_SETUP").body).toContain(NOT_APPROVAL_TO_TRADE);
+  });
+
+  it("Wait: amber, named, and says another rule still holds it", () => {
+    const text = plain(telegram("WAIT_FOR_CONFIRMATION"));
+    expect(text.split("\n")[0]).toBe("🟡 *Confirmation reached*");
+    expect(text).toContain("*Verdict*: Wait for confirmation");
+    expect(text).toContain("another rule is still holding this setup at wait");
+    expect(text).toContain(NOT_APPROVAL_TO_TRADE);
+
+    const row = inApp("WAIT_FOR_CONFIRMATION");
+    expect(row.title).toBe("🟡 Confirmation reached · Wait for confirmation — PYTHUSDT H4");
+    expect(row.body).toContain(NOT_APPROVAL_TO_TRADE);
+  });
+
+  it("High risk: amber, named, and says confirmation cannot change it", () => {
+    const text = plain(telegram("HIGH_RISK"));
+    expect(text.split("\n")[0]).toBe("🟡 *Confirmation reached*");
+    expect(text).toContain("*Verdict*: High risk");
+    expect(text).toContain("still rates this setup high risk, and confirmation cannot change that");
+    expect(text).toContain(NOT_APPROVAL_TO_TRADE);
+    expect(text).not.toContain("🟢");
+
+    const row = inApp("HIGH_RISK");
+    expect(row.title).toBe("🟡 Confirmation reached · High risk — PYTHUSDT H4");
+    expect(row.body).toContain("confirmation cannot change that");
+  });
+
+  it("Unknown verdict: neutral, never assumed to be a potential setup", () => {
+    for (const status of [undefined, null, "SOMETHING_NEW" as never]) {
+      const text = plain(telegram(status));
+      expect(text.split("\n")[0]).toBe("🟡 *Confirmation reached*");
+      expect(text).toContain("*Verdict*: Not available");
+      expect(text).toContain("Treat the setup as unreviewed");
+      expect(text).toContain(NOT_APPROVAL_TO_TRADE);
+      expect(text).not.toContain("Potential setup");
+
+      expect(inApp(status).title).toBe("🟡 Confirmation reached · Not available — PYTHUSDT H4");
+    }
+  });
+
+  it("names the verdict directly under the title, where a phone previews it", () => {
+    const lines = plain(telegram("HIGH_RISK")).split("\n");
+    expect(lines[1]).toBe("PYTHUSDT · H4");
+    expect(lines[2]).toBe("*Verdict*: High risk");
+  });
+
+  it("names it on 'developing' messages too", () => {
+    for (const [status, label] of [
+      ["HIGH_RISK", "High risk"],
+      ["WAIT_FOR_CONFIRMATION", "Wait for confirmation"],
+      [null, "Not available"],
+    ] as const) {
+      expect(plain(telegram(status, alert()))).toContain(`*Verdict*: ${label}`);
+      expect(inApp(status, alert()).body).toContain(`Verdict: ${label}.`);
+    }
+  });
+
+  it("never uses instruction words in any verdict case", () => {
+    for (const status of ["POTENTIAL_SETUP", "WAIT_FOR_CONFIRMATION", "HIGH_RISK", null] as const) {
+      for (const text of [telegram(status), inApp(status).title + " " + inApp(status).body]) {
+        const lower = plain(text).toLowerCase().split(ANALYSIS_DISCLAIMER.toLowerCase()).join(" ");
+        expect(lower).not.toMatch(/\b(buy|enter|entering|execute)\b/);
+      }
+    }
   });
 });

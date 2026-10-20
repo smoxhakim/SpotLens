@@ -2,6 +2,7 @@
 
 import type { AnalysisResult } from "@/lib/analysis";
 import { STATUS_LABELS } from "@/lib/analysis";
+import { IncompleteAnalysisNotice } from "@/features/analysis/components/IncompleteAnalysisNotice";
 import { formatPrice } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
@@ -48,6 +49,7 @@ export function CompactTradeLevels({
       <div className="rounded-lg border bg-card px-3 py-2 text-[11px] text-muted-foreground">
         <span className="font-medium text-foreground">{status}</span> — no levels are shown for a
         trade SpotLens has just advised against.
+        <IncompleteAnalysisNotice incomplete={result.incomplete} className="mt-1" />
       </div>
     );
   }
@@ -56,6 +58,7 @@ export function CompactTradeLevels({
 
   return (
     <div className="overflow-x-auto rounded-lg border bg-card">
+      <IncompleteAnalysisNotice incomplete={result.incomplete} className="border-b px-3 py-1.5" />
       <dl className="flex w-max min-w-full items-stretch divide-x divide-border text-[11px]">
         <Cell label="Entry zone" tone="entry">
           {setup.entry.low === setup.entry.high

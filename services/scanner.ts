@@ -1,7 +1,9 @@
 import {
   analyzeMultiTimeframe,
+  assessHigherTimeframe,
   defaultHigherTimeframe,
   runAnalysis,
+  unavailableHigherTimeframe,
   type AnalysisResult,
 } from "@/lib/analysis";
 import type { ConfirmationObservation } from "@/lib/confirmation-watch";
@@ -16,6 +18,9 @@ import {
   mapWithConcurrency,
   rankResults,
   successfulPassWhere,
+  HigherTimeframeUnavailableError,
+  StaleCandlesError,
+  classifyFailure,
   withRetries,
   type ClassifiedFailure,
   type ScannerEvent,
@@ -246,18 +251,26 @@ async function scanOne(
 
   const attempt = await withRetries(
     async () => {
-      const { candles } = await getCandles({
+      const { candles, stale } = await getCandles({
         pairId: market.pairId,
         exchangeSymbol: market.exchangeSymbol,
         timeframe,
         limit: CANDLE_LIMIT,
       });
 
+      // Served from the cache because the exchange failed. Never analysed: a
+      // stale read must not count as a fresh pass, create or move a setup, or
+      // vouch for one's freshness. Thrown, so it is retried and then recorded
+      // as this market's failure rather than mistaken for an empty result.
+      if (stale) throw new StaleCandlesError(timeframe);
+
       const closed = closedCandlesOnly(candles, now);
       if (closed.length === 0) {
         throw new Error("No closed candles are available for this market and timeframe.");
       }
 
+      // Fail closed: a market whose higher timeframe is missing, stale, short
+      // or invalid is not analysed at all — never single-timeframe instead.
       const mtf = await higherTimeframeContext(market, timeframe, closed, now);
 
       // The same engine the manual page and the backtester call. Every candle
@@ -366,11 +379,18 @@ async function scanOne(
 }
 
 /**
- * The higher-timeframe read, on closed candles only.
+ * The higher-timeframe read, on closed candles only — or a typed failure.
  *
- * A failure here is not fatal: the analysis still runs single-timeframe, the
- * same as the `/api/analysis/run` endpoint does. Losing the higher timeframe
- * makes a run less informed, not wrong.
+ * Fail closed. This used to return null on any failure and the market was then
+ * analysed single-timeframe, "less informed, not wrong". It could be wrong: the
+ * counter-trend veto and the bearish-alignment AVOID both live on the higher
+ * timeframe, so a rally inside a higher-timeframe downtrend reached
+ * POTENTIAL_SETUP — tracked, confirmed and re-verified for entry-zone alerts —
+ * whenever the higher read failed. Now a missing, stale, short or invalid
+ * higher timeframe throws `HigherTimeframeUnavailableError`, which `withRetries`
+ * retries (when it can pass) and the pass records as this market's failure.
+ *
+ * Null only for a timeframe with no higher one, which needs none.
  */
 async function higherTimeframeContext(
   market: MarketSummary,
@@ -381,26 +401,37 @@ async function higherTimeframeContext(
   const higherTimeframe = defaultHigherTimeframe(timeframe);
   if (!higherTimeframe) return null;
 
+  let read: { candles: Candle[]; stale: boolean };
   try {
-    const { candles } = await getCandles({
+    read = await getCandles({
       pairId: market.pairId,
       exchangeSymbol: market.exchangeSymbol,
       timeframe: higherTimeframe,
       limit: CANDLE_LIMIT,
     });
-
-    const closed = closedCandlesOnly(candles, now);
-    if (closed.length === 0) return null;
-
-    return analyzeMultiTimeframe({
-      lowerCandles: lower,
-      higherCandles: closed,
-      lowerTimeframe: timeframe,
-      higherTimeframe,
-    });
-  } catch {
-    return null;
+  } catch (err) {
+    // Retryable exactly when the underlying fault is.
+    throw new HigherTimeframeUnavailableError(
+      unavailableHigherTimeframe(higherTimeframe, "UNAVAILABLE"),
+      { retryable: classifyFailure(err).retryable },
+    );
   }
+
+  const closed = closedCandlesOnly(read.candles, now);
+  const shortfall = assessHigherTimeframe({
+    candles: closed,
+    timeframe: higherTimeframe,
+    now,
+    servedStale: read.stale,
+  });
+  if (shortfall) throw new HigherTimeframeUnavailableError(shortfall);
+
+  return analyzeMultiTimeframe({
+    lowerCandles: lower,
+    higherCandles: closed,
+    lowerTimeframe: timeframe,
+    higherTimeframe,
+  });
 }
 
 function abortedOutcome(market: MarketSummary, timeframe: Timeframe): OneOutcome {
@@ -477,6 +508,8 @@ function observationFor(
     // The close time of the candle the engine judged. Always a closed one: the
     // scanner drops the forming candle before `runAnalysis` sees it.
     evaluatedAt: confirmation.evaluatedAt,
+    // The verdict on the same analysis, so a confirmation message can name it.
+    analysisStatus: result.status,
   };
 }
 

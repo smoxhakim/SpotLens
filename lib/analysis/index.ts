@@ -67,3 +67,16 @@ export { explainTrend, explainStructure, explainEmaAlignment } from "./explain/t
 export { explainZone, explainZones, explainZoneWidth } from "./explain/zones";
 export { explainVolume } from "./explain/volume";
 export { explainRsi } from "./explain/rsi";
+export {
+  assessHigherTimeframe,
+  unavailableHigherTimeframe,
+  HIGHER_TIMEFRAME_GRACE_MS,
+} from "./higher-timeframe";
+export type { HigherTimeframeGap, HigherTimeframeShortfall } from "./higher-timeframe";
+export {
+  heldForIncompleteData,
+  incompleteAnalysisLabel,
+  incompleteAnalysisNotice,
+  staleEntryTimeframe,
+} from "./incomplete";
+export type { AnalysisShortfall, DataGap, DataScope } from "./incomplete";

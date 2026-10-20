@@ -27,7 +27,7 @@ import { CompactTradeLevels } from "./CompactTradeLevels";
 import { type EmaOverlay } from "./CandlestickChart";
 import { OverlayToggles, type OverlayState } from "./OverlayToggles";
 import { PairSelector } from "./PairSelector";
-import { setupLevelsFor } from "./setup-levels";
+import { chartLevelsFor } from "./setup-levels";
 import { TimeframeSelector } from "./TimeframeSelector";
 
 const DEFAULT_TIMEFRAME: Timeframe = "H4";
@@ -116,7 +116,7 @@ export function ChartWorkspace({
     analysis.data?.pairId === market?.pairId && analysis.data?.timeframe === timeframe;
   const result = analysisMatches ? (analysis.data?.result ?? null) : null;
 
-  const setupLevels = useMemo(() => setupLevelsFor(result?.setup ?? null), [result]);
+  const setupLevels = useMemo(() => chartLevelsFor(result), [result]);
 
   // The chart fills what is left after the header and the levels strip. A
   // number rather than a CSS height because Lightweight Charts sizes its

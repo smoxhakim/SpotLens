@@ -12,6 +12,7 @@ import {
 
 import { Skeleton } from "@/components/ui/skeleton";
 import { MTF_AGREEMENT_LABELS, STATUS_LABELS } from "@/lib/analysis";
+import { incompleteAnalysisLabel, incompleteAnalysisNotice } from "@/lib/analysis/incomplete";
 import type { AnalysisResult, MarketRead, TradeStatus } from "@/lib/analysis";
 import type { MarketRegime } from "@/lib/regime";
 import { TIMEFRAME_LABELS, type Timeframe } from "@/lib/market-data/provider";
@@ -135,14 +136,29 @@ export function AnalysisSummaryBar({
       ) : null}
 
       {result && status ? (
-        <div
-          className={cn(
-            "ml-auto flex items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-xs font-semibold",
-            status.className,
-          )}
-        >
-          <status.Icon className="h-3.5 w-3.5" aria-hidden="true" />
-          {STATUS_LABELS[result.status].label}
+        <div className="ml-auto flex flex-wrap items-center gap-2">
+          {/* Beside the verdict, never instead of it: the verdict is still the
+              engine's, and the marker says it was reached on data unfit to
+              decide on. The full sentence is the hover text and the card's. */}
+          {result.incomplete ? (
+            <span
+              role="status"
+              title={incompleteAnalysisNotice(result.incomplete)}
+              className="flex items-center gap-1.5 rounded-md border border-amber-500/40 bg-amber-500/10 px-2.5 py-1.5 text-xs font-semibold text-amber-600 dark:text-amber-400"
+            >
+              <AlertTriangle className="h-3.5 w-3.5" aria-hidden="true" />
+              {incompleteAnalysisLabel(result.incomplete)}
+            </span>
+          ) : null}
+          <div
+            className={cn(
+              "flex items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-xs font-semibold",
+              status.className,
+            )}
+          >
+            <status.Icon className="h-3.5 w-3.5" aria-hidden="true" />
+            {STATUS_LABELS[result.status].label}
+          </div>
         </div>
       ) : null}
     </div>

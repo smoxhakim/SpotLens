@@ -5,7 +5,12 @@ import { timeframeSchema } from "@/lib/market-data/schema";
 
 import { apiError, handleRouteError } from "@/lib/api/response";
 import { RATE_LIMITS, enforceRateLimit } from "@/lib/rate-limit";
-import { runAnalysis } from "@/lib/analysis";
+import {
+  defaultHigherTimeframe,
+  runAnalysis,
+  staleEntryTimeframe,
+  unavailableHigherTimeframe,
+} from "@/lib/analysis";
 import { currentUserId } from "@/lib/auth";
 import { isLastCandleForming } from "@/lib/market-data/provider";
 import { getCandles } from "@/services/candles";
@@ -49,15 +54,27 @@ export async function POST(req: NextRequest) {
     const market = await findMarketByPairId(body.tradingPairId);
     if (!market) return apiError("PAIR_NOT_FOUND", "Unknown trading pair.", 404);
 
-    const { candles } = await getCandles({
+    const { candles, stale } = await getCandles({
       pairId: market.pairId,
       exchangeSymbol: market.exchangeSymbol,
       timeframe: body.timeframe,
       limit: CANDLE_LIMIT,
     });
 
+    // Fail closed, stale entry candles first. Then: single-timeframe by
+    // design, so a timeframe that has a higher one never had it checked. Either
+    // way the result is shown for information — never POTENTIAL_SETUP, never
+    // tracked. `/api/analysis/mtf` is the full analysis.
+    const higherTimeframe = defaultHigherTimeframe(body.timeframe);
+    const incomplete = stale
+      ? staleEntryTimeframe(body.timeframe)
+      : higherTimeframe
+        ? unavailableHigherTimeframe(higherTimeframe, "NOT_CHECKED")
+        : undefined;
+
     const result = runAnalysis(candles, {
       lastCandleIsForming: isLastCandleForming(candles),
+      incomplete,
     });
 
     const snapshotId = userId
@@ -71,8 +88,11 @@ export async function POST(req: NextRequest) {
 
     // Lifecycle tracking sits here rather than inside the engine: `runAnalysis`
     // is pure and must stay that way. Anonymous runs are not tracked, for the
-    // same reason they are not recorded — a setup belongs to an owner.
-    if (userId) {
+    // same reason they are not recorded — a setup belongs to an owner. Nor are
+    // runs on stale candles (the exchange failed and the cache answered), or
+    // incomplete ones: a setup must never be created or moved by data older
+    // than the last close, or without the higher timeframe it depends on.
+    if (userId && !result.incomplete) {
       await trackSetup({
         userId,
         tradingPairId: market.pairId,

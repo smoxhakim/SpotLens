@@ -1,6 +1,8 @@
+import { STATUS_LABELS } from "@/lib/analysis";
 import type { ConfirmationSignalType } from "@/lib/analysis/confirmation";
 import { ANALYSIS_DISCLAIMER, SPOT_ONLY_NOTE } from "@/lib/constants/disclaimers";
 import { escape } from "@/lib/notifications";
+import { confirmationCaveat } from "@/lib/setups/labels";
 
 import type { ConfirmationAlert } from "./types";
 
@@ -30,7 +32,61 @@ import type { ConfirmationAlert } from "./types";
 export const CONFIRMATION_TITLES = {
   DEVELOPING: "🟡 Confirmation developing",
   REACHED: "🟢 Confirmation reached",
+  /** Reached, under a verdict short of a potential setup — or an unknown one. Never green. */
+  REACHED_NOT_APPROVED: "🟡 Confirmation reached",
 } as const;
+
+/** Said in every confirmation message, whatever the verdict. */
+export const NOT_APPROVAL_TO_TRADE = "Confirmation evidence is not approval to trade.";
+
+/**
+ * What the evidence sits under: the engine's verdict on the same analysis.
+ *
+ * Confirmation is a gate and only a gate — it can hold a setup at WAIT and can
+ * never lift one past HIGH_RISK — so a message announcing evidence without the
+ * verdict read as a green light on setups the engine had refused to promote.
+ * The caveat sentence is `confirmationCaveat`, the same one every page shows.
+ * An absent or unrecognised verdict is said to be unknown, never assumed to be
+ * a potential setup.
+ */
+export function verdictFor(analysisStatus: string | null | undefined): {
+  label: string;
+  known: boolean;
+  approvedByEngine: boolean;
+  explanation: string;
+} {
+  const status = analysisStatus as keyof typeof STATUS_LABELS | null | undefined;
+  const label = status ? STATUS_LABELS[status]?.label : undefined;
+
+  if (!status || !label) {
+    return {
+      label: "Not available",
+      known: false,
+      approvedByEngine: false,
+      explanation:
+        "The engine's verdict could not be read for this message. Treat the setup as " +
+        `unreviewed and check its verdict in SpotLens. ${NOT_APPROVAL_TO_TRADE}`,
+    };
+  }
+
+  if (status === "POTENTIAL_SETUP") {
+    return {
+      label,
+      known: true,
+      approvedByEngine: true,
+      explanation:
+        "Every deterministic rule holds on this candle, confirmation included. It is a " +
+        `candidate to review, not an instruction. ${NOT_APPROVAL_TO_TRADE}`,
+    };
+  }
+
+  return {
+    label,
+    known: true,
+    approvedByEngine: false,
+    explanation: `${confirmationCaveat(status)} ${NOT_APPROVAL_TO_TRADE}`,
+  };
+}
 
 /** Human names for the engine's signal types, for the "not yet" list. */
 const SIGNAL_LABELS: Record<ConfirmationSignalType, string> = {
@@ -132,6 +188,15 @@ function footer(extra: string): string[] {
   ];
 }
 
+/**
+ * The verdict, directly under the title — so it is in the phone's preview, not
+ * three screens down beneath the evidence it qualifies.
+ */
+function verdictBlock(alert: ConfirmationAlert): string[] {
+  const verdict = verdictFor(alert.analysisStatus);
+  return [`${bold("Verdict")}: ${escape(verdict.label)}`, escape(verdict.explanation)];
+}
+
 function header(alert: ConfirmationAlert, title: string): string[] {
   const [emoji, ...words] = title.split(" ");
   return [`${emoji} ${bold(words.join(" "))}`, escape(`${alert.symbol} · ${alert.timeframe}`)];
@@ -147,7 +212,7 @@ function header(alert: ConfirmationAlert, title: string): string[] {
  * can reach here at all — that is a contradiction, and the watcher refuses it.
  */
 export function formatDeveloping(alert: ConfirmationAlert, numbers: SetupNumbers | null): string {
-  const lines = [...header(alert, CONFIRMATION_TITLES.DEVELOPING), ""];
+  const lines = [...header(alert, CONFIRMATION_TITLES.DEVELOPING), ...verdictBlock(alert), ""];
 
   lines.push(bold("NEW EVIDENCE"));
   for (const signal of alert.newEvidence) lines.push(`✓ ${escape(signal.title)}`);
@@ -194,7 +259,16 @@ export function formatDeveloping(alert: ConfirmationAlert, numbers: SetupNumbers
 export function formatReached(alert: ConfirmationAlert, numbers: SetupNumbers | null): string {
   const evidence = [...alert.knownEvidence, ...alert.newEvidence];
 
-  const lines = [...header(alert, CONFIRMATION_TITLES.REACHED), "", bold("CONFIRMATION EVIDENCE")];
+  const verdict = verdictFor(alert.analysisStatus);
+  const title = verdict.approvedByEngine
+    ? CONFIRMATION_TITLES.REACHED
+    : CONFIRMATION_TITLES.REACHED_NOT_APPROVED;
+  const lines = [
+    ...header(alert, title),
+    ...verdictBlock(alert),
+    "",
+    bold("CONFIRMATION EVIDENCE"),
+  ];
 
   for (const signal of evidence) lines.push(`✓ ${escape(signal.title)}`);
 
@@ -235,14 +309,19 @@ export function renderConfirmationInApp(
 ): { title: string; body: string } {
   const where = `${alert.symbol} ${alert.timeframe}`;
   const quality = numbers ? ` Quality ${numbers.score}/100.` : "";
+  const verdict = verdictFor(alert.analysisStatus);
 
   if (alert.level === "REACHED") {
     const evidence = [...alert.knownEvidence, ...alert.newEvidence].map((s) => s.title).join("; ");
+    // Green (a POSITIVE row) only when the engine itself promoted the setup.
+    // Otherwise the amber "developing" marker, and the verdict in the title.
     return {
-      title: `🟩 Confirmation reached — ${where}`,
+      title: verdict.approvedByEngine
+        ? `🟩 Confirmation reached — ${where}`
+        : `🟡 Confirmation reached · ${verdict.label} — ${where}`,
       body:
         `${evidence}.${quality} The deterministic confirmation check has what it requires. ` +
-        "Review the setup before deciding.",
+        `Verdict: ${verdict.label}. ${verdict.explanation} Review the setup before deciding.`,
     };
   }
 
@@ -250,7 +329,7 @@ export function renderConfirmationInApp(
     title: `🟡 Confirmation developing — ${where}`,
     body:
       `New: ${alert.newEvidence.map((s) => s.title).join("; ")}.${quality} ` +
-      "Not yet sufficient — evidence is not approval.",
+      `Not yet sufficient. Verdict: ${verdict.label}. ${verdict.explanation}`,
   };
 }
 

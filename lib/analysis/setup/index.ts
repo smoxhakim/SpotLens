@@ -2,6 +2,7 @@ import { ANALYSIS_DISCLAIMER, DISCLAIMER_VERSION } from "@/lib/constants/disclai
 import type { Candle } from "@/lib/market-data/provider";
 
 import { evaluateConfirmation, type ConfirmationResult } from "../confirmation";
+import { heldForIncompleteData, type AnalysisShortfall } from "../incomplete";
 import { runMarketRead, type MarketRead, type MarketReadOptions } from "../market-read";
 import type { MtfSummary } from "../mtf";
 import { calculateEntryZone } from "./entry";
@@ -36,6 +37,14 @@ export interface AnalysisResult {
   confirmation: ConfirmationResult | null;
   status: TradeStatus;
   statusReason: string;
+  /**
+   * Set when the caller declared the data unfit to decide on: stale entry
+   * candles, or a higher timeframe that was missing, stale, short or invalid.
+   * Such a result is informational only: it is never POTENTIAL_SETUP, and
+   * callers must not track it or let it vouch for an entry-zone alert. Null
+   * when nothing was declared.
+   */
+  incomplete: AnalysisShortfall | null;
   disclaimer: string;
   disclaimerVersion: string;
 }
@@ -54,15 +63,27 @@ export interface AnalysisResult {
 export interface RunAnalysisOptions extends MarketReadOptions {
   /** Higher-timeframe read, folded into the score and the status. */
   mtf?: MtfSummary;
+  /**
+   * Why the data is unfit to decide on — stale entry candles, or an unusable
+   * higher timeframe. Fail closed: a would-be POTENTIAL_SETUP is held at WAIT,
+   * and the result is marked `incomplete`. Every other verdict, level and
+   * number is unchanged — they are already short of approval, and shown for
+   * information. Omitted by callers that declare nothing (the backtester),
+   * which behave exactly as before.
+   */
+  incomplete?: AnalysisShortfall;
 }
 
 export function runAnalysis(candles: Candle[], options: RunAnalysisOptions = {}): AnalysisResult {
   const read = runMarketRead(candles, options);
   const mtf = options.mtf ?? null;
 
+  const incomplete = options.incomplete ?? null;
+
   const base = {
     read,
     mtf,
+    incomplete,
     disclaimer: ANALYSIS_DISCLAIMER,
     disclaimerVersion: DISCLAIMER_VERSION,
   };
@@ -143,7 +164,15 @@ export function runAnalysis(candles: Candle[], options: RunAnalysisOptions = {})
     swingLookback: options.swingLookback,
   });
 
-  const verdict = determineStatus(read, entry, riskReward, score, mtf ?? undefined, confirmation);
+  const decided = determineStatus(read, entry, riskReward, score, mtf ?? undefined, confirmation);
+
+  // After every rule, like confirmation, and like it able only to hold a setup
+  // back: on stale data, or without the higher timeframe's counter-trend veto,
+  // a potential setup here is one the full rules have not cleared.
+  const verdict =
+    incomplete && decided.status === "POTENTIAL_SETUP"
+      ? { status: "WAIT_FOR_CONFIRMATION" as const, reason: heldForIncompleteData(incomplete) }
+      : decided;
 
   // The status engine can reach AVOID on evidence that only exists once the
   // setup has been built — a risk/reward below 1, or a score under the AVOID

@@ -40,6 +40,8 @@ export {
   MAX_ATTEMPTS,
   RETRY_BASE_DELAY_MS,
   classifyFailure,
+  HigherTimeframeUnavailableError,
+  StaleCandlesError,
   withRetries,
   type AttemptResult,
   type ClassifiedFailure,

@@ -35,7 +35,7 @@ import { useMarkets } from "../hooks/useMarkets";
 import { useTicker } from "../hooks/useTicker";
 import { type EmaOverlay } from "./CandlestickChart";
 import { ChartPanel } from "./ChartPanel";
-import { setupLevelsFor } from "./setup-levels";
+import { chartLevelsFor } from "./setup-levels";
 import { MarketHeader } from "./MarketHeader";
 import { OverlayToggles, type OverlayState } from "./OverlayToggles";
 import { PairSelector } from "./PairSelector";
@@ -157,7 +157,7 @@ export function MarketWorkspace() {
    * the setup entirely, so there is nothing to draw, which is the correct
    * outcome rather than a special case.
    */
-  const setupLevels = useMemo(() => setupLevelsFor(result?.setup ?? null), [result]);
+  const setupLevels = useMemo(() => chartLevelsFor(result), [result]);
 
   const regime = useMemo(() => (read ? classifyRegime(read) : null), [read]);
   const chartLoading = candlesQuery.isPending || marketsQuery.isLoading;
