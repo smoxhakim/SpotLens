@@ -9,14 +9,33 @@
 export {
   DEFAULT_CLOSE_DELAY_MS,
   DEFAULT_SCAN_TIMEFRAMES,
+  LATE_WAKE_TOLERANCE_MS,
   closedCandlesOnly,
   currentCandleOpen,
   nextCandleClose,
   nextScanWindow,
+  latestScanWindow,
+  markScanned,
+  planScan,
+  scanOnWake,
+  scannedThroughAt,
   settlementDelayMs,
+  type ScannedThrough,
   type ScanWindow,
+  type WakeScan,
 } from "./schedule";
 export { mapWithConcurrency, sleep } from "./concurrency";
+export {
+  FAILED_PASS_RETRY_DELAYS_MS,
+  classifyPass,
+  classifyPassError,
+  nextWake,
+  recordPass,
+  startSchedule,
+  startupRetryDelay,
+  type PassOutcome,
+  type ScheduleState,
+} from "./retry";
 export {
   MAX_ATTEMPTS,
   RETRY_BASE_DELAY_MS,

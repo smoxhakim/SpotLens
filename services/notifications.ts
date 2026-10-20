@@ -22,6 +22,7 @@ import {
   type NotificationPreferences,
   type TelegramBot,
 } from "@/lib/notifications";
+import { sendAndRecord } from "@/services/telegram-delivery";
 
 /**
  * Delivery.
@@ -170,16 +171,12 @@ async function deliverToChannel(
   // In-app needs no delivery step: the row *is* the notification.
   if (channel === "IN_APP") return { ...NOTHING, created: 1, sent: 1 };
 
-  const result = await sendToTelegram(event.userId, formatForTelegram(event));
-
-  await prisma.notification.update({
-    where: { id: notificationId },
-    data: {
-      status: result.ok ? "SENT" : "FAILED",
-      sentAt: result.ok ? new Date() : null,
-      attempts: result.attempts,
-      error: result.ok ? null : result.error,
-    },
+  // Every outcome reaches the row — an error before sending included — so no
+  // row is left PENDING by a failure here. See `sendAndRecord`.
+  const result = await sendAndRecord({
+    notificationId,
+    send: () => sendToTelegram(event.userId, formatForTelegram(event)),
+    label: "notifications",
   });
 
   return { ...NOTHING, created: 1, sent: result.ok ? 1 : 0, failed: result.ok ? 0 : 1 };

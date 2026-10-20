@@ -88,7 +88,30 @@ export interface TelegramSendResult {
   attempts: number;
   /** How long Telegram asked the caller to wait, when it said so. */
   retryAfterMs?: number;
+  /**
+   * Telegram may have delivered the message although this says `ok: false` — a
+   * request that timed out or a connection that dropped after the request was
+   * sent. Not retried, because a retry could deliver it twice.
+   */
+  deliveryUnknown?: boolean;
 }
+
+/**
+ * Connection failures that prove the request never reached Telegram — the name
+ * did not resolve, the connection was refused or never opened. Only these are
+ * safe to retry; see "Delivery, retries and duplicates" on `sendTelegramMessage`.
+ */
+const NEVER_SENT_CODES = new Set([
+  "ENOTFOUND",
+  "EAI_AGAIN",
+  "ECONNREFUSED",
+  "ENETUNREACH",
+  "EHOSTUNREACH",
+  "UND_ERR_CONNECT_TIMEOUT",
+]);
+
+/** Telegram answered and said no: nothing was delivered, and another go may work. */
+const RETRYABLE_STATUSES = new Set([429, 500, 502, 503]);
 
 export interface TelegramUpdate {
   updateId: number;
@@ -165,6 +188,26 @@ export function resetTelegramIdentityCache(): void {
  *
  * Never throws. A notification channel that can take down its caller is worse
  * than no channel, and this one is called from the scanner process.
+ *
+ * ## Delivery, retries and duplicates
+ *
+ * At most once per call, never exactly once. Telegram's `sendMessage` has no
+ * idempotency key, so a request whose outcome is unknown cannot be retried
+ * without risking the message arriving twice. The rule is therefore:
+ *
+ * - Retried (up to `MAX_SEND_ATTEMPTS`): Telegram answered 429, 500, 502 or
+ *   503, or the request provably never reached it (DNS failure, connection
+ *   refused or never opened).
+ * - Not retried, `deliveryUnknown`: the request timed out, the connection
+ *   broke after it was sent, or a gateway answered 504. The message may have
+ *   been delivered; the caller records a failure that says so.
+ * - Not retried: any other answer (400, 401, 403, …), which would fail the
+ *   same way again.
+ *
+ * The trade-off is deliberate: an alert occasionally lost — still in the app,
+ * marked failed — rather than one occasionally sent twice. A 500/502/503 is
+ * still retried, and in the rare case Telegram had in fact delivered before
+ * failing, that retry is a duplicate.
  */
 export async function sendTelegramMessage(input: {
   chatId: string;
@@ -235,10 +278,12 @@ async function attemptSend(
 
     if (response.ok && body?.ok) return { ok: true, error: null, retryable: false };
 
-    // 429 and 5xx are worth another go; a 400 means the message itself is
-    // wrong — usually an escaping bug — and will fail identically forever.
+    // 429, 500, 502 and 503 are worth another go; a 400 means the message itself
+    // is wrong — usually an escaping bug — and will fail identically forever. A
+    // 504 is a gateway giving up on Telegram while it may still have been
+    // working: the message may have gone out, so it is not sent again.
     const status = response.status;
-    const retryable = status === 429 || status >= 500;
+    const retryable = RETRYABLE_STATUSES.has(status);
 
     const retryAfter = body?.parameters?.retry_after;
 
@@ -246,16 +291,26 @@ async function attemptSend(
       ok: false,
       error: sanitise(`Telegram ${status}: ${body?.description ?? "no description"}`),
       retryable,
+      ...(status === 504 ? { deliveryUnknown: true } : {}),
       ...(typeof retryAfter === "number" && retryAfter > 0
         ? { retryAfterMs: retryAfter * 1000 }
         : {}),
     };
   } catch (error) {
+    if (neverReachedTelegram(error)) {
+      return { ok: false, error: sanitise(describeError(error)), retryable: true };
+    }
+    // Timed out, or the connection broke after the request went out: Telegram
+    // may have delivered it. Recorded as failed, and not sent again.
     const aborted = error instanceof Error && error.name === "AbortError";
     return {
       ok: false,
-      error: sanitise(aborted ? "Telegram request timed out." : describeError(error)),
-      retryable: true,
+      error: sanitise(
+        `${aborted ? "Telegram did not answer in time." : describeError(error)} ` +
+          "It may have been delivered; not sent again, to avoid a duplicate.",
+      ),
+      retryable: false,
+      deliveryUnknown: true,
     };
   } finally {
     clearTimeout(timer);
@@ -370,6 +425,13 @@ export function parseUpdates(result: unknown): TelegramUpdate[] {
   }
 
   return updates;
+}
+
+function neverReachedTelegram(error: unknown): boolean {
+  const codeOf = (value: unknown) =>
+    typeof value === "object" && value !== null ? (value as { code?: unknown }).code : undefined;
+  const code = codeOf(error) ?? codeOf((error as { cause?: unknown } | null)?.cause);
+  return typeof code === "string" && NEVER_SENT_CODES.has(code);
 }
 
 function describeError(error: unknown): string {

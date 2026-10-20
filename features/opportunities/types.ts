@@ -18,6 +18,12 @@ export interface ShortlistResponse {
     triggeredBy: string;
     marketCount: number;
   };
+  /**
+   * A newer pass that is still running, or null. Its results are written only
+   * when it finishes, so until then the page shows the last successful one.
+   * Optional: absent from a pinned pass, and from older responses.
+   */
+  passInProgress?: { startedAt: string } | null;
   totalAnalysed: number;
   totalEligible: number;
   excluded: Record<string, number>;

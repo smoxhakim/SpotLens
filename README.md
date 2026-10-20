@@ -340,7 +340,10 @@ time, and then stops trying rather than restarting forever.
 **One of each per machine.** The engine, the scanner and the monitor each hold a
 lock file under `.spotlens/locks/`; starting a second copy — `npm run monitor`
 while the engine runs, say — exits with a message naming the running one. A lock
-left by a process that died is taken over automatically. If the engine finds a
+left by a process that died is taken over automatically — by exactly one process
+if several start at once — and so is one whose PID now belongs to an unrelated
+process (each lock records who its holder is — on Linux by boot and start
+ticks, so a clock correction cannot fool it). If the engine finds a
 role already held — a standalone `npm run monitor` you left running — it does
 not give up on it: it says so once, looks again every 30 seconds, and starts its
 own as soon as the other one stops. The standalone commands below still work
@@ -373,6 +376,20 @@ mattered. The scanner sleeps until 90 seconds after the next close (the
 exchange needs a moment to settle the final candle), scans every timeframe
 whose candle just closed, and sleeps again. An H4 close is also an H1 close, so
 those are handled in one pass rather than two.
+
+**It catches up after sleep, and retries a pass that failed.** A laptop that
+slept through closes scans every timeframe that closed meanwhile as soon as it
+wakes. A pass in which _every_ market failed for a reason that can pass — no
+network yet after waking, a timeout, the exchange or the database unavailable —
+is retried after 1, 2, 5 and 10 minutes, never past the next scheduled window
+(whose pass covers the failed timeframes too). At most four retries per window;
+a pass where only some markets failed is not retried, nor one whose failures
+will not change (bad data, an analysis error), nor one you stopped. While the
+exchange is down that is up to five failing passes an hour, each one quick.
+The same applies at startup: a scanner started before the network or the
+database is reachable waits 1, 2, 5 and 10 minutes for it (holding its lock),
+then exits with a message saying what to check; bad credentials or a missing
+database exit at once.
 
 **It only ever reads closed candles.** The forming candle is dropped before the
 engine sees anything, which means a rejection wick that has not finished

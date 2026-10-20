@@ -80,7 +80,19 @@ export interface MarketScanOutcome {
 
 export interface ScanSummary {
   runId: string | null;
+  /**
+   * FAILED when every market failed, or when the pass was interrupted (see
+   * `interrupted`); PARTIAL when some markets failed on their own; else COMPLETED.
+   */
   status: "COMPLETED" | "PARTIAL" | "FAILED";
+  /**
+   * The pass was stopped (Ctrl-C, SIGTERM, the engine going away) before every
+   * market succeeded. Recorded as FAILED: an interrupted pass did not cover the
+   * universe, and as PARTIAL it would count as a successful pass — cancelling
+   * the next startup catch-up and vouching for setup freshness. Not stored; the
+   * stored status says it.
+   */
+  interrupted: boolean;
   timeframes: Timeframe[];
   marketCount: number;
   analysed: number;
@@ -156,7 +168,18 @@ export async function runScan(options: ScanOptions): Promise<ScanSummary> {
   const observations = outcomes
     .map((outcome) => outcome.observation)
     .filter((observation): observation is ConfirmationObservation => observation !== null);
-  const summary = summarise(results, events, timeframes, markets.length, Date.now() - startedAt);
+  // Stopped before every market succeeded: skipped markets, and requests cut off
+  // in flight, both fail. A stop that arrived after the last market succeeded
+  // interrupted nothing, and the pass keeps its status.
+  const interrupted = options.signal?.aborted === true && results.some((r) => !r.ok);
+  const summary = summarise(
+    results,
+    events,
+    timeframes,
+    markets.length,
+    Date.now() - startedAt,
+    interrupted,
+  );
 
   await finishRun(runId, summary, results);
 
@@ -448,6 +471,7 @@ function summarise(
   timeframes: Timeframe[],
   marketCount: number,
   durationMs: number,
+  interrupted: boolean,
 ): Omit<ScanSummary, "runId" | "results" | "shortlist" | "observations"> {
   const succeeded = results.filter((r) => r.ok).length;
   const failed = results.length - succeeded;
@@ -456,7 +480,14 @@ function summarise(
     results.filter((r) => r.analysisStatus === status).length;
 
   return {
-    status: failed === 0 ? "COMPLETED" : succeeded === 0 ? "FAILED" : "PARTIAL",
+    status: interrupted
+      ? "FAILED"
+      : failed === 0
+        ? "COMPLETED"
+        : succeeded === 0
+          ? "FAILED"
+          : "PARTIAL",
+    interrupted,
     timeframes,
     marketCount,
     analysed: results.length,
@@ -645,6 +676,14 @@ export function describeScannerUserFailure(failure: ScannerUserFailure): string 
 }
 
 /**
+ * How long a RUNNING run is reported as a pass in progress. A pass takes a
+ * minute or two; a RUNNING row older than this was almost certainly left by a
+ * scanner that was killed. Display only — such a row is closed as FAILED by
+ * `closeAbandonedRuns`, on its own, more conservative bound.
+ */
+export const PASS_IN_PROGRESS_MAX_AGE_MS = 30 * 60_000;
+
+/**
  * The shortlist for one stored pass.
  *
  * Run-scoped by construction: every row comes from a single `scannerRunId`, so
@@ -653,14 +692,37 @@ export function describeScannerUserFailure(failure: ScannerUserFailure): string 
  * scanner process and any UI all read one list rather than three that agree
  * today.
  *
- * `runId` omitted means the most recent run, which is what a dashboard wants.
+ * `runId` omitted means the most recent *successful* pass (COMPLETED or
+ * PARTIAL, `successfulPassWhere`). It used to mean the most recent run of any
+ * status, so for the minute or two of every pass — its results are written
+ * only when it finishes — and after any FAILED or killed one, the page showed
+ * an empty list as if nothing were worth reading. A newer pass still running is
+ * reported as `passInProgress` instead, so the page can say so. An explicit
+ * `runId` is returned as it is, whatever its status.
  */
-export async function getShortlist(input: { runId?: string; limit?: number } = {}) {
+export async function getShortlist(input: { runId?: string; limit?: number; now?: number } = {}) {
   const run = input.runId
     ? await prisma.scannerRun.findUnique({ where: { id: input.runId } })
-    : await prisma.scannerRun.findFirst({ orderBy: { startedAt: "desc" } });
+    : await prisma.scannerRun.findFirst({
+        where: successfulPassWhere(),
+        orderBy: { startedAt: "desc" },
+      });
 
   if (!run) return null;
+
+  const now = input.now ?? Date.now();
+  const inProgress = input.runId
+    ? null
+    : await prisma.scannerRun.findFirst({
+        where: {
+          status: "RUNNING",
+          startedAt: {
+            gt: new Date(Math.max(run.startedAt.getTime(), now - PASS_IN_PROGRESS_MAX_AGE_MS)),
+          },
+        },
+        orderBy: { startedAt: "desc" },
+        select: { startedAt: true },
+      });
 
   const rows = await prisma.scannerResult.findMany({
     where: { scannerRunId: run.id },
@@ -697,8 +759,46 @@ export async function getShortlist(input: { runId?: string; limit?: number } = {
       /// shortlist was drawn from rather than only the few it kept.
       marketCount: run.marketCount,
     },
+    /** A newer pass that has started and not finished, or null. */
+    passInProgress: inProgress ? { startedAt: inProgress.startedAt.toISOString() } : null,
     shortlist,
   };
+}
+
+/**
+ * How old a RUNNING run must be before it is presumed abandoned.
+ *
+ * Longer than any pass can take: in the worst case every request times out —
+ * 15 s, three HTTP attempts, three scanner attempts, two candle fetches per
+ * analysis, 90 analyses four at a time — which is about 100 minutes. A live
+ * scanner on another machine pointed at the same database (the PID lock is
+ * local) is the only owner this process cannot rule out, and no pass of its can
+ * be this old.
+ */
+export const ABANDONED_RUN_AFTER_MS = 3 * 60 * 60_000;
+
+/**
+ * Closes runs that a scanner started and never finished — killed mid-pass by a
+ * second Ctrl-C, the engine's stop timeout or its crash hook, or `kill -9`.
+ * Left alone they stay RUNNING for ever.
+ *
+ * Called only by the process holding the scanner lock, and only between its own
+ * passes, so none of this process's runs is live; the age bound covers anyone
+ * else's. Such a run has no results — they are written only when a pass
+ * finishes — so FAILED is what it was. `completedAt` is when it was closed:
+ * when the process died is not recorded anywhere.
+ */
+export async function closeAbandonedRuns(now: number = Date.now()): Promise<number> {
+  if (!isDatabaseConfigured) return 0;
+  const result = await prisma.scannerRun.updateMany({
+    where: {
+      status: "RUNNING",
+      completedAt: null,
+      startedAt: { lt: new Date(now - ABANDONED_RUN_AFTER_MS) },
+    },
+    data: { status: "FAILED", completedAt: new Date(now) },
+  });
+  return result.count;
 }
 
 /**

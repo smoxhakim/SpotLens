@@ -17,6 +17,7 @@ import {
   type NotificationEventType,
 } from "@/lib/notifications";
 import { getPreferences } from "@/services/notifications";
+import { sendAndRecord } from "@/services/telegram-delivery";
 
 /**
  * Confirmation alert delivery.
@@ -227,34 +228,31 @@ async function deliverOne(
     return { ...totals, duplicates: totals.duplicates + 1 };
   }
 
-  const connection = await prisma.telegramConnection.findUnique({
-    where: { userId_bot: { userId: alert.userId, bot: "CONFIRMATION" } },
-    select: { chatId: true },
-  });
-
-  const result = connection?.chatId
-    ? await sendTelegramMessage({
-        chatId: connection.chatId,
-        text: formatConfirmationAlert(alert, numbers),
-        bot: "CONFIRMATION",
-      })
-    : {
-        ok: false as const,
-        // Named precisely, because "Telegram is not connected" would send the
-        // reader to the main bot's connection, which is working fine.
-        error: "The confirmation bot is not connected for this account.",
-        attempts: 0,
-      };
-
-  await prisma.notification.update({
-    where: { id: row },
-    data: {
-      status: result.ok ? "SENT" : "FAILED",
-      sentAt: result.ok ? new Date() : null,
-      attempts: result.attempts,
-      // Already sanitised by the provider — it strips every configured token
-      // before returning, so this cannot carry one into a row.
-      error: result.ok ? null : result.error,
+  // Every outcome reaches the row — a failed connection lookup included — so no
+  // row is left PENDING, unsent and undeduplicable. See `sendAndRecord`.
+  const result = await sendAndRecord({
+    notificationId: row,
+    label: "confirmation",
+    send: async () => {
+      const connection = await prisma.telegramConnection.findUnique({
+        where: { userId_bot: { userId: alert.userId, bot: "CONFIRMATION" } },
+        select: { chatId: true },
+      });
+      return connection?.chatId
+        ? // Already sanitised by the provider — it strips every configured
+          // token before returning, so this cannot carry one into a row.
+          sendTelegramMessage({
+            chatId: connection.chatId,
+            text: formatConfirmationAlert(alert, numbers),
+            bot: "CONFIRMATION",
+          })
+        : {
+            ok: false,
+            // Named precisely, because "Telegram is not connected" would send the
+            // reader to the main bot's connection, which is working fine.
+            error: "The confirmation bot is not connected for this account.",
+            attempts: 0,
+          };
     },
   });
 

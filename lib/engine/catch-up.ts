@@ -1,5 +1,5 @@
-import { TIMEFRAME_MS, type Timeframe } from "@/lib/market-data/provider";
-import { DEFAULT_CLOSE_DELAY_MS, currentCandleOpen } from "@/lib/scanner/schedule";
+import type { Timeframe } from "@/lib/market-data/provider";
+import { DEFAULT_CLOSE_DELAY_MS, latestScanWindow } from "@/lib/scanner/schedule";
 
 /**
  * Whether the engine should scan once on startup before following the schedule.
@@ -23,14 +23,8 @@ export function latestDueScanWindow(
   delayMs: number = DEFAULT_CLOSE_DELAY_MS,
 ): number | null {
   if (timeframes.length === 0) return null;
-
-  const windows = timeframes.map((timeframe) => {
-    const lastClose = currentCandleOpen(timeframe, now);
-    const window = lastClose + delayMs;
-    return window <= now ? window : lastClose - TIMEFRAME_MS[timeframe] + delayMs;
-  });
-
-  return Math.max(...windows);
+  // The same window the scheduled loop plans from — one definition of it.
+  return Math.max(...timeframes.map((timeframe) => latestScanWindow(timeframe, now, delayMs)));
 }
 
 export function isCatchUpDue(input: {

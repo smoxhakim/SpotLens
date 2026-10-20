@@ -130,6 +130,10 @@ make that unnecessary most of the time.
   ETH. The daily summary is the one deliberate exception — it is a day-scoped
   aggregate — and it takes the most recent read per market and then ranks it
   through the same `buildShortlist`, rather than ordering in SQL as it used to.
+  With no `runId`, that run is the newest _successful_ one (COMPLETED or
+  PARTIAL); a newer pass still RUNNING is reported as `passInProgress`, never
+  shown — its results do not exist until it finishes, and showing it emptied
+  Opportunities for the length of every pass.
 - **The notification layer consumes truth, it never re-derives it.**
   `lib/notifications` maps Phase D lifecycle events onto messages; Phase D
   decides whether a setup moved and Phase C decides what the market did.
@@ -188,13 +192,36 @@ WAITING_CONFIRMATION` is price arriving somewhere, not structure changing,
   policy sees. Real-process regressions: `lib/engine/orphans.process.test.ts`.
   One child failing never stops the other. Each role —
   engine, scanner, entry-zone — holds a PID lock under `.spotlens/locks/`, so a
-  second scanner cannot race the first into duplicate setups; a dead holder's
-  lock is taken over. `--catch-up` runs one pass on startup only when no
-  _successful_ pass has started since the latest close + settle delay, then the
-  schedule is unchanged. "Successful" is `successfulPassWhere`
+  second scanner cannot race the first into duplicate setups; a stale lock
+  (dead holder, or a PID now another process's — each lock records its
+  holder's identity: on Linux the boot id and `/proc` start ticks, which no
+  clock step moves; on macOS the start time, checked with `ps` etime; an
+  identity that cannot be read is never treated as a different process) is
+  taken over by exactly one
+  process: an exclusive claim file per lock nonce, a re-read under the claim,
+  then an atomic rename. Nothing deletes a lock on a stale read. `--catch-up`
+  runs one pass on startup only when no _successful_ pass has started since
+  the latest close + settle delay, then the schedule is unchanged. "Successful" is `successfulPassWhere`
   (`lib/scanner/runs.ts`): COMPLETED or PARTIAL. A FAILED run has a
   `completedAt` but scanned nothing, so it never cancels a catch-up, never
-  becomes the monitor's reload cursor and never makes a setup fresh. The
+  becomes the monitor's reload cursor and never makes a setup fresh. A pass
+  stopped part-way (Ctrl-C, SIGTERM, the engine going away) is FAILED too —
+  `ScanSummary.interrupted` — even though the markets it reached keep their
+  rows: it did not cover the universe. PARTIAL means markets failed on their
+  own. RUNNING runs older than 3h are closed as FAILED (`closeAbandonedRuns`).
+  The scheduled loop remembers what each timeframe was scanned through
+  (`ScannedThrough`, `lib/scanner/schedule.ts`): it plans the first window after
+  that, and on waking scans every timeframe with a newer window — so a laptop
+  that slept through an H4 close scans H4 on waking, and a close still settling
+  at startup is not skipped. On schedule it plans exactly what it always did. A
+  pass in which every market failed _transiently_ (`classifyPass`,
+  `lib/scanner/retry.ts`) leaves its timeframes uncovered and is retried after
+  1, 2, 5 and 10 min, never past the next scheduled window, which rescans them;
+  PARTIAL, permanent failures and interrupted passes are never retried. The
+  startup owner lookup is retried on the same delays when the database is
+  unreachable (`startupRetryDelay`), never for a permanent error, and the
+  scanner keeps its lock while it waits; a catch-up check that fails catches up
+  anyway rather than skipping the window. The
   monitor checks the latest successful `ScannerRun` every 60s
   (`ENTRY_MONITOR_SCANNER_CHECK_MS`) **whether or not it runs under the
   engine** — the relay makes it redundant there, but `planRefresh` does not
@@ -203,6 +230,18 @@ WAITING_CONFIRMATION` is price arriving somewhere, not structure changing,
 - **`TELEGRAM_BOT_TOKEN` is read in exactly one file**
   (`lib/notifications/telegram-provider.ts`) and never returned, logged, or
   stored. Errors are stripped of it before they reach a database row.
+- **Telegram is at most once, never exactly once.** A row is written PENDING
+  first (its unique index is the dedupe), then `sendAndRecord`
+  (`services/telegram-delivery.ts`) sends and always writes the outcome — an
+  error before sending is FAILED "not sent", never left PENDING; only a
+  database refusing the update twice leaves one, logged. Telegram has no
+  idempotency key, so the provider retries only what provably was not
+  delivered (429, 500, 502, 503, connection never opened) and never a timeout,
+  a dropped connection or a 504 — those are FAILED "may have been delivered".
+  An alert occasionally lost (still in-app) beats one sent twice. Every
+  failure logs one line naming it — "not sent", "failed", or "may have been
+  delivered" — since all three are FAILED rows. Old
+  FAILED/PENDING rows are not retried in the background, by decision.
 - **A backtest reports its own assumptions.** Fees, slippage, the entry policy
   and the same-candle stop/target policy travel on the report, because a result
   is uninterpretable without them. Fees are charged on both legs and **never
