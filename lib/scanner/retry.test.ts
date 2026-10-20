@@ -10,6 +10,7 @@ import {
   scanOnWake,
   scannedThroughAt,
   startSchedule,
+  startupRetryDelay,
   type PassOutcome,
   type ScheduleState,
 } from "@/lib/scanner";
@@ -347,5 +348,34 @@ describe("normal cadence is unchanged", () => {
     expect(passes.filter((p) => p.scanned.includes("H4"))).toHaveLength(42);
     expect(passes.every((p) => p.retryAttempt === null)).toBe(true);
     expect(passes.every((p) => (p.at - DELAY) % (60 * MIN) === 0)).toBe(true);
+  });
+});
+
+describe("startupRetryDelay", () => {
+  const unreachable = Object.assign(new Error("Can't reach database server at `db:5432`"), {
+    errorCode: "P1001",
+  });
+
+  it("a transient error waits 1, 2, 5, then 10 minutes, then gives up", () => {
+    expect([1, 2, 3, 4, 5].map((n) => startupRetryDelay(unreachable, n))).toEqual([
+      1 * MIN,
+      2 * MIN,
+      5 * MIN,
+      10 * MIN,
+      null,
+    ]);
+    expect(startupRetryDelay(new Error("fetch failed"), 1)).toBe(MIN);
+  });
+
+  it.each([
+    ["bad credentials", Object.assign(new Error("Authentication failed"), { errorCode: "P1000" })],
+    [
+      "no such database",
+      Object.assign(new Error("Database does not exist"), { errorCode: "P1003" }),
+    ],
+    ["a query error", Object.assign(new Error("x"), { code: "P2002" })],
+    ["a bug", new TypeError("Cannot read properties of undefined")],
+  ])("%s is not retried", (_, error) => {
+    expect(startupRetryDelay(error, 1)).toBeNull();
   });
 });

@@ -215,6 +215,10 @@ WAITING_CONFIRMATION` is price arriving somewhere, not structure changing,
   `lib/scanner/retry.ts`) leaves its timeframes uncovered and is retried after
   1, 2, 5 and 10 min, never past the next scheduled window, which rescans them;
   PARTIAL, permanent failures and interrupted passes are never retried. The
+  startup owner lookup is retried on the same delays when the database is
+  unreachable (`startupRetryDelay`), never for a permanent error, and the
+  scanner keeps its lock while it waits; a catch-up check that fails catches up
+  anyway rather than skipping the window. The
   monitor checks the latest successful `ScannerRun` every 60s
   (`ENTRY_MONITOR_SCANNER_CHECK_MS`) **whether or not it runs under the
   engine** — the relay makes it redundant there, but `planRefresh` does not

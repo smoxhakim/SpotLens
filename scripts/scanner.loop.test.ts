@@ -281,6 +281,7 @@ beforeEach(() => {
   logs.length = 0;
   vi.clearAllMocks();
   lastSuccessfulPassStartedAt.mockResolvedValue(new Date(Date.UTC(2099, 0, 1))); // no catch-up
+  resolveScannerUser.mockReset().mockResolvedValue({ ok: true as const, userId: "user-1" });
   vi.spyOn(console, "log").mockImplementation((m: string) => void logs.push(String(m)));
   vi.spyOn(console, "warn").mockImplementation(() => undefined);
   if (process.send) vi.spyOn(process, "send").mockImplementation(() => true);
@@ -340,25 +341,133 @@ describe("startup", () => {
 });
 
 describe("a database that is down at startup", () => {
-  // Pinned as it is, not as it should be: see the report's risks. The owner
-  // lookup throws, the script exits 1 — cleanly, without a loop — and recovery
-  // is left to whoever restarts it (the engine: 3 restarts in 15 minutes).
-  it("an unreachable database for the owner lookup ends the process with exit code 1", async () => {
-    resolveScannerUser.mockRejectedValueOnce(new Error("Can't reach database server"));
+  const unreachable = () =>
+    Object.assign(new Error("Can't reach database server at `db:5432`"), { errorCode: "P1001" });
+  const badCredentials = () =>
+    Object.assign(new Error("Authentication failed against database server"), {
+      errorCode: "P1000",
+    });
+
+  /** Owner lookups, with when they ran and whether two ever overlapped. */
+  function scriptLookups(outcomes: ("down" | "auth" | "ok")[]) {
+    const times: number[] = [];
+    let open = 0;
+    let maxOpen = 0;
+    resolveScannerUser.mockImplementation(async () => {
+      times.push(Date.now());
+      open += 1;
+      maxOpen = Math.max(maxOpen, open);
+      await flushOnce();
+      open -= 1;
+      const next = outcomes[times.length - 1] ?? "ok";
+      if (next === "down") throw unreachable();
+      if (next === "auth") throw badCredentials();
+      return { ok: true as const, userId: "user-1" };
+    });
+    return { times, maxOverlap: () => maxOpen };
+  }
+  const flushOnce = () => new Promise((r) => setImmediate(r));
+  const minutes = (times: number[], from: number) => times.map((t) => (t - from) / MIN);
+
+  it("unreachable, then back: retried after 1 and 2 min, then startup and the schedule go on", async () => {
+    const lookups = scriptLookups(["down", "down", "ok"]);
+    await start(at(10, 2, 41));
+    await runUntil(at(12, 30));
+
+    expect(minutes(lookups.times, at(10, 2, 41))).toEqual([0, 1, 3]);
+    expect(lookups.maxOverlap()).toBe(1);
+    expect(logs.filter((l) => /retrying in \d+ min \(retry \d of 4\)/.test(l))).toHaveLength(2);
+    expect(passTimes()).toEqual(["11:01:30", "12:01:30"]);
+    expect(process.exitCode).toBeUndefined();
+    // The lock was taken once, before the first lookup, and held throughout.
+    expect(holdLockOrExit).toHaveBeenCalledTimes(1);
+  });
+
+  it("with --catch-up, the catch-up pass runs as soon as the database is back", async () => {
+    scriptLookups(["down", "ok"]);
+    lastSuccessfulPassStartedAt.mockResolvedValue(null);
+    await start(at(10, 20), ["--catch-up"]);
+    await runUntil(at(11, 30));
+
+    expect(passTimes()).toEqual(["10:21:00", "11:01:30"]);
+    expect(passes[0].timeframes).toEqual(["H1", "H4"]);
+  });
+
+  it("a permanent error (bad credentials) is not retried: exit 1, saying what to check", async () => {
+    const lookups = scriptLookups(["auth"]);
     await start(at(10, 2, 41));
     await runUntil(at(12));
+
+    expect(lookups.times).toHaveLength(1);
     expect(runScan).not.toHaveBeenCalled();
     expect(process.exitCode).toBe(1);
+    expect(logs.at(-1)).toMatch(
+      /Fatal: .*retrying will not fix.*Check DATABASE_URL and the database credentials/,
+    );
     expect(waits).toHaveLength(0);
     expect(disconnect).toHaveBeenCalledTimes(1);
   });
 
-  it("a failed catch-up check is logged and the schedule still runs from the next close", async () => {
+  it("an outage past the limit: five lookups over 18 min, then exit 1 — no busy loop", async () => {
+    const lookups = scriptLookups(["down", "down", "down", "down", "down", "down"]);
+    await start(at(10, 2, 41));
+    await runUntil(at(12));
+
+    expect(minutes(lookups.times, at(10, 2, 41))).toEqual([0, 1, 3, 8, 18]);
+    expect(lookups.maxOverlap()).toBe(1);
+    expect(runScan).not.toHaveBeenCalled();
+    expect(process.exitCode).toBe(1);
+    expect(logs.at(-1)).toMatch(
+      /Fatal: .*failed 5 times over 18 min; the database is still unreachable.*Check the network and DATABASE_URL/,
+    );
+    expect(waits).toHaveLength(0);
+  });
+
+  it("Ctrl-C while waiting to retry: stops at once, cleanly — no further lookup, no pass", async () => {
+    const lookups = scriptLookups(["down", "down", "down"]);
+    await start(at(10, 2, 41));
+    await runUntil(at(10, 3, 10)); // in the one-minute wait
+    await stop();
+    await runUntil(at(12));
+
+    expect(lookups.times).toHaveLength(1);
+    expect(runScan).not.toHaveBeenCalled();
+    expect(process.exitCode).toBeUndefined();
+    expect(waits).toHaveLength(0);
+    expect(vi.getTimerCount()).toBe(0);
+    expect(disconnect).toHaveBeenCalledTimes(1);
+    expect(logs.at(-1)).toMatch(/Stopped\./);
+  });
+
+  it("a connection string in the error never reaches the log", async () => {
+    resolveScannerUser.mockRejectedValueOnce(
+      Object.assign(new Error("Authentication failed for postgresql://user:hunter2@db:5432/x"), {
+        errorCode: "P1000",
+      }),
+    );
+    await start(at(10, 2, 41));
+    await runUntil(at(11));
+    expect(logs.join("\n")).not.toContain("hunter2");
+  });
+
+  it("a failed catch-up check catches up anyway — the missed window is not skipped", async () => {
     lastSuccessfulPassStartedAt.mockRejectedValueOnce(new Error("connection closed"));
     await start(at(10, 20), ["--catch-up"]);
     await runUntil(at(11, 30));
-    expect(passTimes()).toEqual(["11:01:30"]); // the missed window is not caught up
-    expect(logs.some((l) => /Catch-up pass failed/.test(l))).toBe(true);
+
+    expect(passTimes()).toEqual(["10:20:00", "11:01:30"]);
+    expect(passes[0].timeframes).toEqual(["H1", "H4"]);
+    expect(logs.some((l) => /catching up anyway, so no window is skipped/.test(l))).toBe(true);
+  });
+
+  it("…and if the database is still down for that pass, the pass is retried like any other", async () => {
+    lastSuccessfulPassStartedAt.mockRejectedValueOnce(new Error("connection closed"));
+    kindOf = (i) => (i === 0 ? "THROW_DB" : "COMPLETED");
+    await start(at(10, 20), ["--catch-up"]);
+    await runUntil(at(11, 30));
+
+    expect(passTimes()).toEqual(["10:20:00", "10:21:00", "11:01:30"]);
+    expect(passes[1].timeframes).toEqual(["H1", "H4"]);
   });
 });
 

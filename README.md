@@ -385,6 +385,10 @@ is retried after 1, 2, 5 and 10 minutes, never past the next scheduled window
 a pass where only some markets failed is not retried, nor one whose failures
 will not change (bad data, an analysis error), nor one you stopped. While the
 exchange is down that is up to five failing passes an hour, each one quick.
+The same applies at startup: a scanner started before the network or the
+database is reachable waits 1, 2, 5 and 10 minutes for it (holding its lock),
+then exits with a message saying what to check; bad credentials or a missing
+database exit at once.
 
 **It only ever reads closed candles.** The forming candle is dropped before the
 engine sees anything, which means a rejection wick that has not finished

@@ -75,6 +75,22 @@ export function classifyPassError(error: unknown, aborted: boolean): PassOutcome
   return classifyFailure(error).retryable ? "FAILED_TRANSIENT" : "FAILED_PERMANENT";
 }
 
+/**
+ * A startup read of the database — the scanner's owner — failed. How long to
+ * wait before trying again, or null to give up.
+ *
+ * The same policy as a failed pass: only a transient error (an unreachable
+ * database or network — what `classifyPassError` calls transient) is retried,
+ * after 1, 2, 5 and 10 minutes, so a laptop that starts the engine before its
+ * network is up waits for it instead of exiting. A permanent error (bad
+ * credentials, a database that does not exist, anything else) is not retried:
+ * waiting would not fix it. `failedAttempts` counts the failures so far.
+ */
+export function startupRetryDelay(error: unknown, failedAttempts: number): number | null {
+  if (classifyPassError(error, false) !== "FAILED_TRANSIENT") return null;
+  return FAILED_PASS_RETRY_DELAYS_MS[failedAttempts - 1] ?? null;
+}
+
 export interface ScheduleState {
   /** What each timeframe has been scanned through. A failed-transient pass leaves it alone. */
   covered: ScannedThrough;

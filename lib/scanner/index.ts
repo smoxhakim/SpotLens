@@ -32,6 +32,7 @@ export {
   nextWake,
   recordPass,
   startSchedule,
+  startupRetryDelay,
   type PassOutcome,
   type ScheduleState,
 } from "./retry";

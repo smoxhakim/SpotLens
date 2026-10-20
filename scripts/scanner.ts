@@ -37,6 +37,8 @@ import {
   nextWake,
   recordPass,
   startSchedule,
+  startupRetryDelay,
+  classifyFailure,
   type PassOutcome,
   type ScheduleState,
   planScan,
@@ -262,6 +264,50 @@ async function maybeSendDailySummary(userId: string) {
   }
 }
 
+/** Returned by `withStartupRetries` when the scanner was stopped while waiting. */
+const STOPPED = Symbol("stopped");
+
+/**
+ * A startup read of the database, retried while the database or network is
+ * unreachable — 1, 2, 5 and 10 minutes apart (`startupRetryDelay`) — and given
+ * up on at once for an error waiting would not fix. One attempt at a time; a
+ * stop during the wait ends it at once. Gives up by throwing an error that
+ * says what to check, which `main` reports and exits 1 on.
+ */
+async function withStartupRetries<T>(
+  what: string,
+  read: () => Promise<T>,
+): Promise<T | typeof STOPPED> {
+  const started = Date.now();
+  for (let failed = 1; ; failed += 1) {
+    try {
+      return await read();
+    } catch (err) {
+      if (controller.signal.aborted) return STOPPED;
+      // Sanitised: no connection string or credential reaches the log.
+      const detail = classifyFailure(err).message;
+      const delay = startupRetryDelay(err, failed);
+      if (delay === null) {
+        const transient = classifyPassError(err, false) === "FAILED_TRANSIENT";
+        throw new Error(
+          transient
+            ? `${what} failed ${failed} times over ${Math.round((Date.now() - started) / 60_000)} ` +
+                `min; the database is still unreachable (${detail}). Check the network and ` +
+                "DATABASE_URL, then start the scanner again."
+            : `${what} failed with an error that retrying will not fix (${detail}). Check ` +
+                "DATABASE_URL and the database credentials, then start the scanner again.",
+        );
+      }
+      log(
+        `${what} failed (${detail}). The database or network looks unavailable; retrying in ` +
+          `${Math.round(delay / 60_000)} min (retry ${failed} of ${FAILED_PASS_RETRY_DELAYS_MS.length}).`,
+      );
+      await sleep(delay, controller.signal);
+      if (controller.signal.aborted) return STOPPED;
+    }
+  }
+}
+
 /** Says what the schedule will do about a pass that failed transiently, if anything. */
 function announceRetry(schedule: ScheduleState) {
   if (schedule.retry) {
@@ -302,25 +348,42 @@ async function maybeCatchUp(userId: string): Promise<CatchUpResult | null> {
   let decidedAt: number | null = null;
   let outcome: PassOutcome = "SUCCEEDED";
   try {
-    // A FAILED pass is finished but scanned nothing, so it does not count.
-    const last = await lastSuccessfulPassStartedAt();
+    // A FAILED pass is finished but scanned nothing, so it does not count. If
+    // the check itself fails, catch up anyway: an unneeded pass costs one scan,
+    // a skipped one leaves setups unverified until the next close — and a pass
+    // that fails because the database is still down is retried like any other.
+    let last: Date | null = null;
+    let checked = true;
+    try {
+      last = await lastSuccessfulPassStartedAt();
+    } catch (err) {
+      checked = false;
+      log(
+        `Could not check when the last successful pass ran (${classifyFailure(err).message}); ` +
+          "catching up anyway, so no window is skipped.",
+      );
+    }
 
-    const due = isCatchUpDue({
-      lastCompletedRunStartedAt: last?.getTime() ?? null,
-      timeframes,
-      now: Date.now(),
-      delayMs: closeDelayMs,
-    });
+    const due =
+      !checked ||
+      isCatchUpDue({
+        lastCompletedRunStartedAt: last?.getTime() ?? null,
+        timeframes,
+        now: Date.now(),
+        delayMs: closeDelayMs,
+      });
 
     if (!due) {
       log("Up to date with the schedule; no catch-up pass needed.");
       return null;
     }
 
-    log(
-      `The last successful pass started ${last ? last.toISOString() : "never"}, ` +
-        "before the most recent scan window. Catching up now.",
-    );
+    if (checked) {
+      log(
+        `The last successful pass started ${last ? last.toISOString() : "never"}, ` +
+          "before the most recent scan window. Catching up now.",
+      );
+    }
 
     const settle = settlementDelayMs(timeframes, Date.now(), closeDelayMs);
     if (settle > 0) await sleep(settle, controller.signal);
@@ -345,7 +408,15 @@ interface CatchUpResult {
 async function main() {
   holdLockOrExit("scanner", log);
 
-  const owner = await resolveScannerUser(process.env.SCANNER_USER_EMAIL);
+  // The scanner keeps its lock while it waits: a second one must not start
+  // just because this one is waiting for the database.
+  const owner = await withStartupRetries("Looking up the scanner's owner", () =>
+    resolveScannerUser(process.env.SCANNER_USER_EMAIL),
+  );
+  if (owner === STOPPED) {
+    log("Stopped.");
+    return;
+  }
 
   // Refused before anything is scanned, because the owner decides who every
   // setup, lifecycle event and notification belongs to. A pass that guessed
