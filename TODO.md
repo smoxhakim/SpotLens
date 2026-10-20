@@ -82,9 +82,12 @@ Open follow-ups, by priority:
       under it, then an atomic rename; nothing deletes a lock on a stale read.
       Residual: a process dying inside the millisecond takeover leaves a claim
       cleared after 30s, and two processes clearing it at once could both win.
-- [x] PID reuse: each lock records its holder's process start time, checked
-      against `ps -o etime`; a live PID that started at another time is not the
-      holder. Unverifiable (no `ps`, older lock format) is still obeyed.
+- [x] PID reuse: each lock records its holder's identity — on Linux the boot
+      id and `/proc/<pid>/stat` start ticks (no wall clock, so an NTP step
+      cannot make a live holder look reused); on macOS the start time, checked
+      against `ps -o etime`. Unverifiable (no `/proc` or `ps`, older lock
+      format) is still obeyed. Linux runtime: checked only for the `/proc`
+      format in a container; the lock code itself ran on macOS.
 - [x] A scanner killed mid-pass (engine crash hook, second Ctrl-C, 60s stop
       timeout, `kill -9`) left its `ScannerRun` RUNNING forever. The scanner
       now closes RUNNING runs older than 3h as FAILED, after taking its lock

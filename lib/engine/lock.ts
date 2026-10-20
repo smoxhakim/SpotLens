@@ -58,6 +58,81 @@ export interface LockOptions {
   processStartedAt?: number;
   /** When a running PID's process started, epoch ms, or null if that cannot be told. */
   startTimeOf?: (pid: number) => number | null;
+  /** Which identity check applies; the running platform by default. */
+  platform?: NodeJS.Platform;
+  /** This process's Linux identity, recorded in the lock; read from /proc by default. */
+  identity?: LinuxIdentity | null;
+  /** A running PID's Linux identity, or null if it cannot be read. */
+  identityOf?: (pid: number) => LinuxIdentity | null;
+}
+
+/**
+ * Who a Linux process is, without the wall clock: the boot it belongs to
+ * (`/proc/sys/kernel/random/boot_id`) and when it started, in clock ticks since
+ * that boot (`/proc/<pid>/stat`, field 22). Neither moves when the clock is
+ * stepped. `ps` elapsed time on Linux is measured from boot while a lock's
+ * recorded start is wall-clock time, so an NTP correction of a few seconds
+ * after boot could make a live holder look like a different process — and
+ * let a second scanner take its lock. On Linux this replaces that comparison.
+ */
+export interface LinuxIdentity {
+  bootId: string;
+  startTicks: string;
+}
+
+const BOOT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+const TICKS = /^\d{1,20}$/;
+
+/** A PID's Linux identity, or null when it cannot be read or does not parse. */
+export function linuxProcessIdentity(
+  pid: number,
+  read: (path: string) => string = (path) => readFileSync(path, "utf8"),
+): LinuxIdentity | null {
+  if (!Number.isInteger(pid) || pid <= 0) return null;
+  try {
+    const bootId = read("/proc/sys/kernel/random/boot_id").trim();
+    if (!BOOT_ID.test(bootId)) return null;
+    const startTicks = parseProcStatStartTicks(read(`/proc/${pid}/stat`));
+    return startTicks === null ? null : { bootId, startTicks };
+  } catch {
+    // No /proc, no permission, no such process: unknown, never "different".
+    return null;
+  }
+}
+
+/**
+ * Field 22 (`starttime`) of `/proc/<pid>/stat`. The second field is the
+ * command name in parentheses and may itself contain spaces or parentheses,
+ * so fields are counted from the last ")".
+ */
+export function parseProcStatStartTicks(stat: string): string | null {
+  const close = stat.lastIndexOf(")");
+  if (close === -1) return null;
+  const fields = stat
+    .slice(close + 1)
+    .trim()
+    .split(/\s+/);
+  const ticks = fields[19]; // fields here start at field 3; field 22 is the 20th
+  return ticks !== undefined && TICKS.test(ticks) ? ticks : null;
+}
+
+let ownIdentity: LinuxIdentity | null | undefined;
+/** This process's Linux identity, read once; null elsewhere or when unreadable. */
+function ownLinuxIdentity(platform: NodeJS.Platform): LinuxIdentity | null {
+  if (platform !== "linux") return null;
+  if (ownIdentity === undefined) ownIdentity = linuxProcessIdentity(process.pid);
+  return ownIdentity;
+}
+
+function parseIdentity(value: unknown): LinuxIdentity | null {
+  if (typeof value !== "object" || value === null) return null;
+  const { bootId, startTicks } = value as Record<string, unknown>;
+  return typeof bootId === "string" &&
+    BOOT_ID.test(bootId) &&
+    typeof startTicks === "string" &&
+    TICKS.test(startTicks)
+    ? { bootId, startTicks }
+    : null;
 }
 
 /**
@@ -138,6 +213,8 @@ interface Holder {
   startedAt: string | null;
   /** Absent from locks written before it was recorded; such a lock is obeyed. */
   processStartedAt: number | null;
+  /** Linux only. Absent on macOS, from older locks, or when /proc could not be read. */
+  identity: LinuxIdentity | null;
   nonce: string | null;
 }
 
@@ -180,6 +257,10 @@ export function acquireLock(role: LockRole, options: LockOptions = {}): LockResu
     pid,
     startedAt: new Date(now()).toISOString(),
     processStartedAt: options.processStartedAt ?? OWN_PROCESS_STARTED_AT,
+    identity:
+      options.identity !== undefined
+        ? options.identity
+        : ownLinuxIdentity(options.platform ?? process.platform),
     nonce: randomUUID(),
   };
   const content = JSON.stringify(self);
@@ -196,21 +277,50 @@ export function acquireLock(role: LockRole, options: LockOptions = {}): LockResu
     }
 
     // Stale: dead holder, reused PID, a previous life of this PID, or unreadable.
-    if (takeOver(file, seen.key, content, { pid, now, live })) return held();
+    if (takeOver(file, seen.key, content, { pid, now, live, identity: self.identity })) {
+      return held();
+    }
   }
 
   const last = readLock(file)?.holder;
   return { ok: false, holderPid: last?.pid ?? -1, startedAt: last?.startedAt ?? null };
 }
 
-/** Is this holder the live process that wrote the lock? */
+type Identified = Pick<Holder, "pid" | "processStartedAt" | "identity">;
+
+/**
+ * Is this holder the live process that wrote the lock?
+ *
+ * Dead: no. Alive, with a Linux identity recorded: yes exactly when the PID's
+ * identity now is the same boot and the same start ticks — a different boot
+ * means the holder belonged to an earlier one. Alive with no identity: on
+ * Linux, yes (the only other check is the wall-clock one, which a clock step
+ * defeats); elsewhere, the `ps` start-time check as before. Whenever the
+ * identity or start time cannot be read, yes: a lock is never seized on a
+ * guess, and refusing a role is the safe way to be wrong.
+ */
 function liveness(options: LockOptions) {
   const isAlive = options.isAlive ?? processIsAlive;
   const startTimeOf = options.startTimeOf ?? processStartTime;
-  return (holder: Pick<Holder, "pid" | "processStartedAt">): boolean => {
+  const platform = options.platform ?? process.platform;
+  const identityOf =
+    options.identityOf ??
+    (platform === "linux" ? (pid: number) => linuxProcessIdentity(pid) : () => null);
+
+  return (holder: Identified): boolean => {
     if (!isAlive(holder.pid)) return false;
-    // Written before start times were recorded, or `ps` cannot say: obey it, as
-    // before. Refusing a role is the safe way to be wrong.
+
+    if (holder.identity) {
+      const current = identityOf(holder.pid);
+      if (current === null) return true;
+      if (current.bootId !== holder.identity.bootId) return false;
+      return current.startTicks === holder.identity.startTicks;
+    }
+
+    if (platform === "linux") return true;
+
+    // macOS, unchanged: written before start times were recorded, or `ps`
+    // cannot say — obey it.
     if (holder.processStartedAt === null) return true;
     const actual = startTimeOf(holder.pid);
     if (actual === null) return true;
@@ -226,13 +336,15 @@ function takeOver(
   ctx: {
     pid: number;
     now: () => number;
-    live: (holder: Pick<Holder, "pid" | "processStartedAt">) => boolean;
+    live: (holder: Identified) => boolean;
+    identity: LinuxIdentity | null;
   },
 ): boolean {
   const claim = `${file}.claim-${key}`;
   const claimContent = JSON.stringify({
     pid: ctx.pid,
     processStartedAt: OWN_PROCESS_STARTED_AT,
+    identity: ctx.identity,
     at: ctx.now(),
   });
 
@@ -255,13 +367,14 @@ function clearIfAbandoned(
   claim: string,
   ctx: {
     now: () => number;
-    live: (holder: Pick<Holder, "pid" | "processStartedAt">) => boolean;
+    live: (holder: Identified) => boolean;
   },
 ) {
   try {
     const parsed = JSON.parse(readFileSync(claim, "utf8")) as {
       pid?: unknown;
       processStartedAt?: unknown;
+      identity?: unknown;
       at?: unknown;
     };
     const at = typeof parsed.at === "number" ? parsed.at : 0;
@@ -269,6 +382,7 @@ function clearIfAbandoned(
       pid: typeof parsed.pid === "number" ? parsed.pid : -1,
       processStartedAt:
         typeof parsed.processStartedAt === "number" ? parsed.processStartedAt : null,
+      identity: parseIdentity(parsed.identity),
     };
     if (ctx.now() - at > ABANDONED_CLAIM_AFTER_MS && !ctx.live(claimant)) removeQuietly(claim);
   } catch {
@@ -306,6 +420,7 @@ function parseHolder(raw: string): Holder | null {
       startedAt: typeof parsed.startedAt === "string" ? parsed.startedAt : null,
       processStartedAt:
         typeof parsed.processStartedAt === "number" ? parsed.processStartedAt : null,
+      identity: parseIdentity(parsed.identity),
       nonce: typeof parsed.nonce === "string" ? parsed.nonce : null,
     };
   } catch {

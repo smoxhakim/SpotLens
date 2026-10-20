@@ -194,7 +194,10 @@ WAITING_CONFIRMATION` is price arriving somewhere, not structure changing,
   engine, scanner, entry-zone — holds a PID lock under `.spotlens/locks/`, so a
   second scanner cannot race the first into duplicate setups; a stale lock
   (dead holder, or a PID now another process's — each lock records its
-  holder's start time, checked with `ps` etime) is taken over by exactly one
+  holder's identity: on Linux the boot id and `/proc` start ticks, which no
+  clock step moves; on macOS the start time, checked with `ps` etime; an
+  identity that cannot be read is never treated as a different process) is
+  taken over by exactly one
   process: an exclusive claim file per lock nonce, a re-read under the claim,
   then an atomic rename. Nothing deletes a lock on a stale read. `--catch-up`
   runs one pass on startup only when no _successful_ pass has started since
