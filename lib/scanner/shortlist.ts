@@ -1,4 +1,5 @@
 import { gradeFor, type SetupGrade, type TradeStatus } from "@/lib/analysis";
+import type { UntrackedReason } from "@/lib/setups";
 
 import { effectiveRiskReward, rankResults, type RankableResult } from "./ranking";
 
@@ -37,6 +38,12 @@ export interface ShortlistInput extends RankableResult {
   lifecycleStatus: string | null;
   /** The setup this result belongs to, so a candidate opens its own analysis. */
   trackedSetupId: string | null;
+  /**
+   * Why there is no tracked setup, when the pass that produced this result
+   * knew. Present on the scanner's own in-memory results; absent on stored
+   * rows, because `ScannerResult` has no column for it (see `TODO.md`).
+   */
+  untrackedReason?: UntrackedReason | null;
   /** Open time of the last closed candle the analysis ran on. Provenance. */
   analysedAtCandle: number | null;
   /** Context, carried for the explanation only. Null on older stored rows. */
@@ -52,7 +59,35 @@ export interface ShortlistInput extends RankableResult {
  * eligible" is only meaningful next to what happened to the other eighty-two.
  */
 export type ExclusionReason =
-  "FAILED" | "AVOID" | "HIGH_RISK" | "BELOW_QUALITY_BAR" | "REWARD_NOT_MEASURED";
+  "FAILED" | "AVOID" | "HIGH_RISK" | "NO_LEVELS" | "BELOW_QUALITY_BAR" | "REWARD_NOT_MEASURED";
+
+/**
+ * Why a candidate has no tracked setup behind it — never inferred.
+ *
+ * The reason the pass recorded, when it recorded one. Otherwise only what the
+ * stored facts prove: no reward at all means the engine built no levels
+ * (`riskReward` is null exactly when the analysis had no setup). Anything else
+ * is NOT_RECORDED — most such rows were contradicted at an untracked level,
+ * but "most" is a guess, and a lifecycle step that could not run looks the same.
+ *
+ * Context for the reader only. It is not a rank input and not an exclusion: see
+ * `exclusionFor` for why a contradicted candidate stays on the list.
+ */
+export function untrackedReasonFor(
+  result: Pick<ShortlistInput, "trackedSetupId" | "untrackedReason" | "riskReward">,
+): UntrackedReason | null {
+  if (result.trackedSetupId !== null) return null;
+  if (result.untrackedReason) return result.untrackedReason;
+  if (result.riskReward === null) return "NO_LEVELS";
+  return "NOT_RECORDED";
+}
+
+const UNTRACKED_REASON_TEXT: Record<UntrackedReason, string> = {
+  CONFIRMATION_CONTRADICTED:
+    "Not tracked: confirmation was contradicted at this level, so no setup was opened to follow.",
+  NO_LEVELS: "Not tracked: the engine produced no levels to follow.",
+  NOT_RECORDED: "Not tracked, and the reason was not recorded.",
+};
 
 export interface ShortlistCandidate {
   symbol: string;
@@ -67,6 +102,8 @@ export interface ShortlistCandidate {
   riskRewardIsMeasured: boolean;
   lifecycleStatus: string | null;
   trackedSetupId: string | null;
+  /** Null when `trackedSetupId` is set; otherwise why there is no setup. */
+  untrackedReason: UntrackedReason | null;
   analysedAtCandle: number | null;
   trend: string | null;
   mtfAgreement: string | null;
@@ -120,6 +157,15 @@ const MINIMUM_WAITING_GRADE: SetupGrade[] = ["STRONG", "MODERATE"];
  *    tool warned about outranking a structurally healthier candidate.
  *  - AVOID is excluded, and carries no levels to review in any case.
  *
+ * A candidate with no tracked setup is ranked exactly like one with a setup,
+ * and labelled (`untrackedReason`) instead. That includes one whose
+ * confirmation was contradicted at an untracked level — a WAIT the lifecycle
+ * would invalidate if it were tracking it. Excluding it is the better policy,
+ * but not yet a sound one: the reason is not stored, so the scanner's own list
+ * would drop it while Opportunities, built from stored rows, kept it — two
+ * orders for one pass. Decided deliberately; see `TODO.md` for the column that
+ * would let this become an exclusion.
+ *
  * Returns the reason for exclusion, or null when the result is eligible, so the
  * caller can count both without asking twice.
  */
@@ -133,8 +179,10 @@ export function exclusionFor(result: ShortlistInput): ExclusionReason | null {
   if (result.analysisStatus === "AVOID") return "AVOID";
   if (result.analysisStatus === "HIGH_RISK") return "HIGH_RISK";
 
-  // Everything past here is a status the engine only reaches with a score.
-  if (result.score === null) return "FAILED";
+  // A WAIT the engine reached before it could build levels — no support, no
+  // stop, no target, or a target set that would not ascend — carries no score.
+  // It is not a failure: the market was analysed and the verdict is real.
+  if (result.score === null) return "NO_LEVELS";
 
   if (result.analysisStatus === "WAIT_FOR_CONFIRMATION") {
     if (!MINIMUM_WAITING_GRADE.includes(gradeFor(result.score))) return "BELOW_QUALITY_BAR";
@@ -203,6 +251,12 @@ export function reasonsFor(result: ShortlistInput): string[] {
     reasons.push("Waiting on confirmation — the engine has not promoted it.");
   }
 
+  // Second, so it is never behind the disclosure: a candidate with no setup
+  // cannot be followed or alerted on, and the reader should know before
+  // anything else on the card.
+  const untracked = untrackedReasonFor(result);
+  if (untracked) reasons.push(UNTRACKED_REASON_TEXT[untracked]);
+
   reasons.push(`Quality ${score}/100 (${gradeFor(score).toLowerCase()}).`);
 
   if (result.riskRewardIsSynthetic === false && result.riskReward !== null) {
@@ -240,6 +294,7 @@ export function buildShortlist(results: readonly ShortlistInput[]): Shortlist {
     FAILED: 0,
     AVOID: 0,
     HIGH_RISK: 0,
+    NO_LEVELS: 0,
     BELOW_QUALITY_BAR: 0,
     REWARD_NOT_MEASURED: 0,
   };
@@ -284,6 +339,7 @@ function toCandidate(result: ShortlistInput, rank: number): ShortlistCandidate {
     riskRewardIsMeasured: result.riskRewardIsSynthetic === false && result.riskReward !== null,
     lifecycleStatus: result.lifecycleStatus,
     trackedSetupId: result.trackedSetupId,
+    untrackedReason: untrackedReasonFor(result),
     analysedAtCandle: result.analysedAtCandle,
     trend: result.trend,
     mtfAgreement: result.mtfAgreement,
@@ -310,3 +366,5 @@ export function viewOf(shortlist: Shortlist, size: ShortlistSize): ShortlistCand
 }
 
 export { effectiveRiskReward };
+
+export type { UntrackedReason };

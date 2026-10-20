@@ -52,7 +52,7 @@ export function SecondaryAnalysis({
             title="Confirmation evidence"
             summary="Every signal the confirmation engine looked for, and what it found."
           >
-            <ConfirmationPanel confirmation={result.confirmation} />
+            <ConfirmationPanel confirmation={result.confirmation} analysisStatus={result.status} />
           </CollapsibleSection>
         ) : null}
 

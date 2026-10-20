@@ -18,6 +18,7 @@ import {
   type CoachSection,
 } from "@/lib/coach";
 import { ANALYSIS_DISCLAIMER } from "@/lib/constants/disclaimers";
+import { storedTargetsWarning } from "@/lib/setups/labels";
 import { TIMEFRAME_LABELS, type Timeframe } from "@/lib/market-data/provider";
 import { cn } from "@/lib/utils";
 
@@ -269,6 +270,7 @@ export function CoachReviewView({
                 </Field>
               ))}
             </dl>
+            <LevelsWarning levels={levels} />
             <Points points={review.riskRewardReview.points} />
           </CardContent>
         </Card>
@@ -418,4 +420,21 @@ function Field({
 function humanise(value: string): string {
   const words = value.toLowerCase().replace(/_/g, " ").trim();
   return words.length === 0 ? "—" : words[0].toUpperCase() + words.slice(1);
+}
+
+/**
+ * Stored levels that fail the long-only order check (a legacy ladder with TP3
+ * below TP2, say). Never rewritten — flagged beside them instead, so the
+ * levels are not read as a valid ladder or a trade plan.
+ */
+function LevelsWarning({ levels }: { levels: Parameters<typeof storedTargetsWarning>[0] }) {
+  const warning = storedTargetsWarning(levels);
+  if (!warning) return null;
+  return (
+    <Alert variant="warning">
+      <AlertDescription className="text-[11px]">
+        Invalid stored levels: {warning} Do not read them as a target ladder or a trade plan.
+      </AlertDescription>
+    </Alert>
+  );
 }

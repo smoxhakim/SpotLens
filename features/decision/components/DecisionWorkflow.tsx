@@ -16,6 +16,7 @@ import { ANALYSIS_DISCLAIMER } from "@/lib/constants/disclaimers";
 import type { JournalDecision, JournalSkipReason } from "@/lib/journal";
 import { TIMEFRAME_LABELS, type Timeframe } from "@/lib/market-data/provider";
 import { riskCalculatorParams, type RiskPrefill } from "@/lib/risk";
+import { confirmationCaveat, lifecycleLabel, storedTargetsWarning } from "@/lib/setups/labels";
 
 import { DecisionPanel, type DecisionTarget } from "./DecisionPanel";
 
@@ -139,6 +140,18 @@ export function DecisionWorkflow({
 
   const { context, prefill, journal } = query.data;
   const levels = context.levels;
+  // A legacy stored ladder that fails the long-only order check is shown as
+  // recorded and flagged — never rewritten, never presented as a valid plan.
+  const levelsWarning = levels ? storedTargetsWarning(levels) : null;
+  // Evidence on a setup the engine did not promote is not approval. A tracked
+  // setup's verdict is the one stored when it was first tracked, so the
+  // sentence says when it was given rather than presenting it as current.
+  const confirmationNote =
+    context.confirmation.status === "PRESENT"
+      ? confirmationCaveat(context.verdictInputs.analysisStatus, {
+          asOf: context.identity.setupId ? "creation" : "current",
+        })
+      : null;
   const tfLabel =
     TIMEFRAME_LABELS[context.identity.timeframe as Timeframe] ?? context.identity.timeframe;
 
@@ -209,7 +222,20 @@ export function DecisionWorkflow({
               </>
             )}
             {context.confirmation.status && (
-              <Field label="Confirmation">{humanise(context.confirmation.status)}</Field>
+              <Field label="Confirmation" wide={confirmationNote !== null}>
+                {confirmationNote ? (
+                  <>
+                    <span className="text-amber-600 dark:text-amber-400">
+                      Evidence present — not approval
+                    </span>
+                    <span className="mt-0.5 block text-[10px] font-normal leading-relaxed text-amber-600 dark:text-amber-400">
+                      {confirmationNote}
+                    </span>
+                  </>
+                ) : (
+                  humanise(context.confirmation.status)
+                )}
+              </Field>
             )}
             {context.market.regimeDirection && (
               <Field label="Regime">
@@ -221,10 +247,19 @@ export function DecisionWorkflow({
             )}
             {context.verdictInputs.lifecycleStatus && (
               <Field label="Lifecycle" wide>
-                {humanise(context.verdictInputs.lifecycleStatus)}
+                {lifecycleLabel(context.verdictInputs.lifecycleStatus)}
               </Field>
             )}
           </dl>
+
+          {levelsWarning && (
+            <Alert variant="warning">
+              <AlertDescription className="text-[11px] leading-relaxed">
+                Invalid stored levels: {levelsWarning} Do not read them as a target ladder or a
+                trade plan.
+              </AlertDescription>
+            </Alert>
+          )}
 
           {context.statusReason && (
             <p className="text-[11px] leading-relaxed text-muted-foreground">

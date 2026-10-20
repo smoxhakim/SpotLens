@@ -6,8 +6,9 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
-import type { AnalysisResult, ConfirmationResult } from "@/lib/analysis";
+import type { AnalysisResult, ConfirmationResult, TradeStatus } from "@/lib/analysis";
 import { formatPrice } from "@/lib/format";
+import { confirmationCaveat } from "@/lib/setups/labels";
 import { cn } from "@/lib/utils";
 
 import { LearnLink } from "./LearnLink";
@@ -37,6 +38,17 @@ const CONFIRMATION_META = {
     Icon: CircleDashed,
   },
   CONTRADICTED: { label: "Contradicted", className: "text-bearish", Icon: X },
+} as const;
+
+/**
+ * Evidence present on a setup the engine did not promote. Amber and a warning
+ * icon, never the green check: confirmation is a gate, and passing it is not
+ * approval while another rule — HIGH_RISK above all — still holds the verdict.
+ */
+const EVIDENCE_NOT_APPROVAL = {
+  label: "Evidence present — not approval",
+  className: "text-amber-600 dark:text-amber-400",
+  Icon: AlertTriangle,
 } as const;
 
 export function TradeLevelsCard({
@@ -89,7 +101,7 @@ export function TradeLevelsCard({
   // stop for a trade the engine has just advised against undoes the refusal.
   if (!setup) {
     return (
-      <Shell confirmation={result.confirmation}>
+      <Shell confirmation={result.confirmation} analysisStatus={result.status}>
         <p className="text-xs leading-relaxed text-muted-foreground">
           No entry, stop or target levels are shown, because SpotLens does not hand over numbers for
           a trade it has just advised against.
@@ -102,7 +114,7 @@ export function TradeLevelsCard({
   const [tp1, tp2, tp3] = setup.takeProfits;
 
   return (
-    <Shell confirmation={result.confirmation}>
+    <Shell confirmation={result.confirmation} analysisStatus={result.status}>
       {/* One row on desktop, two columns on phones. Entry and the invalidation
           sit together because they are the pair that defines the risk; the
           targets follow in the order the engine numbered them. */}
@@ -194,10 +206,17 @@ export function TradeLevelsCard({
 function Shell({
   children,
   confirmation,
+  analysisStatus,
 }: {
   children: React.ReactNode;
   confirmation?: ConfirmationResult | null;
+  /** The verdict on the same run, which confirmation evidence cannot override. */
+  analysisStatus?: TradeStatus;
 }) {
+  // Evidence beside anything short of a potential setup is said to be evidence,
+  // not approval — on HIGH_RISK, with the verdict named.
+  const caveat = confirmation?.status === "PRESENT" ? confirmationCaveat(analysisStatus) : null;
+
   return (
     <Card>
       <CardContent className="p-4">
@@ -205,8 +224,15 @@ function Shell({
           <h2 className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
             Trade setup
           </h2>
-          {confirmation ? <ConfirmationChip confirmation={confirmation} /> : null}
+          {confirmation ? (
+            <ConfirmationChip confirmation={confirmation} caution={caveat !== null} />
+          ) : null}
         </div>
+        {caveat && (
+          <p className="-mt-1 mb-3 text-[11px] leading-relaxed text-amber-600 dark:text-amber-400">
+            {caveat}
+          </p>
+        )}
         {children}
       </CardContent>
     </Card>
@@ -219,8 +245,15 @@ function Shell({
  * The count under the label is the engine's own signal list, split by
  * direction — not a score, and not a judgement this component makes.
  */
-function ConfirmationChip({ confirmation }: { confirmation: ConfirmationResult }) {
-  const meta = CONFIRMATION_META[confirmation.status];
+function ConfirmationChip({
+  confirmation,
+  caution,
+}: {
+  confirmation: ConfirmationResult;
+  /** Evidence present, but the verdict is not a potential setup. */
+  caution: boolean;
+}) {
+  const meta = caution ? EVIDENCE_NOT_APPROVAL : CONFIRMATION_META[confirmation.status];
   const supporting = confirmation.signals.filter((s) => s.signal === "positive").length;
   const against = confirmation.signals.filter((s) => s.signal === "negative").length;
 

@@ -28,11 +28,28 @@ make that unnecessary most of the time.
   failing grade. It judges **closed candles only**. It adds no status and no
   score category. CONTRADICTED means opposing evidence (a primary signal fired
   negative); NOT_PRESENT means missing evidence. Thin volume is the latter — an
-  absence cannot refute evidence that visibly happened.
+  absence cannot refute evidence that visibly happened. **Confirmation evidence
+  is not approval to trade.** It is worded "Confirmation evidence present",
+  never "detected", and below POTENTIAL_SETUP it always carries
+  `confirmationCaveat` (`lib/setups/labels.ts`), which names a HIGH_RISK verdict
+  outright — the state where a green "confirmation" was being read as a go.
 - **AVOID shows no numbers.** No entry, stop or targets — handing over levels
   for a trade just advised against defeats the point.
 - **Every number carries a reason.** The engine decides; `lib/analysis/explain`
   phrases it. AI never produces a number.
+- **Levels are in long order, checked before anything is measured.** Stop <
+  entry low ≤ entry high < TP1 ≤ TP2 ≤ TP3. `calculateTakeProfits` builds it:
+  a target must clear the whole entry zone, not its middle, and an R-multiple
+  fills a slot only above the last target — else the ladder stops short.
+  `validateSetupLevels` (`lib/analysis/setup/levels.ts`) then runs in
+  `runAnalysis` _before_ `calculateRiskReward`, the score, confirmation and
+  `determineStatus`; a set that fails is WAIT with no levels, refused and
+  **never re-sorted**, since sorting would change which target the ratio means.
+  So an invalid set can never be measured or reach POTENTIAL_SETUP. Ladders
+  stored before this (LTC/USDT 1h: TP3 below TP2) are never rewritten;
+  `storedLevelsWarning` flags them on the setups, Coach and decision pages, and
+  the Coach prompt says "Levels check: FAILED" with a rule not to treat them as
+  a ladder or endorse the setup.
 - **Explanations are structured, not prose stitched in components.**
   `lib/analysis/explanations` turns a finished `AnalysisResult` into an ordered
   `Explanation[]` (category, signal, title, detail). It is pure — it explains
@@ -46,6 +63,15 @@ make that unnecessary most of the time.
   setup on every run. Re-running an unchanged analysis writes **nothing** —
   that is what stops the future scanner filling the table. INVALIDATED is
   terminal; a level that comes back is a new setup with a new id.
+- **A lifecycle state belongs to a tracked setup; why there is none is a
+  separate fact.** `ScannerResult.lifecycleStatus` is what the lifecycle wrote
+  this pass — never INVALIDATED for a candidate that was never tracked, because
+  nothing was invalidated and every invalidation count would be lying. A
+  `reconcileSetup` NONE carries a typed `cause`; `untrackedReasonOf` turns it
+  into CONFIRMATION_CONTRADICTED, NO_LEVELS or NOT_RECORDED. It is held in
+  memory only — `ScannerResult` has no column for it (proposal in `TODO.md`) —
+  so a stored row says NOT_RECORDED unless its null reward proves NO_LEVELS. It
+  labels a shortlist candidate and never ranks or excludes one.
 - **A stored setup's numbers never change.** `TrackedSetup`'s snapshot columns
   are written once. Later analysis moving the entry or the score is the market,
   not a correction — rewriting them would destroy the record of what was
@@ -75,7 +101,9 @@ make that unnecessary most of the time.
   `lib/scanner/shortlist.ts` filters and orders what the engine already decided:
   `exclusionFor` admits POTENTIAL_SETUP outright and WAIT_FOR_CONFIRMATION only
   at MODERATE or better with a **measured** reward, and refuses HIGH_RISK and
-  AVOID entirely. There is exactly **one canonical order** — rank, then spread
+  AVOID entirely. A WAIT the engine reached before it could build levels has no
+  score and is excluded as NO_LEVELS — not FAILED, which is reserved for a
+  market the engine never read. There is exactly **one canonical order** — rank, then spread
   across markets — and `top5`/`top10`/`top15` are prefixes of it, so a candidate
   cannot be fifth on one view and eleventh on another. Every eligible result
   stays in `allEligible`, every result stays in the database, and a candidate

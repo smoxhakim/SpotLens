@@ -985,6 +985,21 @@ describe("confirmation evidence is not confirmation", () => {
     expect(message).toContain("evidence is not approval");
   });
 
+  it("names a high-risk verdict in the app's own list, where it always lands", () => {
+    // HIGH_RISK confirmations never go to Telegram; the in-app row is the only
+    // place they are read, so that is where the verdict has to be said.
+    const highRisk = renderInApp(
+      event({ type: "CONFIRMATION_DETECTED", setup: setupFacts({ analysisStatus: "HIGH_RISK" }) }),
+    );
+    expect(highRisk.title).not.toMatch(/detected/i);
+    expect(highRisk.body).toContain("has not been promoted");
+    expect(highRisk.body).toMatch(/rated this setup high risk when it was first tracked/);
+    expect(highRisk.body).toContain("Evidence is not approval");
+
+    const waiting = renderInApp(event({ type: "CONFIRMATION_DETECTED" }));
+    expect(waiting.body).not.toMatch(/high risk/i);
+  });
+
   it("separates what this transition proves from what was frozen at creation", () => {
     const message = text();
 

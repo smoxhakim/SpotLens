@@ -54,12 +54,14 @@ export {
   isShortlistEligible,
   reasonsFor,
   spreadAcrossMarkets,
+  untrackedReasonFor,
   viewOf,
   type ExclusionReason,
   type Shortlist,
   type ShortlistCandidate,
   type ShortlistInput,
   type ShortlistSize,
+  type UntrackedReason,
 } from "./shortlist";
 export { SUCCESSFUL_RUN_STATUSES, successfulPassWhere, type SuccessfulRunStatus } from "./runs";
 export {

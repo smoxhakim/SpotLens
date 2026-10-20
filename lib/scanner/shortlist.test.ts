@@ -7,6 +7,7 @@ import {
   isShortlistEligible,
   reasonsFor,
   spreadAcrossMarkets,
+  untrackedReasonFor,
   viewOf,
   type ShortlistInput,
 } from "./shortlist";
@@ -110,17 +111,115 @@ describe("eligibility", () => {
       result({ symbol: "DDDUSDT", score: 30 }),
       result({ symbol: "EEEUSDT", riskRewardIsSynthetic: true }),
       result({ symbol: "FFFUSDT", ok: false, analysisStatus: null, score: null }),
+      result({ symbol: "GGGUSDT", score: null, riskReward: null, trackedSetupId: null }),
     ]);
 
-    expect(shortlist.totalAnalysed).toBe(6);
+    expect(shortlist.totalAnalysed).toBe(7);
     expect(shortlist.totalEligible).toBe(1);
     expect(shortlist.excluded).toEqual({
       FAILED: 1,
       AVOID: 1,
       HIGH_RISK: 1,
+      NO_LEVELS: 1,
       BELOW_QUALITY_BAR: 1,
       REWARD_NOT_MEASURED: 1,
     });
+  });
+
+  it("reports a wait the engine reached without levels as no levels, not a failure", () => {
+    // No support zone, no stop, no target, or a target set that would not
+    // ascend: the engine says wait and builds no setup, so there is no score.
+    // The market was analysed — counting it as FAILED described it wrongly.
+    expect(
+      exclusionFor(result({ score: null, riskReward: null, riskRewardIsSynthetic: null })),
+    ).toBe("NO_LEVELS");
+  });
+});
+
+describe("untracked candidates", () => {
+  // NEAR/USDT 4h and ARB/USDT 4h were ranked second and fourth on a real pass
+  // with no setup behind them, and nothing stored said why.
+  const contradicted = result({
+    symbol: "NEARUSDT",
+    timeframe: "H4",
+    score: 86,
+    riskReward: 3.33,
+    trackedSetupId: null,
+    lifecycleStatus: null,
+    untrackedReason: "CONFIRMATION_CONTRADICTED",
+  });
+
+  it("gives the reason the pass recorded, as its own field", () => {
+    const [candidate] = buildShortlist([contradicted]).allEligible;
+    expect(candidate.trackedSetupId).toBeNull();
+    expect(candidate.untrackedReason).toBe("CONFIRMATION_CONTRADICTED");
+    // Never dressed up as a lifecycle state: nothing was invalidated.
+    expect(candidate.lifecycleStatus).toBeNull();
+    // Second, so the card shows it before the disclosure.
+    expect(candidate.reasons[1]).toMatch(/Not tracked: confirmation was contradicted/);
+  });
+
+  it("says there were no levels only when the stored facts prove it", () => {
+    expect(
+      untrackedReasonFor({ trackedSetupId: null, untrackedReason: undefined, riskReward: null }),
+    ).toBe("NO_LEVELS");
+  });
+
+  it("says the reason was not recorded for a stored row, rather than guessing contradiction", () => {
+    // Stored rows carry no reason. A row with levels and no setup was most
+    // likely contradicted — and "most likely" is not a fact.
+    const stored = result({ trackedSetupId: null, lifecycleStatus: null });
+    expect(untrackedReasonFor(stored)).toBe("NOT_RECORDED");
+    expect(reasonsFor(stored)).toContain("Not tracked, and the reason was not recorded.");
+  });
+
+  it("does not read a lifecycle state as a reason", () => {
+    // The overload this replaced: INVALIDATED on an untracked row.
+    const legacy = result({ trackedSetupId: null, lifecycleStatus: "INVALIDATED" });
+    expect(untrackedReasonFor(legacy)).toBe("NOT_RECORDED");
+  });
+
+  it("adds nothing to a tracked candidate, whatever reason field it carries", () => {
+    const tracked = buildShortlist([result({ untrackedReason: "NO_LEVELS" })]).allEligible[0];
+    expect(tracked.untrackedReason).toBeNull();
+    expect(tracked.reasons.some((r) => r.startsWith("Not tracked"))).toBe(false);
+  });
+});
+
+describe("shortlist policy for untracked candidates — informational, not excluded", () => {
+  // Documented in `exclusionFor` and TODO.md: the reason is not stored, so an
+  // exclusion would make the scanner's list and Opportunities disagree.
+  const reasons = ["CONFIRMATION_CONTRADICTED", "NOT_RECORDED", null] as const;
+
+  it("admits or excludes exactly as it would with a setup", () => {
+    for (const untrackedReason of reasons) {
+      const r = result({ trackedSetupId: null, untrackedReason });
+      expect(exclusionFor(r), String(untrackedReason)).toBe(exclusionFor(result()));
+    }
+  });
+
+  it("ranks an untracked candidate by the engine's facts alone", () => {
+    const ranked = buildShortlist([
+      result({ symbol: "AAAUSDT", score: 80 }),
+      result({
+        symbol: "BBBUSDT",
+        score: 90,
+        trackedSetupId: null,
+        untrackedReason: "CONFIRMATION_CONTRADICTED",
+      }),
+      result({ symbol: "CCCUSDT", score: 85, trackedSetupId: null }),
+    ]).allEligible;
+    expect(ranked.map((c) => c.symbol)).toEqual(["BBBUSDT", "CCCUSDT", "AAAUSDT"]);
+    expect(ranked.map((c) => c.untrackedReason)).toEqual([
+      "CONFIRMATION_CONTRADICTED",
+      "NOT_RECORDED",
+      null,
+    ]);
+  });
+
+  it("still excludes a no-levels WAIT, by its own exclusion", () => {
+    const r = result({ score: null, riskReward: null, trackedSetupId: null });
+    expect(exclusionFor(r)).toBe("NO_LEVELS");
   });
 });
 

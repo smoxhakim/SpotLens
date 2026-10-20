@@ -151,7 +151,7 @@ async function scan(triggeredBy: "SCHEDULE" | "MANUAL", due: Timeframe[], userId
   log(
     `   shortlist: ${shortlist.totalEligible} of ${shortlist.totalAnalysed} eligible · ` +
       `excluded ${excluded.AVOID} avoid, ${excluded.HIGH_RISK} high risk, ` +
-      `${excluded.BELOW_QUALITY_BAR} below the quality bar, ` +
+      `${excluded.NO_LEVELS} without levels, ${excluded.BELOW_QUALITY_BAR} below the quality bar, ` +
       `${excluded.REWARD_NOT_MEASURED} unmeasured reward, ${excluded.FAILED} failed`,
   );
 
@@ -161,7 +161,12 @@ async function scan(triggeredBy: "SCHEDULE" | "MANUAL", due: Timeframe[], userId
       // "Quality", never "probability" — the score orders a list and nothing more.
       log(
         `     ${c.rank}. ${c.symbol} ${c.timeframe} ${c.analysisStatus} · quality ${c.score}/100` +
-          (c.riskRewardIsMeasured ? ` · R:R 1:${c.riskReward!.toFixed(1)}` : " · R:R not measured"),
+          (c.riskRewardIsMeasured
+            ? ` · R:R 1:${c.riskReward!.toFixed(1)}`
+            : " · R:R not measured") +
+          (c.untrackedReason
+            ? ` · not tracked (${c.untrackedReason.toLowerCase().replace(/_/g, " ")})`
+            : ""),
       );
     }
   } else {

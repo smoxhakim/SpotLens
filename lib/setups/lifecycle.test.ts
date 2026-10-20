@@ -8,6 +8,7 @@ import {
   lifecycleStatusFor,
   originOf,
   reconcileSetup,
+  untrackedReasonOf,
   snapshotOf,
 } from "./lifecycle";
 import type { ExistingSetup, SetupLifecycleStatus, SetupPlan } from "./types";
@@ -297,6 +298,66 @@ describe("invalidation", () => {
   it("does nothing when there is no setup and none is tracked", () => {
     const plan = reconcileSetup({ existing: null, result: runAnalysis(downtrend()) });
     expect(plan.action).toBe("NONE");
+  });
+});
+
+describe("why a result was not tracked", () => {
+  // Rejected because confirmation was contradicted on a level nobody tracked.
+  it("names contradiction as the cause, and plans no write at all", () => {
+    const contradicted = resultWith({
+      status: "WAIT_FOR_CONFIRMATION",
+      confirmation: "CONTRADICTED",
+    });
+    expect(contradicted.setup).not.toBeNull();
+
+    const plan = reconcileSetup({ existing: null, result: contradicted });
+    expect(plan).toMatchObject({ action: "NONE", cause: "CONTRADICTED_UNTRACKED" });
+
+    expect(
+      untrackedReasonOf({ setupId: null, cause: "CONTRADICTED_UNTRACKED" }, contradicted),
+    ).toBe("CONFIRMATION_CONTRADICTED");
+  });
+
+  // Rejected because the engine built no levels at all.
+  it("says there were no levels when the engine built none", () => {
+    const refused = runAnalysis(downtrend());
+    expect(refused.setup).toBeNull();
+
+    const plan = reconcileSetup({ existing: null, result: refused });
+    expect(plan).toMatchObject({ action: "NONE", cause: "NO_SETUP" });
+    expect(untrackedReasonOf({ setupId: null, cause: "NO_SETUP" }, refused)).toBe("NO_LEVELS");
+  });
+
+  it("says unknown when the lifecycle step never ran, even on a contradicted analysis", () => {
+    // `trackSetup` answers with no cause when the database is unreachable or
+    // not configured. Contradiction is then likely, but it is not known.
+    const contradicted = resultWith({ confirmation: "CONTRADICTED" });
+    expect(untrackedReasonOf({ setupId: null, cause: null }, contradicted)).toBe("NOT_RECORDED");
+  });
+
+  it("has no reason to give for a result that has a setup", () => {
+    const unchanged = resultWith({ confirmation: "NOT_PRESENT", priceInZone: true });
+    expect(untrackedReasonOf({ setupId: "setup-1", cause: "UNCHANGED" }, unchanged)).toBeNull();
+  });
+
+  it("marks an unchanged tracked setup as UNCHANGED, never as contradicted", () => {
+    const waiting = resultWith({
+      status: "WAIT_FOR_CONFIRMATION",
+      confirmation: "NOT_PRESENT",
+      priceInZone: true,
+    });
+    const plan = reconcileSetup({ existing: existing("WAITING_CONFIRMATION"), result: waiting });
+    expect(plan).toMatchObject({ action: "NONE", cause: "UNCHANGED" });
+  });
+
+  it("invalidates a tracked setup on contradiction — that is a transition, not a NONE", () => {
+    // The only path that may count as an invalidation is one with a setup to
+    // invalidate. The untracked path above writes nothing.
+    const plan = reconcileSetup({
+      existing: existing("WAITING_CONFIRMATION"),
+      result: resultWith({ confirmation: "CONTRADICTED" }),
+    });
+    expect(plan.action).toBe("TRANSITION");
   });
 });
 

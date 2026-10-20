@@ -1,4 +1,5 @@
 import { formatPrice } from "@/lib/format";
+import { confirmationCaveat } from "@/lib/setups/labels";
 
 import { formatAge, utcClock } from "./time";
 
@@ -13,6 +14,16 @@ import type { NotificationEvent, NotificationEventType } from "./types";
  * `SETUP_INVALIDATED`, so the event type alone cannot tell them apart, and the
  * stored row carries no flag that can.
  */
+/**
+ * What an entry-zone alert is, said in the alert itself, in both channels.
+ *
+ * A live price inside a stored zone is a touch of a level: no candle has
+ * closed on it, no confirmation was checked and no rule was re-run. The word
+ * "buy" is never used — this is the sentence that says what the bell is not.
+ */
+export const ENTRY_ZONE_TOUCH_NOTE =
+  "This is a price-zone touch, not an entry signal and not confirmation — review the setup before deciding.";
+
 export const IN_APP_MARKERS = {
   potentialSetup: "🟢",
   confirmationEvidence: "🔵",
@@ -137,7 +148,12 @@ export function renderInApp(event: NotificationEvent): { title: string; body: st
           (positives.length > 0
             ? `${positives.map((s) => s.title).join("; ")}. `
             : "The confirmation layer found the evidence it requires. ") +
-          "The analysis has not been promoted — review the chart before deciding.",
+          "The analysis has not been promoted — review the chart before deciding." +
+          // Named outright on HIGH_RISK, where "confirmation" is easiest to
+          // read as a green light it can never be.
+          (setup.analysisStatus === "HIGH_RISK"
+            ? ` ${confirmationCaveat("HIGH_RISK", { asOf: "creation" })}`
+            : ""),
       };
     }
 
@@ -194,7 +210,10 @@ export function renderInApp(event: NotificationEvent): { title: string; body: st
           `Last scan: ${LIFECYCLE_SHORT[setup.lifecycleStatus] ?? setup.lifecycleStatus}, ` +
           `${utcClock(seen.scanCompletedAt)} (${formatAge(seen.observedAt - seen.scanCompletedAt)} before this alert); ` +
           `tracked since ${utcClock(seen.setupCreatedAt)}. ` +
-          "This is not confirmation — review the setup before deciding.",
+          (setup.analysisStatus === "HIGH_RISK"
+            ? "The engine rated this setup high risk when it was first tracked. "
+            : "") +
+          ENTRY_ZONE_TOUCH_NOTE,
       };
     }
 

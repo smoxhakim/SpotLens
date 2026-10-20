@@ -10,12 +10,15 @@ export {
   isSameOrigin,
   originOf,
   reconcileSetup,
+  untrackedReasonOf,
   snapshotOf,
   TERMINAL_STATUS,
 } from "./lifecycle";
+export { confirmationCaveat, LIFECYCLE_LABELS, lifecycleLabel } from "./labels";
 export type {
   ConfirmationPayload,
   ExistingSetup,
+  NoActionCause,
   PlannedCreate,
   PlannedEvent,
   PlannedTransition,
@@ -25,4 +28,5 @@ export type {
   SetupPlan,
   SetupSnapshot,
   SetupSnapshotDetail,
+  UntrackedReason,
 } from "./types";

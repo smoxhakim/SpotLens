@@ -121,8 +121,29 @@ export interface PlannedTransition {
  * (existing row, analysis result) and can be tested without a database. The
  * service's only job is to execute it.
  */
+/**
+ * Why a plan writes nothing — typed, so a caller never has to read the prose.
+ *
+ * - NO_SETUP: the engine built no levels, and nothing is tracked.
+ * - CONTRADICTED_UNTRACKED: the engine built levels, but confirmation was
+ *   contradicted on a level nobody was tracking, so none is created.
+ * - UNCHANGED: a tracked setup was re-observed in the state it is already in.
+ */
+export type NoActionCause = "NO_SETUP" | "CONTRADICTED_UNTRACKED" | "UNCHANGED";
+
+/**
+ * Why a scanned result has no tracked setup behind it.
+ *
+ * - CONFIRMATION_CONTRADICTED: levels existed; confirmation was contradicted on
+ *   a level nobody was tracking. Nothing was invalidated — nothing existed.
+ * - NO_LEVELS: the engine produced no entry, stop or target to track.
+ * - NOT_RECORDED: not known — a stored row (the reason is not persisted), or a
+ *   pass whose lifecycle step could not run. Said as unknown, never guessed.
+ */
+export type UntrackedReason = "CONFIRMATION_CONTRADICTED" | "NO_LEVELS" | "NOT_RECORDED";
+
 export type SetupPlan =
-  | { action: "NONE"; reason: string }
+  | { action: "NONE"; reason: string; cause: NoActionCause }
   | { action: "CREATE"; create: PlannedCreate }
   | { action: "TRANSITION"; transition: PlannedTransition }
   | { action: "REPLACE"; invalidate: PlannedTransition; create: PlannedCreate };

@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+import { storedTargetsWarning } from "@/lib/setups/labels";
+
 import type { CoachContext } from "./types";
 
 /**
@@ -38,6 +40,7 @@ WHAT YOU MUST NOT DO
 - You do not execute trades. You have no tools, no market access and no account. You cannot place, cancel or size an order, and you must never imply otherwise.
 - You must not invent market data, indicator values, price levels, candles or evidence. If something is not in the facts you are given, say that it was not recorded. Never fill a gap with a plausible number.
 - You must not modify or propose alternatives to the entry, the stop, the targets or the risk/reward ratio. You may question whether a level is well chosen and explain why; you must not supply a different one.
+- If the facts say "Levels check: FAILED", the stored levels are a legacy record that fails SpotLens's long-only order (stop below the entry zone, every target above it, targets ascending). They are invalid. You must not treat them as a valid target ladder, walk through them as a trade plan, or endorse the setup as a trade. State among the concerns that the stored levels are invalid, and do not reorder or correct them.
 - You must not treat the quality score as a probability. It is a deterministic score out of 100 that ranks a list. It forecasts nothing. Never write it as a percentage, never say "chance", "odds" or "probability".
 - You must never use the percent character.
 - You must not claim certainty. Nothing is guaranteed, risk-free, safe, a sure thing, or unable to lose.
@@ -205,6 +208,15 @@ export function serialiseContext(context: CoachContext): string {
     }
     if (l.entryReason) lines.push(`Entry reason: "${l.entryReason}"`);
     if (l.stopLossReason) lines.push(`Stop reason: "${l.stopLossReason}"`);
+    // The same check the engine now runs before measuring a reward, applied
+    // to the stored record. A legacy row that fails it is never rewritten, so
+    // the model is told outright rather than left to read the ladder as valid.
+    const warning = storedTargetsWarning(l);
+    lines.push(
+      warning
+        ? `Levels check: FAILED — ${warning} These levels are a legacy record and are not a valid target ladder.`
+        : "Levels check: passed — stop below the entry zone, every target above it, targets ascending.",
+    );
   } else {
     lines.push(
       "Levels: NOT RECORDED. This market was analysed and scored but no setup was tracked for it, so no entry, stop or target exists. Do not invent them and do not estimate them.",

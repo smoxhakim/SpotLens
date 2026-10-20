@@ -25,7 +25,7 @@ import { classifyRegime } from "@/lib/regime";
 import type { MarketSummary } from "@/types/market";
 import { getCandles } from "@/services/candles";
 import { listMarkets } from "@/services/markets";
-import { lifecycleStatusFor } from "@/lib/setups";
+import { lifecycleStatusFor, untrackedReasonOf, type UntrackedReason } from "@/lib/setups";
 import { trackSetup } from "@/services/setups";
 
 /**
@@ -69,6 +69,12 @@ export interface MarketScanOutcome {
   analysedAtCandle: number | null;
   setupId: string | null;
   lifecycleStatus: string | null;
+  /**
+   * Why there is no tracked setup, for this pass's own shortlist and log. Not
+   * persisted: `ScannerResult` has no column for it, and no existing one can
+   * hold it without misstating another fact. Null on a failed market.
+   */
+  untrackedReason: UntrackedReason | null;
   /** Context for the shortlist's explanation, as this pass saw it. */
   trend: string | null;
   mtfAgreement: string | null;
@@ -207,6 +213,7 @@ function toShortlistInput(result: MarketScanOutcome) {
     ok: result.ok,
     lifecycleStatus: result.lifecycleStatus,
     trackedSetupId: result.setupId,
+    untrackedReason: result.untrackedReason,
     analysedAtCandle: result.analysedAtCandle,
     trend: result.trend,
     mtfAgreement: result.mtfAgreement,
@@ -283,6 +290,7 @@ async function scanOne(
         analysedAtCandle: null,
         setupId: null,
         lifecycleStatus: null,
+        untrackedReason: null,
         trend: null,
         mtfAgreement: null,
         regimeDirection: null,
@@ -337,6 +345,12 @@ async function scanOne(
       analysedAtCandle: closed.at(-1)?.openTime ?? null,
       setupId: outcome.setupId,
       lifecycleStatus: outcome.status,
+      // Its own field, not a lifecycle state: an untracked candidate was never
+      // invalidated. Held for this pass only — no column stores it yet.
+      untrackedReason: untrackedReasonOf(
+        { setupId: outcome.setupId, cause: outcome.cause ?? null },
+        result,
+      ),
       // Straight off the analysis this pass just ran. `classifyRegime` reads a
       // finished MarketRead and costs arithmetic, no data — and the engine
       // never receives what it returns, exactly as Phase H established.
@@ -403,6 +417,7 @@ function abortedOutcome(market: MarketSummary, timeframe: Timeframe): OneOutcome
       analysedAtCandle: null,
       setupId: null,
       lifecycleStatus: null,
+      untrackedReason: null,
       trend: null,
       mtfAgreement: null,
       regimeDirection: null,

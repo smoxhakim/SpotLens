@@ -1,6 +1,7 @@
 import { isPrimarySignal, type ConfirmationSignalType } from "@/lib/analysis/confirmation";
 import { ANALYSIS_DISCLAIMER, SPOT_ONLY_NOTE } from "@/lib/constants/disclaimers";
 
+import { ENTRY_ZONE_TOUCH_NOTE } from "./render";
 import { formatAge, utcClock } from "./time";
 import type { LifecycleNotificationEventType, NotificationEvent, SetupFacts } from "./types";
 
@@ -467,9 +468,8 @@ export function formatEntryZoneReached(event: NotificationEvent): string {
     `${bold("Quality")}: ${escape(setup.score)}/100 · ${escape(humanise(setup.scoreGrade))}`,
     rewardLine(setup),
     "",
-    escape(
-      "Price is inside the stored entry zone. This is not confirmation, and nothing about the setup has changed.",
-    ),
+    escape(`Price is inside the stored entry zone. ${ENTRY_ZONE_TOUCH_NOTE}`),
+    escape("Nothing about the setup has changed."),
     ...reviewFooter(),
   ].join("\n");
 }
