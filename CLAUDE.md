@@ -231,7 +231,9 @@ WAITING_CONFIRMATION` is price arriving somewhere, not structure changing,
   idempotency key, so the provider retries only what provably was not
   delivered (429, 500, 502, 503, connection never opened) and never a timeout,
   a dropped connection or a 504 — those are FAILED "may have been delivered".
-  An alert occasionally lost (still in-app) beats one sent twice. Old
+  An alert occasionally lost (still in-app) beats one sent twice. Every
+  failure logs one line naming it — "not sent", "failed", or "may have been
+  delivered" — since all three are FAILED rows. Old
   FAILED/PENDING rows are not retried in the background, by decision.
 - **A backtest reports its own assumptions.** Fees, slippage, the entry policy
   and the same-candle stop/target policy travel on the report, because a result

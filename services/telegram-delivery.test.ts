@@ -17,11 +17,14 @@ vi.mock("@/lib/db/prisma", () => ({
 const warn = vi.fn();
 vi.mock("@/lib/log", () => ({ warnOnce: (...a: unknown[]) => warn(...a) }));
 
-const { sendAndRecord, NOT_SENT_ERROR } = await import("./telegram-delivery");
+const { sendAndRecord, deliveryOf, NOT_SENT_ERROR } = await import("./telegram-delivery");
+
+const consoleWarn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
 
 beforeEach(() => {
   update.mockReset().mockResolvedValue({});
   warn.mockReset();
+  consoleWarn.mockClear();
 });
 
 const recorded = () => update.mock.calls.map(([a]) => (a as { data: unknown }).data);
@@ -33,7 +36,7 @@ describe("sendAndRecord", () => {
       label: "test",
       send: async () => ({ ok: true, error: null, attempts: 1 }),
     });
-    expect(r).toEqual({ ok: true, recorded: true });
+    expect(r).toEqual({ ok: true, recorded: true, delivery: "SENT" });
     expect(update).toHaveBeenCalledWith({
       where: { id: "n1" },
       data: expect.objectContaining({ status: "SENT", attempts: 1, error: null }),
@@ -48,7 +51,7 @@ describe("sendAndRecord", () => {
         throw new Error("Can't reach database server at `db.example:5432`");
       },
     });
-    expect(r).toEqual({ ok: false, recorded: true });
+    expect(r).toEqual({ ok: false, recorded: true, delivery: "NOT_SENT" });
     expect(recorded()).toEqual([
       { status: "FAILED", sentAt: null, attempts: 0, error: NOT_SENT_ERROR },
     ]);
@@ -74,7 +77,7 @@ describe("sendAndRecord", () => {
       label: "test",
       send: async () => ({ ok: true, error: null, attempts: 1 }),
     });
-    expect(r).toEqual({ ok: true, recorded: true });
+    expect(r).toEqual({ ok: true, recorded: true, delivery: "SENT" });
     expect(update).toHaveBeenCalledTimes(2);
   });
 
@@ -85,12 +88,68 @@ describe("sendAndRecord", () => {
       label: "test",
       send: async () => ({ ok: true, error: null, attempts: 1 }),
     });
-    expect(r).toEqual({ ok: true, recorded: false });
+    expect(r).toEqual({ ok: true, recorded: false, delivery: "SENT" });
     expect(update).toHaveBeenCalledTimes(2);
     expect(warn).toHaveBeenCalledWith(
       "test:record",
       expect.stringMatching(/stays PENDING/),
       expect.any(Error),
     );
+  });
+});
+
+describe("the log says which of the three it was, every time", () => {
+  const cases = [
+    [
+      "NOT_SENT",
+      { ok: false, error: "The confirmation bot is not connected.", attempts: 0 },
+      /Telegram: not sent/,
+    ],
+    [
+      "FAILED",
+      { ok: false, error: "Telegram 400: Bad Request", attempts: 1 },
+      /Telegram: failed after 1 attempt/,
+    ],
+    [
+      "MAY_HAVE_BEEN_DELIVERED",
+      { ok: false, error: "Telegram did not answer in time.", attempts: 1, deliveryUnknown: true },
+      /Telegram: may have been delivered \(no answer in time\); not sent again/,
+    ],
+  ] as const;
+
+  it.each(cases)("%s", async (delivery, outcome, line) => {
+    const r = await sendAndRecord({
+      notificationId: "n7",
+      label: "test",
+      send: async () => outcome,
+    });
+    expect(r.delivery).toBe(delivery);
+    expect(deliveryOf(outcome)).toBe(delivery);
+    expect(consoleWarn).toHaveBeenCalledTimes(1);
+    expect(String(consoleWarn.mock.calls[0][0])).toMatch(line);
+    expect(String(consoleWarn.mock.calls[0][0])).toContain("notification n7");
+    // All three are FAILED rows; the error text keeps them apart there too.
+    expect(recorded()[0]).toMatchObject({ status: "FAILED", error: outcome.error });
+  });
+
+  it("a send that threw is logged as not sent on every occurrence, not only the first", async () => {
+    const boom = async () => {
+      throw new Error("lookup failed");
+    };
+    await sendAndRecord({ notificationId: "a", label: "test", send: boom });
+    await sendAndRecord({ notificationId: "b", label: "test", send: boom });
+    expect(consoleWarn.mock.calls.map(([m]) => String(m))).toEqual([
+      expect.stringMatching(/Telegram: not sent — notification a/),
+      expect.stringMatching(/Telegram: not sent — notification b/),
+    ]);
+  });
+
+  it("a message that went out logs nothing", async () => {
+    await sendAndRecord({
+      notificationId: "n1",
+      label: "test",
+      send: async () => ({ ok: true, error: null, attempts: 1 }),
+    });
+    expect(consoleWarn).not.toHaveBeenCalled();
   });
 });

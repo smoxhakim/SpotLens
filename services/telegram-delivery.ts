@@ -26,6 +26,22 @@ export interface SendOutcome {
   /** Sanitised by the provider, or written here; never carries a token. */
   error: string | null;
   attempts: number;
+  /** Telegram may have delivered it although `ok` is false (a timeout). */
+  deliveryUnknown?: boolean;
+}
+
+/**
+ * What happened, in the three words a reader of the log needs kept apart:
+ * NOT_SENT (nothing reached Telegram — a lookup failed, or no chat is
+ * connected), FAILED (Telegram refused it, or never became reachable), and
+ * MAY_HAVE_BEEN_DELIVERED (no answer in time — not sent again).
+ */
+export type Delivery = "SENT" | "NOT_SENT" | "FAILED" | "MAY_HAVE_BEEN_DELIVERED";
+
+export function deliveryOf(outcome: SendOutcome): Delivery {
+  if (outcome.ok) return "SENT";
+  if (outcome.deliveryUnknown) return "MAY_HAVE_BEEN_DELIVERED";
+  return outcome.attempts === 0 ? "NOT_SENT" : "FAILED";
 }
 
 /** Written when the send step itself threw, before Telegram was contacted. */
@@ -39,7 +55,7 @@ export async function sendAndRecord(input: {
   send: () => Promise<SendOutcome>;
   /** For the log: which path this is. */
   label: string;
-}): Promise<{ ok: boolean; recorded: boolean }> {
+}): Promise<{ ok: boolean; recorded: boolean; delivery: Delivery }> {
   let outcome: SendOutcome;
   try {
     outcome = await input.send();
@@ -48,6 +64,22 @@ export async function sendAndRecord(input: {
     // step before any request. The raw error goes to the log, not to the row.
     warnOnce(`${input.label}:send`, `[${input.label}] could not send a Telegram message.`, err);
     outcome = { ok: false, error: NOT_SENT_ERROR, attempts: 0 };
+  }
+
+  // One line per failure, every time — not once per process — and saying which
+  // of the three it was. Both rows record FAILED; only this and the row's error
+  // text tell "nothing went out" from "it may have arrived".
+  const delivery = deliveryOf(outcome);
+  if (delivery !== "SENT") {
+    const what =
+      delivery === "NOT_SENT"
+        ? "Telegram: not sent"
+        : delivery === "FAILED"
+          ? `Telegram: failed after ${outcome.attempts} attempt(s)`
+          : "Telegram: may have been delivered (no answer in time); not sent again";
+    console.warn(
+      `[${input.label}] ${what} — notification ${input.notificationId}: ${outcome.error}`,
+    );
   }
 
   const data = {
@@ -60,7 +92,7 @@ export async function sendAndRecord(input: {
   for (let attempt = 1; attempt <= RECORD_ATTEMPTS; attempt += 1) {
     try {
       await prisma.notification.update({ where: { id: input.notificationId }, data });
-      return { ok: outcome.ok, recorded: true };
+      return { ok: outcome.ok, recorded: true, delivery };
     } catch (err) {
       if (attempt === RECORD_ATTEMPTS) {
         warnOnce(
@@ -71,5 +103,5 @@ export async function sendAndRecord(input: {
       }
     }
   }
-  return { ok: outcome.ok, recorded: false };
+  return { ok: outcome.ok, recorded: false, delivery };
 }
