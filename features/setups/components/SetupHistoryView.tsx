@@ -14,9 +14,10 @@ import { fetchApi } from "@/features/market/hooks/fetch-api";
 import { formatPrice } from "@/lib/format";
 import { TIMEFRAME_LABELS, type Timeframe } from "@/lib/market-data/provider";
 import type { SetupLifecycleStatus } from "@/lib/setups";
+import { confirmationCaveat, LIFECYCLE_LABELS, storedLevelsWarning } from "@/lib/setups/labels";
 import { cn } from "@/lib/utils";
 
-interface TrackedSetup {
+export interface TrackedSetup {
   id: string;
   symbol: string;
   timeframe: Timeframe;
@@ -26,8 +27,11 @@ interface TrackedSetup {
   stopLoss: number;
   takeProfit1: number | null;
   takeProfit2: number | null;
+  takeProfit3: number | null;
   riskReward: number;
   riskRewardIsSynthetic: boolean;
+  /** The engine's verdict when the setup was first tracked. Never updated. */
+  analysisStatus: string;
   score: number;
   scoreGrade: string;
   createdAt: string;
@@ -38,19 +42,17 @@ interface TrackedSetup {
 }
 
 /**
- * Labels for the lifecycle, kept here because they are presentation only — the
- * states themselves are defined by `lib/setups`, and a component must not be
- * the thing that decides what a state means.
+ * Colours for the lifecycle. The words come from `lib/setups/labels` — the
+ * states are defined by `lib/setups`, and a component must not be the thing
+ * that decides what a state means.
  */
-const STATUS_META: Record<SetupLifecycleStatus, { label: string; className: string }> = {
-  SETUP_FORMING: { label: "Forming", className: "text-muted-foreground" },
-  WAITING_CONFIRMATION: {
-    label: "Waiting for confirmation",
-    className: "text-amber-600 dark:text-amber-400",
-  },
-  CONFIRMATION_DETECTED: { label: "Confirmation detected", className: "text-bullish" },
-  POTENTIAL_SETUP: { label: "Potential setup", className: "text-bullish" },
-  INVALIDATED: { label: "Invalidated", className: "text-bearish" },
+const CAUTION = "text-amber-600 dark:text-amber-400";
+const STATUS_CLASS: Record<SetupLifecycleStatus, string> = {
+  SETUP_FORMING: "text-muted-foreground",
+  WAITING_CONFIRMATION: CAUTION,
+  CONFIRMATION_DETECTED: "text-bullish",
+  POTENTIAL_SETUP: "text-bullish",
+  INVALIDATED: "text-bearish",
 };
 
 export function SetupHistoryView() {
@@ -111,8 +113,16 @@ export function SetupHistoryView() {
   );
 }
 
-function SetupCard({ setup }: { setup: TrackedSetup }) {
-  const meta = STATUS_META[setup.status];
+export function SetupCard({ setup }: { setup: TrackedSetup }) {
+  // Evidence on a setup that was never promoted is not a green light — least of
+  // all on one the engine rated high risk.
+  const caveat =
+    setup.status === "CONFIRMATION_DETECTED"
+      ? (confirmationCaveat(setup.analysisStatus, { asOf: "creation" }) ??
+        "Evidence is not approval: the setup is not a potential setup now.")
+      : null;
+  const statusClass = caveat ? CAUTION : STATUS_CLASS[setup.status];
+  const levelsWarning = storedLevelsWarning(setup);
 
   return (
     <Card>
@@ -120,11 +130,19 @@ function SetupCard({ setup }: { setup: TrackedSetup }) {
         <CardTitle className="flex flex-wrap items-baseline gap-2 text-sm">
           <span>{setup.symbol}</span>
           <span className="text-muted-foreground">{TIMEFRAME_LABELS[setup.timeframe]}</span>
-          <span className={cn("ml-auto text-xs font-semibold", meta.className)}>{meta.label}</span>
+          <span className={cn("ml-auto text-xs font-semibold", statusClass)}>
+            {LIFECYCLE_LABELS[setup.status]}
+          </span>
+          {setup.analysisStatus === "HIGH_RISK" && (
+            <Badge variant="outline" className="text-[9px]">
+              high risk
+            </Badge>
+          )}
         </CardTitle>
       </CardHeader>
 
       <CardContent className="space-y-2">
+        {caveat && <p className="text-[11px] leading-relaxed text-muted-foreground">{caveat}</p>}
         <dl className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-[11px] sm:grid-cols-4">
           <Field label="Entry">
             {formatPrice(setup.entryLow)} – {formatPrice(setup.entryHigh)}
@@ -133,6 +151,7 @@ function SetupCard({ setup }: { setup: TrackedSetup }) {
           <Field label="Targets">
             {setup.takeProfit1 === null ? "—" : formatPrice(setup.takeProfit1)}
             {setup.takeProfit2 === null ? "" : ` · ${formatPrice(setup.takeProfit2)}`}
+            {setup.takeProfit3 === null ? "" : ` · ${formatPrice(setup.takeProfit3)}`}
           </Field>
           <Field label="Risk / reward">
             1:{setup.riskReward.toFixed(1)}
@@ -143,6 +162,12 @@ function SetupCard({ setup }: { setup: TrackedSetup }) {
             )}
           </Field>
         </dl>
+
+        {levelsWarning && (
+          <Alert variant="warning">
+            <AlertDescription className="text-[11px]">{levelsWarning}</AlertDescription>
+          </Alert>
+        )}
 
         <div className="flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
           <span>

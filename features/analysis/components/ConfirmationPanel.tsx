@@ -3,7 +3,8 @@
 import { Check, CircleDashed, X } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
-import type { ConfirmationResult } from "@/lib/analysis";
+import type { ConfirmationResult, TradeStatus } from "@/lib/analysis";
+import { confirmationCaveat, LIFECYCLE_LABELS } from "@/lib/setups/labels";
 import { cn } from "@/lib/utils";
 
 import { WhyDisclosure } from "./WhyDisclosure";
@@ -16,10 +17,16 @@ import { WhyDisclosure } from "./WhyDisclosure";
  * importantly, says plainly when it found nothing, because "nothing has
  * happened here yet" is the most common honest answer and the easiest one to
  * dress up as anticipation.
+ *
+ * Evidence is worded as evidence, and is green only on a potential setup. On
+ * anything else the engine's verdict still stands — confirmation is a gate that
+ * can hold a setup back and never promote one past HIGH_RISK — so the panel
+ * says so beside the label rather than leaving a green "detected" to be read
+ * as approval.
  */
 const STATUS_META = {
   PRESENT: {
-    label: "Confirmation detected",
+    label: LIFECYCLE_LABELS.CONFIRMATION_DETECTED,
     className: "text-bullish",
   },
   NOT_PRESENT: {
@@ -38,20 +45,31 @@ const SIGNAL_ICON = {
   neutral: { Icon: CircleDashed, className: "text-muted-foreground" },
 } as const;
 
-export function ConfirmationPanel({ confirmation }: { confirmation: ConfirmationResult }) {
+export function ConfirmationPanel({
+  confirmation,
+  analysisStatus,
+}: {
+  confirmation: ConfirmationResult;
+  /** The engine's verdict on the same run, which confirmation cannot override. */
+  analysisStatus: TradeStatus;
+}) {
   const meta = STATUS_META[confirmation.status];
+  const caveat = confirmation.status === "PRESENT" ? confirmationCaveat(analysisStatus) : null;
+  const labelClass = caveat ? "text-amber-600 dark:text-amber-400" : meta.className;
 
   return (
     // Titled by its caller — see the note in MtfPanel.
     <section>
       <div className="flex items-center gap-2">
-        <p className={cn("text-xs font-semibold", meta.className)}>{meta.label}</p>
+        <p className={cn("text-xs font-semibold", labelClass)}>{meta.label}</p>
         {confirmation.invalidationReason && (
           <Badge variant="bearish" className="text-[9px]">
             invalidated
           </Badge>
         )}
       </div>
+
+      {caveat && <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">{caveat}</p>}
 
       {confirmation.signals.length > 0 ? (
         <ul className="mt-1.5 space-y-1.5">

@@ -113,7 +113,14 @@ function summary(kind: Exclude<Kind, "THROW_DB">, interrupted = false) {
     shortlist: {
       totalEligible: 0,
       totalAnalysed: results.length,
-      excluded: { AVOID: 0, HIGH_RISK: 0, BELOW_QUALITY_BAR: 0, REWARD_NOT_MEASURED: 0, FAILED: 0 },
+      excluded: {
+        AVOID: 0,
+        HIGH_RISK: 0,
+        NO_LEVELS: 0,
+        BELOW_QUALITY_BAR: 0,
+        REWARD_NOT_MEASURED: 0,
+        FAILED: 0,
+      },
       top5: [],
     },
   };

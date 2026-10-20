@@ -27,6 +27,16 @@ const MAX_TARGET_R = 8;
  * zone, or a prior significant high. Targets are set at the *near* edge of a
  * resistance zone rather than its middle — getting filled matters more than
  * squeezing the last fraction out of a level that has rejected price before.
+ *
+ * A target has to sit above the whole entry zone, not just its middle: zones
+ * are widened to a minimum width, so a resistance edge can land inside the
+ * upper half of the zone being bought, and a "target" there is a price the
+ * entry itself spans.
+ *
+ * The ladder is ascending by construction. Structural targets are sorted; an
+ * R-multiple only fills a slot *above* the last target already on the ladder
+ * (see the fill loop), and when no multiple in the ladder clears it the ladder
+ * stops short rather than listing a lower target after a higher one.
  */
 export function calculateTakeProfits(
   read: MarketRead,
@@ -41,7 +51,7 @@ export function calculateTakeProfits(
   const candidates: { level: number; reason: string; kind: TargetKind }[] = [];
 
   for (const zone of read.resistance) {
-    if (zone.low <= entry.mid) continue;
+    if (zone.low <= entry.high) continue;
     candidates.push({
       kind: "STRUCTURAL",
       level: zone.low,
@@ -62,7 +72,7 @@ export function calculateTakeProfits(
   const priorHigh = swingHighs[0];
   const priorHighR = priorHigh === undefined ? 0 : (priorHigh - entry.mid) / risk;
   const priorHighUsable =
-    priorHigh !== undefined && priorHigh > entry.mid && priorHighR <= MAX_TARGET_R;
+    priorHigh !== undefined && priorHigh > entry.high && priorHighR <= MAX_TARGET_R;
 
   if (priorHighUsable) {
     candidates.push({
@@ -84,10 +94,24 @@ export function calculateTakeProfits(
       : "";
 
   // Fill any remaining slots with R-multiples, clearly labelled as such.
-  while (targets.length < 3) {
-    const multiple = FALLBACK_R_MULTIPLES[targets.length];
+  //
+  // Each slot takes its own multiple — or, when that would land at or below
+  // the last target already on the ladder, the next larger one that does not.
+  // Taking the slot's multiple unconditionally once put a 4R TP3 under a
+  // structural TP2 at 5.7R (LTC/USDT 1h): a ladder that read downwards, with a
+  // "no further resistance" reason sitting below the resistance it had just
+  // listed. When no multiple clears the last target, the slot stays empty:
+  // fewer targets is honest, and reordering would change what TP2 means.
+  let index = targets.length;
+  while (targets.length < 3 && index < FALLBACK_R_MULTIPLES.length) {
+    const multiple = FALLBACK_R_MULTIPLES[index];
+    index += 1;
     const level = entry.mid + risk * multiple;
+    // The duplicate test first, as it always ran: a multiple that lands on a
+    // target already listed ends the ladder, exactly as before.
     if (targets.some((t) => Math.abs(t.level - level) / level < 0.001)) break;
+    const last = targets.at(-1);
+    if (last && level <= last.level) continue;
     targets.push({
       kind: "R_MULTIPLE",
       level,

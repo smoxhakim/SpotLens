@@ -233,6 +233,20 @@ describe("what it says", () => {
     }
   });
 
+  it("says it is a price-zone touch, not an entry signal, in both channels", () => {
+    expect(inApp.body).toContain("price-zone touch, not an entry signal and not confirmation");
+    expect(telegram).toContain("price\\-zone touch, not an entry signal and not confirmation");
+  });
+
+  it("names a high-risk verdict beside the touch, and only then", () => {
+    const highRisk = renderInApp(event({ analysisStatus: "HIGH_RISK" }));
+    expect(highRisk.body).toContain(
+      "The engine rated this setup high risk when it was first tracked.",
+    );
+    expect(highRisk.body).toContain("not an entry signal");
+    expect(inApp.body).not.toMatch(/high risk/i);
+  });
+
   it("tells the reader to review before deciding", () => {
     expect(inApp.body).toContain("review the setup before deciding");
     expect(telegram).toContain("Review the chart before deciding");

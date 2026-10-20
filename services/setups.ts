@@ -7,6 +7,7 @@ import type { Timeframe } from "@/lib/market-data/provider";
 import {
   reconcileSetup,
   type ExistingSetup,
+  type NoActionCause,
   type PlannedCreate,
   type PlannedTransition,
   type SetupLifecycleStatus,
@@ -37,9 +38,20 @@ export interface TrackSetupOutcome {
   status: SetupLifecycleStatus | null;
   /** Why nothing was written, when nothing was. */
   reason: string | null;
+  /**
+   * The same, typed — set only on a NONE plan. Null on NOTHING: no plan was
+   * made, so there is no cause to report (`untrackedReasonOf` says unknown).
+   */
+  cause: NoActionCause | null;
 }
 
-const NOTHING: TrackSetupOutcome = { action: "NONE", setupId: null, status: null, reason: null };
+const NOTHING: TrackSetupOutcome = {
+  action: "NONE",
+  setupId: null,
+  status: null,
+  reason: null,
+  cause: null,
+};
 
 /**
  * Reconciles one analysis run against the stored setup for that pair and
@@ -61,11 +73,23 @@ export async function trackSetup(input: TrackSetupInput): Promise<TrackSetupOutc
 
     switch (plan.action) {
       case "NONE":
-        return { action: "NONE", setupId: existing?.id ?? null, status: null, reason: plan.reason };
+        return {
+          action: "NONE",
+          setupId: existing?.id ?? null,
+          status: null,
+          reason: plan.reason,
+          cause: plan.cause,
+        };
 
       case "CREATE": {
         const id = await createSetup(input, plan.create);
-        return { action: "CREATE", setupId: id, status: plan.create.status, reason: null };
+        return {
+          action: "CREATE",
+          setupId: id,
+          status: plan.create.status,
+          reason: null,
+          cause: null,
+        };
       }
 
       case "TRANSITION": {
@@ -75,6 +99,7 @@ export async function trackSetup(input: TrackSetupInput): Promise<TrackSetupOutc
           setupId: plan.transition.setupId,
           status: plan.transition.to,
           reason: null,
+          cause: null,
         };
       }
 
@@ -86,7 +111,13 @@ export async function trackSetup(input: TrackSetupInput): Promise<TrackSetupOutc
           await applyTransition(plan.invalidate);
           return createSetup(input, plan.create);
         });
-        return { action: "REPLACE", setupId: id, status: plan.create.status, reason: null };
+        return {
+          action: "REPLACE",
+          setupId: id,
+          status: plan.create.status,
+          reason: null,
+          cause: null,
+        };
       }
     }
   } catch (err) {

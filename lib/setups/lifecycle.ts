@@ -4,6 +4,7 @@ import { classifyRegime } from "@/lib/regime";
 import type {
   ConfirmationPayload,
   ExistingSetup,
+  NoActionCause,
   PlannedCreate,
   PlannedTransition,
   SetupEventType,
@@ -11,6 +12,7 @@ import type {
   SetupOrigin,
   SetupPlan,
   SetupSnapshot,
+  UntrackedReason,
 } from "./types";
 
 /**
@@ -53,6 +55,29 @@ export function lifecycleStatusFor(result: AnalysisResult): SetupLifecycleStatus
   if (result.confirmation?.status === "PRESENT") return "CONFIRMATION_DETECTED";
   if (!result.setup.entry.priceInZone) return "SETUP_FORMING";
   return "WAITING_CONFIRMATION";
+}
+
+/**
+ * Why a scanned result ended up with no tracked setup, or null when it has one.
+ *
+ * Read off the lifecycle's own typed `cause`, never off prose and never off a
+ * lifecycle state. An earlier version recorded INVALIDATED on the scanner row
+ * for the contradicted case — but that column means "where the tracked setup
+ * moved this pass", and an untracked candidate was never invalidated: nothing
+ * existed. The cause is its own fact, so it gets its own field.
+ *
+ * `cause` is null when the lifecycle step never produced a plan (the database
+ * was unreachable or not configured) — then the reason is NOT_RECORDED rather
+ * than a guess, even when the analysis itself was contradicted.
+ */
+export function untrackedReasonOf(
+  outcome: { setupId: string | null; cause: NoActionCause | null },
+  result: AnalysisResult,
+): UntrackedReason | null {
+  if (outcome.setupId !== null) return null;
+  if (!result.setup) return "NO_LEVELS";
+  if (outcome.cause === "CONTRADICTED_UNTRACKED") return "CONFIRMATION_CONTRADICTED";
+  return "NOT_RECORDED";
 }
 
 /**
@@ -103,7 +128,11 @@ export function reconcileSetup(input: {
   // --- nothing to track ----------------------------------------------------
   if (target === null || origin === null) {
     if (!existing) {
-      return { action: "NONE", reason: "The engine offered no setup, and none is being tracked." };
+      return {
+        action: "NONE",
+        cause: "NO_SETUP",
+        reason: "The engine offered no setup, and none is being tracked.",
+      };
     }
 
     return {
@@ -117,6 +146,7 @@ export function reconcileSetup(input: {
     if (target === TERMINAL_STATUS) {
       return {
         action: "NONE",
+        cause: "CONTRADICTED_UNTRACKED",
         reason: "Confirmation is contradicted on a setup that was never tracked.",
       };
     }
@@ -146,6 +176,7 @@ export function reconcileSetup(input: {
   if (target === existing.status) {
     return {
       action: "NONE",
+      cause: "UNCHANGED",
       reason: `Still ${target.toLowerCase().replace(/_/g, " ")}; nothing about the setup has changed.`,
     };
   }

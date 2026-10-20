@@ -256,6 +256,35 @@ describe("the prompt", () => {
     expect(serialiseContext(untracked)).toContain("Do not invent them");
   });
 
+  it("flags a legacy ladder as invalid, and tells the model not to use it as one", () => {
+    // LTC/USDT 1h, as stored: TP3 (a 4R fallback) below TP2 (a swing high).
+    const legacy = context({
+      entryLow: 58.6,
+      entryHigh: 58.86,
+      stopLoss: 56.4592687,
+      takeProfit1: 59.09,
+      takeProfit2: 71.76,
+      takeProfit3: 67.8129,
+    });
+    const serialised = serialiseContext(legacy);
+
+    expect(serialised).toContain("Levels check: FAILED — TP3 sits below TP2");
+    expect(serialised).toContain("not a valid target ladder");
+    // The levels are still sent as recorded — flagged, never rewritten.
+    expect(serialised).toContain("TP3: 67.8129");
+
+    const rule = COACH_SYSTEM_PROMPT.toLowerCase();
+    expect(rule).toContain('if the facts say "levels check: failed"');
+    expect(rule).toContain("must not treat them as a valid target ladder");
+    expect(rule).toContain("endorse the setup as a trade");
+    expect(rule).toContain("do not reorder or correct them");
+  });
+
+  it("says the levels passed when they are in long order", () => {
+    expect(serialiseContext(context())).toContain("Levels check: passed");
+    expect(serialiseContext(context())).not.toContain("FAILED");
+  });
+
   it("serialises the same context identically every time", () => {
     expect(serialiseContext(context())).toBe(serialiseContext(context()));
   });

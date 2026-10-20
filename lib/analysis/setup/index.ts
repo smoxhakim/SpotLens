@@ -5,6 +5,7 @@ import { evaluateConfirmation, type ConfirmationResult } from "../confirmation";
 import { runMarketRead, type MarketRead, type MarketReadOptions } from "../market-read";
 import type { MtfSummary } from "../mtf";
 import { calculateEntryZone } from "./entry";
+import { validateSetupLevels } from "./levels";
 import { calculateRiskReward } from "./risk-reward";
 import { scoreSetup, type SetupScore } from "./score";
 import { calculateStopLoss } from "./stop-loss";
@@ -111,6 +112,18 @@ export function runAnalysis(candles: Candle[], options: RunAnalysisOptions = {})
   }
 
   const takeProfits = calculateTakeProfits(read, entry, stopLoss, candles, options.swingLookback);
+
+  // Checked before the reward is measured, so the ratio can only ever describe
+  // a ladder in long order. A set that fails is refused, not re-sorted:
+  // sorting would change which target is TP2, and with it what the ratio means.
+  const levels = takeProfits.length > 0 ? validateSetupLevels(entry, stopLoss, takeProfits) : null;
+  if (levels && !levels.ok) {
+    return noSetup(
+      "WAIT_FOR_CONFIRMATION",
+      `The levels for this setup do not form a valid long trade: ${levels.reason} A target set that does not ascend from the entry is refused rather than rearranged, so no entry, stop or target is offered.`,
+    );
+  }
+
   const riskReward = calculateRiskReward(entry, stopLoss, takeProfits);
   if (!riskReward) {
     return noSetup(
@@ -165,6 +178,8 @@ export function runAnalysis(candles: Candle[], options: RunAnalysisOptions = {})
 export { calculateEntryZone, EXTENDED_ATR_MULTIPLE } from "./entry";
 export { calculateStopLoss, STOP_BUFFER_ATR, MAX_SENSIBLE_RISK_PCT } from "./stop-loss";
 export { calculateTakeProfits } from "./take-profit";
+export { validateSetupLevels, validateTradeLevels } from "./levels";
+export type { LevelCheck, LevelProblem } from "./levels";
 export { calculateRiskReward, selectMeasuredTarget } from "./risk-reward";
 export { calculatePositionSize } from "./position-size";
 export type { PositionSizeInput, PositionSizeResult } from "./position-size";

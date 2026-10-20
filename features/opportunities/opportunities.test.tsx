@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 
-import type { ShortlistCandidate } from "@/lib/scanner";
+import { buildShortlist, type ShortlistCandidate } from "@/lib/scanner";
 
 import { OpportunityCard } from "./components/OpportunityCard";
 import { qualityLabel, riskRewardLabel } from "./labels";
@@ -47,6 +47,7 @@ function candidate(overrides: Partial<ShortlistCandidate> = {}): ShortlistCandid
     riskRewardIsMeasured: true,
     lifecycleStatus: null,
     trackedSetupId: "11111111-1111-4111-8111-111111111111",
+    untrackedReason: null,
     analysedAtCandle: 1_700_000_000_000,
     trend: "BULLISH",
     mtfAgreement: "MIXED",
@@ -418,6 +419,54 @@ describe("the candidate card", () => {
     // Optional, and absent rather than empty: "setupId=" would claim a setup.
     expect([...params.keys()].sort()).toEqual(["runId", "symbol", "tf"]);
     expect(params.has("setupId")).toBe(false);
+  });
+
+  it("shows why an untracked candidate has no setup without expanding the card", () => {
+    // Built by the real shortlist, so the order of the reasons is the order the
+    // page receives — the card renders them as given and shows two.
+    const [untracked] = buildShortlist([
+      {
+        symbol: "NEARUSDT",
+        timeframe: "H4",
+        analysisStatus: "WAIT_FOR_CONFIRMATION",
+        score: 86,
+        riskReward: 3.33,
+        riskRewardIsSynthetic: false,
+        ok: true,
+        lifecycleStatus: null,
+        trackedSetupId: null,
+        untrackedReason: "CONFIRMATION_CONTRADICTED",
+        analysedAtCandle: null,
+        trend: "BULLISH",
+        mtfAgreement: null,
+        regimeDirection: null,
+      },
+    ]).allEligible;
+    render(<OpportunityCard candidate={untracked} />);
+
+    const visible = screen.getAllByRole("listitem").map((li) => li.textContent ?? "");
+    expect(visible).toHaveLength(2);
+    expect(visible[1]).toMatch(/Not tracked: confirmation was contradicted at this level/);
+    expect(screen.getByRole("button", { name: /Show \d+ more/ })).toBeTruthy();
+  });
+
+  it("shows the stored-row wording when the reason was not recorded", () => {
+    render(
+      <OpportunityCard
+        candidate={candidate({
+          trackedSetupId: null,
+          untrackedReason: "NOT_RECORDED",
+          reasons: [
+            "Waiting on confirmation — the engine has not promoted it.",
+            "Not tracked, and the reason was not recorded.",
+            "Quality 81/100 (strong).",
+          ],
+        })}
+      />,
+    );
+    const visible = screen.getAllByRole("listitem").map((li) => li.textContent ?? "");
+    expect(visible[1]).toMatch(/reason was not recorded/);
+    expect(visible.join(" ")).not.toMatch(/contradicted/);
   });
 
   it("offers nothing that could be mistaken for placing a trade", () => {

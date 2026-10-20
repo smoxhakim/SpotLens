@@ -32,6 +32,35 @@ open items are collected here.
       image has still never been built.
 - [ ] Optional: tighten CSP off `unsafe-inline`/`unsafe-eval` via nonces.
 
+## Target validation and untracked candidates (on `fix/target-validation-and-exclusions`, uncommitted)
+
+A live pass stored LTC/USDT 1h with TP3 (4R fallback) below TP2 (5.7R swing
+high), and ranked NEAR/USDT 4h and ARB/USDT 4h second and fourth with no setup
+behind them and nothing saying why. Ladders are now ascending by construction
+and validated before reward is measured; a set that fails is refused, never
+re-sorted. The scanner knows why a candidate is untracked, as a typed reason.
+No migration.
+
+- [ ] **Persist the untracked reason.** `ScannerResult` has no column for it,
+      and none of its existing ones can hold it without misstating another fact
+      (an earlier draft wrote `lifecycleStatus = INVALIDATED`, which claims a
+      tracked setup was invalidated). Proposed: a nullable enum column
+      `ScannerResult.untrackedReason` (`CONFIRMATION_CONTRADICTED`,
+      `NO_LEVELS`, `NOT_RECORDED`), written by `finishRun`, read by
+      `getShortlist` and the daily summary. Needs `npm run prisma:deploy`
+      before the scanner runs with it. Until then stored rows say "reason not
+      recorded" unless they have no levels at all.
+- [ ] **Then exclude contradicted candidates from the shortlist.** A WAIT whose
+      confirmation was contradicted at an untracked level is one the lifecycle
+      would invalidate if it were tracking it, and it cannot be followed or
+      alerted on. Today it ranks and is labelled; excluding it before the
+      reason is stored would give the scanner's list and Opportunities two
+      different orders for one pass.
+- [ ] Stored setups with a non-ascending ladder are never rewritten; the setups,
+      Coach and decision pages flag them, and the Coach prompt marks them
+      "Levels check: FAILED". Replay and Telegram show TP1–TP2 only and carry no
+      flag. Known: LTC/USDT 1h `910cfbdc` on the local database.
+
 ## Phase 01 — setup freshness guard (committed on `feat/continuous-spotlens-engine` as `f90c34b`, awaiting review)
 
 The monitor alerted on setups from a scan two weeks old. It now alerts only on
