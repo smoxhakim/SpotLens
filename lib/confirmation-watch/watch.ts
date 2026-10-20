@@ -201,6 +201,8 @@ export function planConfirmationWatch(input: {
     caveats,
     lifecycleStatus: observation.lifecycleStatus,
     confirmationStatus: observation.status,
+    // Passed through, never decided here: the message names it.
+    analysisStatus: observation.analysisStatus ?? null,
   };
 
   // --- 3. reached supersedes developing ------------------------------------

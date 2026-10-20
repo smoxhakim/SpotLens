@@ -22,6 +22,19 @@ import type { SetupLevel } from "./CandlestickChart";
  * bands — both edges keep their own axis price, because both are real levels,
  * but they read as one thing.
  */
+/**
+ * The levels to draw on the chart for an analysis — none when it is incomplete.
+ *
+ * Lines on a chart read as a plan in a way a labelled table does not, and an
+ * incomplete analysis (stale entry candles, or no usable higher timeframe) is
+ * informational only. Its levels stay in the trade-levels card, under the
+ * incomplete notice; they are not drawn.
+ */
+export function chartLevelsFor(result: AnalysisResult | null | undefined): SetupLevel[] {
+  if (!result || result.incomplete) return [];
+  return setupLevelsFor(result.setup);
+}
+
 export function setupLevelsFor(setup: AnalysisResult["setup"]): SetupLevel[] {
   if (!setup) return [];
 

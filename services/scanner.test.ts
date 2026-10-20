@@ -159,7 +159,7 @@ describe("failure isolation", () => {
     expect(summary.results[0].attempts).toBe(2);
   });
 
-  it("carries on when only the higher timeframe is unavailable", async () => {
+  it("fails closed when only the higher timeframe is unavailable", async () => {
     getCandles.mockImplementation(async (query: { timeframe: Timeframe }) => {
       if (query.timeframe === "H4") throw new MarketDataError("TIMEOUT", "slow");
       return { candles: BULLISH };
@@ -167,9 +167,14 @@ describe("failure isolation", () => {
 
     const summary = await runScan({ ...base, markets: universe(3), timeframes: ["H1"] });
 
-    // Losing higher-timeframe context makes a run less informed, not wrong.
-    expect(summary.succeeded).toBe(3);
-    expect(summary.failed).toBe(0);
+    // It used to carry on single-timeframe, "less informed, not wrong" — but the
+    // counter-trend veto lives on the higher timeframe, so without it a bounce
+    // inside a downtrend could reach POTENTIAL_SETUP. Now the market fails,
+    // retryably, and nothing is tracked from it.
+    expect(summary.succeeded).toBe(0);
+    expect(summary.failed).toBe(3);
+    expect(summary.results.every((r) => r.failure?.retryable === true)).toBe(true);
+    expect(trackSetup).not.toHaveBeenCalled();
   });
 });
 

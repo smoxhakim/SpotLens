@@ -1,3 +1,4 @@
+import type { TradeStatus } from "@/lib/analysis";
 import type { ConfirmationSignalType, ConfirmationStatus } from "@/lib/analysis/confirmation";
 import type { Timeframe } from "@/lib/market-data/provider";
 import type { SetupLifecycleStatus } from "@/lib/setups";
@@ -37,6 +38,13 @@ export interface ConfirmationObservation {
   signals: ObservedSignal[];
   /** Close time of the judged candle, epoch ms. Always a closed candle. */
   evaluatedAt: number;
+  /**
+   * The engine's verdict on the same analysis — the one this pass stores as
+   * `ScannerResult.analysisStatus`. Carried so a confirmation message can say
+   * what the evidence sits under: confirmation is a gate, and cannot lift a
+   * HIGH_RISK or WAIT verdict. Absent means unknown, never POTENTIAL_SETUP.
+   */
+  analysisStatus?: TradeStatus | null;
 }
 
 export interface ObservedSignal {
@@ -87,6 +95,8 @@ export interface ConfirmationAlert {
   caveats: ObservedSignal[];
   lifecycleStatus: SetupLifecycleStatus;
   confirmationStatus: ConfirmationStatus;
+  /** The observation's verdict, passed through. Absent means unknown. */
+  analysisStatus?: TradeStatus | null;
 }
 
 /**

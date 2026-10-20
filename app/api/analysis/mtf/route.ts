@@ -3,11 +3,20 @@ import { z } from "zod";
 
 import { timeframeSchema } from "@/lib/market-data/schema";
 
-import { analyzeMultiTimeframe, isValidTimeframePair, runAnalysis } from "@/lib/analysis";
+import {
+  analyzeMultiTimeframe,
+  assessHigherTimeframe,
+  isValidTimeframePair,
+  runAnalysis,
+  staleEntryTimeframe,
+  unavailableHigherTimeframe,
+  type AnalysisShortfall,
+} from "@/lib/analysis";
 import { apiError, handleRouteError } from "@/lib/api/response";
 import { RATE_LIMITS, enforceRateLimit } from "@/lib/rate-limit";
 import { currentUserId } from "@/lib/auth";
-import { isLastCandleForming } from "@/lib/market-data/provider";
+import { isLastCandleForming, type Candle } from "@/lib/market-data/provider";
+import { closedCandlesOnly } from "@/lib/scanner";
 import { getCandles } from "@/services/candles";
 import { findMarketByPairId } from "@/services/markets";
 import { trackSetup } from "@/services/setups";
@@ -54,7 +63,8 @@ export async function POST(req: NextRequest) {
     if (!market) return apiError("PAIR_NOT_FOUND", "Unknown trading pair.", 404);
 
     // Both timeframes come from the same cache, so a repeated run costs one
-    // provider call at most.
+    // provider call at most. The entry timeframe is required; the higher one is
+    // assessed, and a failure there is a shortfall rather than an error.
     const [lower, higher] = await Promise.all([
       getCandles({
         pairId: market.pairId,
@@ -67,18 +77,40 @@ export async function POST(req: NextRequest) {
         exchangeSymbol: market.exchangeSymbol,
         timeframe: body.higherTimeframe,
         limit: CANDLE_LIMIT,
-      }),
+      }).catch(() => null),
     ]);
 
-    const mtf = analyzeMultiTimeframe({
-      lowerCandles: lower.candles,
-      higherCandles: higher.candles,
-      lowerTimeframe: body.lowerTimeframe,
-      higherTimeframe: body.higherTimeframe,
-    });
+    // Fail closed: without a usable higher timeframe the analysis is shown for
+    // information only — never POTENTIAL_SETUP, never tracked. Its candles are
+    // not folded in when they are stale, short or invalid.
+    const higherShortfall: AnalysisShortfall | null = higher
+      ? assessHigherTimeframe({
+          candles: closedCandlesOnly<Candle>(higher.candles, Date.now()),
+          timeframe: body.higherTimeframe,
+          now: Date.now(),
+          servedStale: higher.stale,
+        })
+      : unavailableHigherTimeframe(body.higherTimeframe, "UNAVAILABLE");
 
+    const mtf =
+      higher && !higherShortfall
+        ? analyzeMultiTimeframe({
+            lowerCandles: lower.candles,
+            higherCandles: higher.candles,
+            lowerTimeframe: body.lowerTimeframe,
+            higherTimeframe: body.higherTimeframe,
+          })
+        : undefined;
+
+    // Stale entry candles first: an analysis of old candles is the more basic
+    // problem, whatever the higher timeframe says.
+    const incomplete = lower.stale ? staleEntryTimeframe(body.lowerTimeframe) : higherShortfall;
+
+    // Named properties, not spreads: a spread is not checked for unknown keys,
+    // and a misspelt option here would silently drop the gate.
     const result = runAnalysis(lower.candles, {
       mtf,
+      incomplete: incomplete ?? undefined,
       lastCandleIsForming: isLastCandleForming(lower.candles),
     });
 
@@ -92,8 +124,10 @@ export async function POST(req: NextRequest) {
       : null;
 
     // Same lifecycle path as the single-timeframe route — one setup per pair
-    // and entry timeframe, however the analysis was run.
-    if (userId) {
+    // and entry timeframe, however the analysis was run. Never from an
+    // incomplete analysis (stale entry candles, or no usable higher timeframe):
+    // a setup must not be created or moved from data unfit to decide on.
+    if (userId && !result.incomplete) {
       await trackSetup({
         userId,
         tradingPairId: market.pairId,

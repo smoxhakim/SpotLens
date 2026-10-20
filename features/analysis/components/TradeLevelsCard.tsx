@@ -11,6 +11,7 @@ import { formatPrice } from "@/lib/format";
 import { confirmationCaveat } from "@/lib/setups/labels";
 import { cn } from "@/lib/utils";
 
+import { IncompleteAnalysisNotice } from "./IncompleteAnalysisNotice";
 import { LearnLink } from "./LearnLink";
 import { RiskCalculatorLink } from "./RiskCalculatorLink";
 import { WhyDisclosure } from "./WhyDisclosure";
@@ -101,7 +102,11 @@ export function TradeLevelsCard({
   // stop for a trade the engine has just advised against undoes the refusal.
   if (!setup) {
     return (
-      <Shell confirmation={result.confirmation} analysisStatus={result.status}>
+      <Shell
+        confirmation={result.confirmation}
+        analysisStatus={result.status}
+        incomplete={result.incomplete}
+      >
         <p className="text-xs leading-relaxed text-muted-foreground">
           No entry, stop or target levels are shown, because SpotLens does not hand over numbers for
           a trade it has just advised against.
@@ -114,7 +119,11 @@ export function TradeLevelsCard({
   const [tp1, tp2, tp3] = setup.takeProfits;
 
   return (
-    <Shell confirmation={result.confirmation} analysisStatus={result.status}>
+    <Shell
+      confirmation={result.confirmation}
+      analysisStatus={result.status}
+      incomplete={result.incomplete}
+    >
       {/* One row on desktop, two columns on phones. Entry and the invalidation
           sit together because they are the pair that defines the risk; the
           targets follow in the order the engine numbered them. */}
@@ -192,7 +201,10 @@ export function TradeLevelsCard({
       </dl>
 
       <div className="mt-4 border-t pt-3">
-        <RiskCalculatorLink setup={setup} />
+        {/* No sizing for an incomplete analysis: a prefilled calculator turns
+            informational levels into a position, which is the one thing they
+            must not become. The notice above says why. */}
+        {result.incomplete ? null : <RiskCalculatorLink setup={setup} />}
         <div className="mt-2 flex flex-wrap items-center gap-x-4">
           <LearnLink concept="risk-reward" label="Why 1:1 is a losing game" />
           <LearnLink concept="stop-loss" label="Where a stop belongs" />
@@ -207,11 +219,14 @@ function Shell({
   children,
   confirmation,
   analysisStatus,
+  incomplete,
 }: {
   children: React.ReactNode;
   confirmation?: ConfirmationResult | null;
   /** The verdict on the same run, which confirmation evidence cannot override. */
   analysisStatus?: TradeStatus;
+  /** Set when the higher timeframe this analysis needs was not usable. */
+  incomplete?: AnalysisResult["incomplete"];
 }) {
   // Evidence beside anything short of a potential setup is said to be evidence,
   // not approval — on HIGH_RISK, with the verdict named.
@@ -228,6 +243,7 @@ function Shell({
             <ConfirmationChip confirmation={confirmation} caution={caveat !== null} />
           ) : null}
         </div>
+        <IncompleteAnalysisNotice incomplete={incomplete} className="mb-3" />
         {caveat && (
           <p className="-mt-1 mb-3 text-[11px] leading-relaxed text-amber-600 dark:text-amber-400">
             {caveat}
