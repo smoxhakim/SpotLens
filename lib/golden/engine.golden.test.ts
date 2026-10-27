@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import { runMarketRead, STOP_BUFFER_ATR } from "@/lib/analysis";
+import { buildExplanations, runMarketRead, STOP_BUFFER_ATR } from "@/lib/analysis";
 
 import { namedCases, runCases, sweepCases, type GoldenRun } from "./corpus";
+import { FINGERPRINT_FORMAT, fingerprintLine } from "./fingerprint";
 import { nearZeroRange } from "./fixtures";
 import {
   BRANCHES,
@@ -315,6 +316,25 @@ describe("golden files: runAnalysis", () => {
       await expect(
         goldenFile("Deciding rule per case (classified from the result)", lines),
       ).toMatchFileSnapshot("./__golden__/engine.branches.golden.txt");
+    },
+    SLOW,
+  );
+
+  it(
+    "pins a fingerprint of every complete result and explanation list",
+    async () => {
+      // Step 0.5. The whole object, not a projection of it: any key added,
+      // removed or changed anywhere in a result or its explanations fails here.
+      const lines = [
+        `# format: ${FINGERPRINT_FORMAT}`,
+        ...all().flatMap((run) => [
+          fingerprintLine(`${run.id} :: result`, run.result),
+          fingerprintLine(`${run.id} :: explanations`, buildExplanations(run.result)),
+        ]),
+      ];
+      await expect(
+        goldenFile("Fingerprints of every complete AnalysisResult and explanation list", lines),
+      ).toMatchFileSnapshot("./__golden__/engine.fingerprint.golden.txt");
     },
     SLOW,
   );

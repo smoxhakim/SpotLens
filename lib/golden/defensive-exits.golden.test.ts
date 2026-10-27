@@ -1,8 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { runAnalysis, type TakeProfitTarget } from "@/lib/analysis";
+import { buildExplanations, runAnalysis, type TakeProfitTarget } from "@/lib/analysis";
 import { pullbackIntoSupport } from "@/lib/test-utils/scenarios";
 
+import { FINGERPRINT_FORMAT, fingerprintLine } from "./fingerprint";
 import { branchOf, decisionOf, goldenFile, line, wordingOf } from "./project";
 
 /**
@@ -103,5 +104,25 @@ describe("golden master: defensive exits", () => {
     await expect(
       goldenFile("Defensive exits, reached by substituting the target ladder", lines),
     ).toMatchFileSnapshot("./__golden__/defensive-exits.golden.txt");
+  });
+
+  it("pins a fingerprint of every complete result and explanation list", async () => {
+    // Step 0.5. The same substituted ladders, fingerprinted whole.
+    const lines = [
+      `# format: ${FINGERPRINT_FORMAT}`,
+      ...CASES.flatMap(([name, build]) => {
+        ladder.override = build;
+        const result = runAnalysis(pullbackIntoSupport());
+        ladder.override = null;
+        return [
+          fingerprintLine(`${name} :: result`, result),
+          fingerprintLine(`${name} :: explanations`, buildExplanations(result)),
+        ];
+      }),
+    ];
+
+    await expect(
+      goldenFile("Fingerprints of the defensive exits: complete results and explanations", lines),
+    ).toMatchFileSnapshot("./__golden__/defensive-exits.fingerprint.golden.txt");
   });
 });

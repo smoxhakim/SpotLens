@@ -12,6 +12,7 @@ import {
 } from "@/lib/setups";
 
 import { namedCases, runCases, type GoldenRun } from "./corpus";
+import { FINGERPRINT_FORMAT, fingerprintLine } from "./fingerprint";
 import { goldenFile, line, planDecisionOf, planWordingOf } from "./project";
 
 /**
@@ -186,5 +187,17 @@ describe("golden master: reconcileSetup", () => {
     await expect(
       goldenFile("reconcileSetup wording: event details and invalidation reasons", lines),
     ).toMatchFileSnapshot("./__golden__/lifecycle.wording.golden.txt");
+  });
+
+  it("pins a fingerprint of every complete plan", async () => {
+    // Step 0.5. The whole plan — snapshot detail, every reason, every frozen
+    // confirmation signal with its title and detail — not the projection above.
+    const lines = [
+      `# format: ${FINGERPRINT_FORMAT}`,
+      ...planned().map((p) => fingerprintLine(p.id, p.plan)),
+    ];
+    await expect(
+      goldenFile("Fingerprints of every complete reconcileSetup plan", lines),
+    ).toMatchFileSnapshot("./__golden__/lifecycle.fingerprint.golden.txt");
   });
 });

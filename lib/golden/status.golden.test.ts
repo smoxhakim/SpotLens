@@ -19,6 +19,7 @@ import { makeCandles } from "@/lib/test-utils/candles";
 import { downtrend, pullbackIntoSupport, rangeBound } from "@/lib/test-utils/scenarios";
 
 import { mtfOf } from "./corpus";
+import { FINGERPRINT_FORMAT, fingerprintLine } from "./fingerprint";
 import { classifyVerdict, goldenFile, line, type Branch } from "./project";
 
 /**
@@ -535,5 +536,26 @@ describe("golden master: determineStatus, rule by rule", () => {
     await expect(
       goldenFile("determineStatus, one input at a time: status, branch, reason", lines),
     ).toMatchFileSnapshot("./__golden__/status.rules.golden.txt");
+  });
+
+  it("pins a fingerprint of every complete verdict and the inputs it was given", async () => {
+    // Step 0.5. The whole verdict object, so a key added to it — or removed —
+    // fails here even when status and reason are unchanged. The inputs are
+    // fingerprinted alongside, so a change can be traced to one side or the other.
+    const lines = [
+      `# format: ${FINGERPRINT_FORMAT}`,
+      ...CASES.flatMap((c) => {
+        const inputs = baseline();
+        c.change(inputs);
+        const verdict = decide(inputs);
+        return [
+          fingerprintLine(`${c.name} :: verdict`, verdict),
+          fingerprintLine(`${c.name} :: inputs`, inputs),
+        ];
+      }),
+    ];
+    await expect(
+      goldenFile("Fingerprints of every complete determineStatus verdict and its inputs", lines),
+    ).toMatchFileSnapshot("./__golden__/status.fingerprint.golden.txt");
   });
 });
