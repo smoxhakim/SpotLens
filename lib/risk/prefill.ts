@@ -32,15 +32,21 @@ export interface RiskPrefill {
 }
 
 /**
- * The entry the calculator sizes from.
+ * The entry the calculator sizes from: the top of the zone.
  *
- * The midpoint of the zone, matching what the analysis panel already passes.
- * A zone is not a price and the calculator needs one number; the low would
- * flatter the position size and the high would shrink it, and the middle is the
- * only choice that does neither.
+ * A zone is not a price and the calculator needs one number. Price reaches a
+ * support zone from above, so its top is where a fill is likeliest — the
+ * entry-zone alert fires on exactly that touch — and it is the worst fill inside
+ * the zone. Sizing from it means a fill anywhere lower risks less than the
+ * calculator said, never more. The midpoint, used before, understated the loss
+ * on a top-of-zone fill by about a third.
+ *
+ * The engine's own ratio is still measured from the midpoint; the calculator
+ * reports the ratio from this entry instead, so its size, loss and reward all
+ * describe the same fill. The field stays editable for the price actually paid.
  */
 export function entryPriceOf(levels: Pick<CoachLevels, "entryLow" | "entryHigh">): number {
-  return (levels.entryLow + levels.entryHigh) / 2;
+  return levels.entryHigh;
 }
 
 export function riskPrefillFrom(levels: CoachLevels): RiskPrefill {

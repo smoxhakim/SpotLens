@@ -198,6 +198,26 @@ describe("what it says", () => {
     expect(telegram).toContain("*Tracked since*: 1 Oct, 08:00 UTC \\(2 d 4 h\\)");
   });
 
+  it("Telegram: carries the entry, the stop and the targets, each exactly once", () => {
+    // The alert most likely to be read at the moment of a decision carries the
+    // invalidation level with it — once, and with the warning still beside it.
+    const count = (text: string, part: string) => text.split(part).length - 1;
+    const two = formatForTelegram(event({ takeProfit2: 86000 }));
+
+    for (const text of [telegram, two]) {
+      expect(count(text, "*ENTRY*")).toBe(1);
+      expect(count(text, "81183\\.28 – 81423\\.03")).toBe(1);
+      expect(count(text, "*STOP*")).toBe(1);
+      expect(count(text, "80500\\.5")).toBe(1);
+      expect(count(text, "*TARGETS*")).toBe(1);
+      expect(count(text, "84000")).toBe(1);
+      expect(text).toContain("price\\-zone touch, not an entry signal and not confirmation");
+      expect(text).toContain("Nothing about the setup has changed\\.");
+    }
+    expect(count(two, "86000")).toBe(1);
+    expect(count(telegram, "86000")).toBe(0);
+  });
+
   it("does not present an unmeasured reward as measured", () => {
     const text = formatForTelegram(event({ riskRewardIsSynthetic: true }));
     expect(text).toContain("not measurable");

@@ -458,7 +458,6 @@ export function formatEntryZoneReached(event: NotificationEvent): string {
     ...header(event, TELEGRAM_TITLES.ENTRY_ZONE_REACHED),
     "",
     `${bold("Price")}: ${price(seen.observedPrice)}`,
-    `${bold("Entry zone")}: ${price(setup.entryLow)} – ${price(setup.entryHigh)}`,
     `${bold("Seen at")}: ${escape(clock(seen.observedAt))}`,
     // How old the analysis behind this alert is. The alert is only raised when
     // a recent completed scan re-confirmed the setup; this shows how recent.
@@ -467,6 +466,11 @@ export function formatEntryZoneReached(event: NotificationEvent): string {
     `${bold("Confirmation")}: ${escape(labelFrom(LIFECYCLE_LABELS, setup.lifecycleStatus))} ${escape("(last scan)")}`,
     `${bold("Quality")}: ${escape(setup.score)}/100 · ${escape(humanise(setup.scoreGrade))}`,
     rewardLine(setup),
+    // The stored levels, stop included: this is the alert most likely to be read
+    // at the moment of a decision, so the invalidation level travels with it.
+    // The entry zone is printed here once, under ENTRY, rather than beside the
+    // price as well.
+    ...levelBlocks(setup),
     "",
     escape(`Price is inside the stored entry zone. ${ENTRY_ZONE_TOUCH_NOTE}`),
     escape("Nothing about the setup has changed."),
