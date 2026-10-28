@@ -1169,6 +1169,32 @@ describe("routing and preferences", () => {
     ).toEqual(["IN_APP", "TELEGRAM"]);
   });
 
+  it("Telegram off, main bot connected: in-app only, never pushed, and final once recorded", async () => {
+    // The existing contract: a recorded alert is final, whichever channels the
+    // owner's preferences allowed. Switching Telegram on later replays nothing.
+    connectTelegram("user-1");
+    store.prefs.set("user-1", { ...DEFAULT_PREFERENCES, telegramEnabled: false });
+    const setup = addSetup({ analysisStatus: "POTENTIAL_SETUP" });
+    const feed = fakeProvider();
+    const monitor = monitorFor(feed);
+    await monitor.refresh();
+    feed.set("BTCUSDT", 102);
+    await monitor.tick();
+
+    expect(rowsFor(setup.id).map((n) => n.channel)).toEqual(["IN_APP"]);
+    expect(sendTelegramMessage).not.toHaveBeenCalled();
+    expect(store.watches.get(setup.id)?.reachedAt).not.toBeNull();
+
+    store.prefs.set("user-1", { ...DEFAULT_PREFERENCES, telegramEnabled: true });
+    feed.set("BTCUSDT", 110);
+    await monitor.tick();
+    feed.set("BTCUSDT", 101);
+    await monitor.tick();
+
+    expect(rowsFor(setup.id).map((n) => n.channel)).toEqual(["IN_APP"]);
+    expect(sendTelegramMessage).not.toHaveBeenCalled();
+  });
+
   it("switched off: nothing is written, and the setup does not alert later either", async () => {
     store.prefs.set("user-1", { ...DEFAULT_PREFERENCES, entryZoneReached: false });
     const setup = addSetup();
