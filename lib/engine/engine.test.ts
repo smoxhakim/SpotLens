@@ -546,14 +546,21 @@ describe("run locks", () => {
   afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
   it("one holder per role; a second live process is refused", () => {
-    const first = acquireLock("scanner", { dir, pid: 111, isAlive: () => true });
+    // Made-up PIDs: never look a real process up by them (/proc on Linux, ps on
+    // macOS). A real PID 111 on the machine would otherwise read as a different
+    // process, and the lock would be taken over.
+    const FAKE = { identity: null, startTimeOf: () => null } as const;
+
+    const first = acquireLock("scanner", { dir, pid: 111, isAlive: () => true, ...FAKE });
     expect(first.ok).toBe(true);
 
-    const second = acquireLock("scanner", { dir, pid: 222, isAlive: () => true });
+    const second = acquireLock("scanner", { dir, pid: 222, isAlive: () => true, ...FAKE });
     expect(second).toMatchObject({ ok: false, holderPid: 111 });
 
     // A different role is a different lock.
-    expect(acquireLock("entry-zone", { dir, pid: 222, isAlive: () => true }).ok).toBe(true);
+    expect(acquireLock("entry-zone", { dir, pid: 222, isAlive: () => true, ...FAKE }).ok).toBe(
+      true,
+    );
   });
 
   it("takes over a lock left by a process that is no longer running", () => {

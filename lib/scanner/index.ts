@@ -67,6 +67,13 @@ export {
 } from "./shortlist";
 export { SUCCESSFUL_RUN_STATUSES, successfulPassWhere, type SuccessfulRunStatus } from "./runs";
 export {
+  breakdownOf,
+  describeBreakdown,
+  type GateCountInput,
+  type RewardBucket,
+  type TimeframeGateCounts,
+} from "./gate-counts";
+export {
   eventsForOutcome,
   failureEvent,
   type LifecycleOutcome,

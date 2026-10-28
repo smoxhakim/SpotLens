@@ -1,6 +1,7 @@
 import { formatPrice } from "@/lib/format";
 
 import type { ConfirmationResult } from "../confirmation";
+import type { BlockingCode } from "../diagnostics/types";
 import type { MarketRead } from "../market-read";
 import type { MtfSummary } from "../mtf";
 import { EXTENDED_ATR_MULTIPLE } from "./entry";
@@ -12,6 +13,17 @@ export interface StatusVerdict {
   reason: string;
 }
 
+/** A verdict and the return that produced it — null on a potential setup. For diagnostics. */
+export interface StatusDecision extends StatusVerdict {
+  gate: BlockingCode | null;
+}
+
+/**
+ * Relative volume below which a setup in its entry zone is held: a bounce on
+ * volume this thin is not yet confirmed.
+ */
+export const VOLUME_HOLD_RELATIVE = 0.7;
+
 /**
  * Trade status.
  *
@@ -20,15 +32,18 @@ export interface StatusVerdict {
  * that must actively rule out every objection before it says "possible" will
  * say "wait" far more often than one that looks for reasons to say yes, and
  * saying wait is almost always the more valuable answer.
+ *
+ * Each return also names itself (`gate`), so diagnostics can report which rule
+ * decided without evaluating any rule a second time.
  */
-export function determineStatus(
+export function decideStatus(
   read: MarketRead,
   entry: EntryZone,
   riskReward: RiskReward,
   score: SetupScore,
   mtf?: MtfSummary,
   confirmation?: ConfirmationResult,
-): StatusVerdict {
+): StatusDecision {
   // --- Disqualifying conditions ------------------------------------------
 
   // Checked before the entry timeframe's own trend: a lower timeframe that has
@@ -37,6 +52,7 @@ export function determineStatus(
   if (mtf?.agreement === "COUNTER_TREND_BOUNCE") {
     return {
       status: "AVOID",
+      gate: "HTF_COUNTER_TREND",
       reason: `${mtf.conflictNote} The higher timeframe sets direction, and buying against it is the most common way a setup that looks good on one chart loses money.`,
     };
   }
@@ -44,6 +60,7 @@ export function determineStatus(
   if (mtf?.agreement === "ALIGNED_BEARISH") {
     return {
       status: "AVOID",
+      gate: "HTF_BEARISH",
       reason: mtf.conflictNote ?? "Both timeframes are bearish, so there is no long setup here.",
     };
   }
@@ -51,6 +68,8 @@ export function determineStatus(
   if (read.trend.trend === "BEARISH") {
     return {
       status: "AVOID",
+      gate:
+        mtf?.agreement === "PULLBACK_IN_UPTREND" ? "PULLBACK_IN_UPTREND_VETO" : "ENTRY_TF_BEARISH",
       reason:
         "The trend is bearish. Buying into a downtrend is the most reliable way to lose money on spot, and no support level is worth taking that trade before structure turns.",
     };
@@ -59,6 +78,7 @@ export function determineStatus(
   if (riskReward.ratio < 1) {
     return {
       status: "AVOID",
+      gate: "RR_BELOW_ONE",
       reason: `Risk/reward is 1:${riskReward.ratio.toFixed(
         1,
       )} — the trade risks more than it stands to make. Even a high win rate loses money at this ratio.`,
@@ -68,6 +88,7 @@ export function determineStatus(
   if (score.grade === "AVOID") {
     return {
       status: "AVOID",
+      gate: "SCORE_AVOID_GRADE",
       reason: `The setup scores ${score.total}/100. Too little of the evidence supports the trade to justify taking it.`,
     };
   }
@@ -77,6 +98,7 @@ export function determineStatus(
   if (riskReward.isPoor) {
     return {
       status: "HIGH_RISK",
+      gate: "RR_BELOW_MINIMUM",
       reason: `Risk/reward is only 1:${riskReward.ratio.toFixed(
         1,
       )}, below the 1:1.5 minimum. The setup is not broken, but the payoff does not justify the capital at risk.`,
@@ -86,6 +108,7 @@ export function determineStatus(
   if (read.insufficientData) {
     return {
       status: "HIGH_RISK",
+      gate: "INSUFFICIENT_HISTORY",
       reason: `Only ${read.candleCount} candles of history are available on this timeframe. There is not enough data behind these levels to rely on them.`,
     };
   }
@@ -94,6 +117,7 @@ export function determineStatus(
   if (nearestResistance && read.price >= nearestResistance.low) {
     return {
       status: "HIGH_RISK",
+      gate: "PRICE_IN_RESISTANCE",
       reason: `Price is already trading in the resistance zone at ${formatPrice(
         nearestResistance.low,
       )} – ${formatPrice(
@@ -107,6 +131,7 @@ export function determineStatus(
   if (!entry.priceInZone && entry.distanceAtr > EXTENDED_ATR_MULTIPLE) {
     return {
       status: "WAIT_FOR_CONFIRMATION",
+      gate: "PRICE_EXTENDED",
       reason: `Price is ${entry.distanceAtr.toFixed(
         1,
       )} ATR above the entry zone at ${formatPrice(entry.low)} – ${formatPrice(
@@ -118,6 +143,7 @@ export function determineStatus(
   if (read.trend.trend === "SIDEWAYS") {
     return {
       status: "WAIT_FOR_CONFIRMATION",
+      gate: "ENTRY_TF_SIDEWAYS",
       reason:
         "The market is ranging rather than trending. Buying the lower boundary of a range is a valid approach, but it needs a bullish reaction from the zone first — a range only pays if the boundary holds.",
     };
@@ -126,6 +152,7 @@ export function determineStatus(
   if (!entry.priceInZone) {
     return {
       status: "WAIT_FOR_CONFIRMATION",
+      gate: "PRICE_NOT_IN_ZONE",
       reason: `Price has not reached the entry zone at ${formatPrice(entry.low)} – ${formatPrice(
         entry.high,
       )} yet. Set an alert rather than entering early.`,
@@ -141,6 +168,7 @@ export function determineStatus(
   if (riskReward.isSynthetic) {
     return {
       status: "WAIT_FOR_CONFIRMATION",
+      gate: "REWARD_NOT_STRUCTURAL",
       reason: `There is no resistance zone or prior high far enough above the entry to measure the reward against, so the targets shown are multiples of the risk rather than levels price has reacted to. The entry and the stop are sound; what is missing is evidence the move has somewhere to go. Wait for structure to form above, or check a higher timeframe where a target may already be visible.`,
     };
   }
@@ -148,14 +176,16 @@ export function determineStatus(
   if (mtf?.agreement === "MIXED") {
     return {
       status: "WAIT_FOR_CONFIRMATION",
+      gate: "HTF_MIXED",
       reason: `${mtf.note} Without a clear higher-timeframe direction, wait for one to establish itself before committing.`,
     };
   }
 
   const volume = read.volume.read;
-  if (volume && volume.relative < 0.7) {
+  if (volume && volume.relative < VOLUME_HOLD_RELATIVE) {
     return {
       status: "WAIT_FOR_CONFIRMATION",
+      gate: "VOLUME_THIN",
       reason: `Price is in the entry zone, but volume is only ${volume.relative.toFixed(
         1,
       )}× average. A bounce on volume this thin is not yet confirmed — wait for buyers to show up.`,
@@ -165,6 +195,7 @@ export function determineStatus(
   if (score.grade === "WEAK") {
     return {
       status: "WAIT_FOR_CONFIRMATION",
+      gate: "SCORE_WEAK",
       reason: `The setup scores ${score.total}/100. Price is at the level, but not enough else agrees to act on it yet.`,
     };
   }
@@ -179,6 +210,10 @@ export function determineStatus(
   if (confirmation && confirmation.status !== "PRESENT") {
     return {
       status: "WAIT_FOR_CONFIRMATION",
+      gate:
+        confirmation.status === "CONTRADICTED"
+          ? "CONFIRMATION_CONTRADICTED"
+          : "CONFIRMATION_NOT_PRESENT",
       reason: `${confirmation.explanation} The setup itself is sound — entry, stop and targets are all defined — but a level that has not yet been defended is a level, not a trade.`,
     };
   }
@@ -187,6 +222,7 @@ export function determineStatus(
 
   return {
     status: "POTENTIAL_SETUP",
+    gate: null,
     reason: `Price is in the entry zone at ${formatPrice(entry.low)} – ${formatPrice(
       entry.high,
     )}, the trend supports a long, and risk/reward is 1:${riskReward.ratio.toFixed(
@@ -195,6 +231,22 @@ export function determineStatus(
       confirmation ? ` ${confirmation.explanation}` : ""
     } This is a candidate to review yourself, not an instruction to buy.`,
   };
+}
+
+/**
+ * The verdict alone: exactly the object every caller has always received. The
+ * gate is for diagnostics, which read it through `decideStatus`.
+ */
+export function determineStatus(
+  read: MarketRead,
+  entry: EntryZone,
+  riskReward: RiskReward,
+  score: SetupScore,
+  mtf?: MtfSummary,
+  confirmation?: ConfirmationResult,
+): StatusVerdict {
+  const { status, reason } = decideStatus(read, entry, riskReward, score, mtf, confirmation);
+  return { status, reason };
 }
 
 export const STATUS_LABELS: Record<TradeStatus, { label: string; tone: string }> = {

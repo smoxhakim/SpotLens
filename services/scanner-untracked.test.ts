@@ -49,14 +49,39 @@ vi.mock("@/services/candles", () => ({ getCandles: async () => ({ candles: CANDL
 /** Every analysis comes back as a WAIT whose confirmation was contradicted. */
 vi.mock("@/lib/analysis", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/analysis")>();
+  const contradicted = (result: ReturnType<typeof actual.runAnalysis>) => ({
+    ...result,
+    status: "WAIT_FOR_CONFIRMATION" as const,
+    confirmation: { ...result.confirmation!, status: "CONTRADICTED" as const },
+  });
   return {
     ...actual,
-    runAnalysis: (...args: Parameters<typeof actual.runAnalysis>) => {
-      const result = actual.runAnalysis(...args);
+    runAnalysis: (...args: Parameters<typeof actual.runAnalysis>) =>
+      contradicted(actual.runAnalysis(...args)),
+    // What the scanner calls. The same result as above, and diagnostics that say
+    // what it says: the confirmation gate, the last rule, decided CONTRADICTED.
+    // That is only coherent when every earlier gate passed, so the fixture must
+    // still be a real potential setup; the outcomes come from the engine's own
+    // `gateOutcomes`, not from this file.
+    runAnalysisWithDiagnostics: (...args: Parameters<typeof actual.runAnalysisWithDiagnostics>) => {
+      const { result, diagnostics } = actual.runAnalysisWithDiagnostics(...args);
+      if (diagnostics.blockingGate !== null) {
+        throw new Error(`Fixture no longer reaches confirmation: ${diagnostics.blockingGate}`);
+      }
+      const notApplicable = new Set(
+        diagnostics.gates.filter((g) => g.outcome === "NOT_APPLICABLE").map((g) => g.gate),
+      );
       return {
-        ...result,
-        status: "WAIT_FOR_CONFIRMATION" as const,
-        confirmation: { ...result.confirmation!, status: "CONTRADICTED" as const },
+        result: contradicted(result),
+        diagnostics: {
+          ...diagnostics,
+          blockingGate: "CONFIRMATION_CONTRADICTED" as const,
+          gates: actual.gateOutcomes("CONFIRMATION_CONTRADICTED", {
+            reached: "SCORE",
+            notApplicable,
+          }),
+          confirmation: { ...diagnostics.confirmation!, status: "CONTRADICTED" as const },
+        },
       };
     },
   };
@@ -125,6 +150,9 @@ describe("a pass of contradicted, never-tracked candidates", () => {
     expect(writes.runUpdates).toEqual([expect.objectContaining({ invalidations: 0 })]);
     expect(tracking.created).toBe(0);
     expect(summary.events.filter((e) => e.type === "SETUP_INVALIDATED")).toEqual([]);
+    // The pass's gate counts say what its results say.
+    expect(summary.breakdown[0].blockingGates.CONFIRMATION_CONTRADICTED).toBe(2);
+    expect(summary.breakdown[0].passed).toBe(0);
   });
 
   it("stores no lifecycle state on the scanner rows — nothing moved", async () => {

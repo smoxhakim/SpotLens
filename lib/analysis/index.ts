@@ -31,6 +31,9 @@ export type { PriceZone, ZoneKind, ZoneRead, ZoneOptions } from "./zones";
 
 export * from "./setup";
 
+export * from "./diagnostics";
+export { ANALYSIS_RULES_VERSION, DIAGNOSTICS_VERSION } from "./version";
+
 export {
   analyzeMultiTimeframe,
   defaultHigherTimeframe,

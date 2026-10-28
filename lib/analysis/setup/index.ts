@@ -2,6 +2,8 @@ import { ANALYSIS_DISCLAIMER, DISCLAIMER_VERSION } from "@/lib/constants/disclai
 import type { Candle } from "@/lib/market-data/provider";
 
 import { evaluateConfirmation, type ConfirmationResult } from "../confirmation";
+import { buildDiagnostics } from "../diagnostics/build";
+import type { AnalysisDiagnostics, AnalysisTrace, BlockingCode } from "../diagnostics/types";
 import { heldForIncompleteData, type AnalysisShortfall } from "../incomplete";
 import { runMarketRead, type MarketRead, type MarketReadOptions } from "../market-read";
 import type { MtfSummary } from "../mtf";
@@ -11,7 +13,7 @@ import { calculateRiskReward } from "./risk-reward";
 import { scoreSetup, type SetupScore } from "./score";
 import { calculateStopLoss } from "./stop-loss";
 import { calculateTakeProfits } from "./take-profit";
-import { determineStatus } from "./status";
+import { decideStatus } from "./status";
 import type { TradeSetup, TradeStatus } from "./types";
 
 export interface AnalysisResult {
@@ -75,6 +77,31 @@ export interface RunAnalysisOptions extends MarketReadOptions {
 }
 
 export function runAnalysis(candles: Candle[], options: RunAnalysisOptions = {}): AnalysisResult {
+  return analyse(candles, options).result;
+}
+
+/**
+ * `runAnalysis`, and a record of how it reached its verdict.
+ *
+ * The result is the very object `runAnalysis` returns for the same input; the
+ * diagnostics travel beside it, never inside it, so no API response, stored
+ * snapshot or lifecycle plan can change shape because of them. Called by the
+ * scanner only.
+ */
+export function runAnalysisWithDiagnostics(
+  candles: Candle[],
+  options: RunAnalysisOptions = {},
+): { result: AnalysisResult; diagnostics: AnalysisDiagnostics } {
+  const { result, trace } = analyse(candles, options);
+  return { result, diagnostics: buildDiagnostics(trace, result) };
+}
+
+interface Analysed {
+  result: AnalysisResult;
+  trace: AnalysisTrace;
+}
+
+function analyse(candles: Candle[], options: RunAnalysisOptions): Analysed {
   const read = runMarketRead(candles, options);
   const mtf = options.mtf ?? null;
 
@@ -88,17 +115,37 @@ export function runAnalysis(candles: Candle[], options: RunAnalysisOptions = {})
     disclaimerVersion: DISCLAIMER_VERSION,
   };
 
-  const noSetup = (status: TradeStatus, statusReason: string): AnalysisResult => ({
-    ...base,
-    setup: null,
+  // Filled in as each stage runs, so an exit records exactly what it built and
+  // nothing it never reached.
+  const trace: AnalysisTrace = {
+    candles,
+    lastCandleIsForming: options.lastCandleIsForming ?? false,
+    read,
+    mtf,
+    incomplete,
+    entry: null,
+    stopLoss: null,
+    takeProfits: null,
+    riskReward: null,
     score: null,
     confirmation: null,
-    status,
-    statusReason,
+    blockingGate: null,
+  };
+
+  const noSetup = (status: TradeStatus, statusReason: string, gate: BlockingCode): Analysed => ({
+    result: {
+      ...base,
+      setup: null,
+      score: null,
+      confirmation: null,
+      status,
+      statusReason,
+    },
+    trace: { ...trace, blockingGate: gate },
   });
 
   if (candles.length === 0) {
-    return noSetup("AVOID", "No market data is available for this pair and timeframe.");
+    return noSetup("AVOID", "No market data is available for this pair and timeframe.", "NO_DATA");
   }
 
   if (mtf?.agreement === "COUNTER_TREND_BOUNCE" || mtf?.agreement === "ALIGNED_BEARISH") {
@@ -106,6 +153,7 @@ export function runAnalysis(candles: Candle[], options: RunAnalysisOptions = {})
       "AVOID",
       mtf.conflictNote ??
         "The higher timeframe is bearish, so no long setup is offered on the lower one.",
+      mtf.agreement === "COUNTER_TREND_BOUNCE" ? "HTF_COUNTER_TREND" : "HTF_BEARISH",
     );
   }
 
@@ -113,6 +161,7 @@ export function runAnalysis(candles: Candle[], options: RunAnalysisOptions = {})
     return noSetup(
       "AVOID",
       "The trend is bearish. SpotLens does not produce long setups against the dominant trend, and it has no short setups to offer — this is a spot-only tool with no way to profit from a falling market.",
+      mtf?.agreement === "PULLBACK_IN_UPTREND" ? "PULLBACK_IN_UPTREND_VETO" : "ENTRY_TF_BEARISH",
     );
   }
 
@@ -121,18 +170,23 @@ export function runAnalysis(candles: Candle[], options: RunAnalysisOptions = {})
     return noSetup(
       "WAIT_FOR_CONFIRMATION",
       "No support zone has formed below the current price on this timeframe, so there is no level to anchor an entry or a stop to. Without an invalidation level there is no trade to plan.",
+      "NO_ENTRY_ZONE",
     );
   }
+  trace.entry = entry;
 
   const stopLoss = calculateStopLoss(read, entry, candles, options.swingLookback);
   if (!stopLoss) {
     return noSetup(
       "WAIT_FOR_CONFIRMATION",
       "A structurally sound stop loss cannot be placed below this entry zone, so the risk on the trade cannot be defined. A trade whose risk cannot be measured should not be taken.",
+      "NO_STOP",
     );
   }
+  trace.stopLoss = stopLoss;
 
   const takeProfits = calculateTakeProfits(read, entry, stopLoss, candles, options.swingLookback);
+  trace.takeProfits = takeProfits;
 
   // Checked before the reward is measured, so the ratio can only ever describe
   // a ladder in long order. A set that fails is refused, not re-sorted:
@@ -142,6 +196,7 @@ export function runAnalysis(candles: Candle[], options: RunAnalysisOptions = {})
     return noSetup(
       "WAIT_FOR_CONFIRMATION",
       `The levels for this setup do not form a valid long trade: ${levels.reason} A target set that does not ascend from the entry is refused rather than rearranged, so no entry, stop or target is offered.`,
+      "INVALID_LEVELS",
     );
   }
 
@@ -150,8 +205,10 @@ export function runAnalysis(candles: Candle[], options: RunAnalysisOptions = {})
     return noSetup(
       "WAIT_FOR_CONFIRMATION",
       "No target above the entry zone can be identified, so the reward on the trade cannot be measured against its risk.",
+      "NO_MEASURABLE_REWARD",
     );
   }
+  trace.riskReward = riskReward;
 
   const score = scoreSetup(read, entry, riskReward, mtf ?? undefined);
 
@@ -163,16 +220,23 @@ export function runAnalysis(candles: Candle[], options: RunAnalysisOptions = {})
     lastCandleIsForming: options.lastCandleIsForming,
     swingLookback: options.swingLookback,
   });
+  trace.score = score;
+  trace.confirmation = confirmation;
 
-  const decided = determineStatus(read, entry, riskReward, score, mtf ?? undefined, confirmation);
+  const decided = decideStatus(read, entry, riskReward, score, mtf ?? undefined, confirmation);
 
   // After every rule, like confirmation, and like it able only to hold a setup
   // back: on stale data, or without the higher timeframe's counter-trend veto,
   // a potential setup here is one the full rules have not cleared.
   const verdict =
     incomplete && decided.status === "POTENTIAL_SETUP"
-      ? { status: "WAIT_FOR_CONFIRMATION" as const, reason: heldForIncompleteData(incomplete) }
+      ? {
+          status: "WAIT_FOR_CONFIRMATION" as const,
+          reason: heldForIncompleteData(incomplete),
+          gate: "HELD_INCOMPLETE_DATA" as const,
+        }
       : decided;
+  trace.blockingGate = verdict.gate;
 
   // The status engine can reach AVOID on evidence that only exists once the
   // setup has been built — a risk/reward below 1, or a score under the AVOID
@@ -185,22 +249,28 @@ export function runAnalysis(candles: Candle[], options: RunAnalysisOptions = {})
   // status reason with nothing behind it.
   if (verdict.status === "AVOID") {
     return {
-      ...base,
-      setup: null,
-      score,
-      confirmation,
-      status: verdict.status,
-      statusReason: verdict.reason,
+      result: {
+        ...base,
+        setup: null,
+        score,
+        confirmation,
+        status: verdict.status,
+        statusReason: verdict.reason,
+      },
+      trace,
     };
   }
 
   return {
-    ...base,
-    setup: { direction: "LONG", entry, stopLoss, takeProfits, riskReward },
-    score,
-    confirmation,
-    status: verdict.status,
-    statusReason: verdict.reason,
+    result: {
+      ...base,
+      setup: { direction: "LONG", entry, stopLoss, takeProfits, riskReward },
+      score,
+      confirmation,
+      status: verdict.status,
+      statusReason: verdict.reason,
+    },
+    trace,
   };
 }
 
