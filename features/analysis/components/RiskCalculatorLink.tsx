@@ -5,6 +5,7 @@ import Link from "next/link";
 
 import { Button } from "@/components/ui/button";
 import type { AnalysisResult } from "@/lib/analysis";
+import { entryPriceOf } from "@/lib/risk";
 
 /**
  * Carries the setup's levels into the risk calculator.
@@ -17,12 +18,15 @@ import type { AnalysisResult } from "@/lib/analysis";
  * fixed index. The engine measures to the second *qualifying* structural
  * target, which is frequently not TP2 — sending the wrong one would make the
  * calculator quietly disagree with the panel it was opened from.
+ *
+ * The entry is the top of the zone (`entryPriceOf`, shared with the decision
+ * pages): the worst fill inside it, so the size never understates the loss.
  */
 export function RiskCalculatorLink({ setup }: { setup: NonNullable<AnalysisResult["setup"]> }) {
   const measured = setup.takeProfits.find((t) => t.label === setup.riskReward.measuredTo);
 
   const params = new URLSearchParams({
-    entry: String(setup.entry.mid),
+    entry: String(entryPriceOf({ entryLow: setup.entry.low, entryHigh: setup.entry.high })),
     stop: String(setup.stopLoss.price),
     ...(measured ? { tp: String(measured.level) } : {}),
     ...(setup.riskReward.isSynthetic ? { unmeasured: "1" } : {}),
@@ -37,7 +41,8 @@ export function RiskCalculatorLink({ setup }: { setup: NonNullable<AnalysisResul
         </Link>
       </Button>
       <p className="mt-1.5 max-w-prose text-[10px] leading-relaxed text-muted-foreground">
-        Opens the calculator with this entry, stop and target
+        Opens the calculator with this stop and target, and the top of the entry zone as the entry —
+        the worst fill inside it
         {setup.riskReward.isSynthetic ? " — the target is one the engine never measured" : ""}. You
         choose the balance and the risk. Nothing is placed, and nothing is sent anywhere.
       </p>

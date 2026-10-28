@@ -105,8 +105,11 @@ export default async function RiskCalculatorPage({
         </p>
         {prefill(params.entry) !== undefined && (
           <p className="text-[11px] leading-relaxed text-muted-foreground">
-            Levels prefilled from a setup. Choose a balance and a risk percentage to size it —
-            SpotLens does not place orders, and nothing here does anything but arithmetic.
+            Levels prefilled from a setup. The entry is the top of the entry zone — the worst fill
+            inside it, so the loss shown is the most a stop-out costs; change it to the price you
+            actually pay. Its ratio can therefore read lower than the analysis panel&apos;s, which
+            is measured from the middle of the zone. Choose a balance and a risk percentage to size
+            it — SpotLens does not place orders, and nothing here does anything but arithmetic.
           </p>
         )}
       </header>

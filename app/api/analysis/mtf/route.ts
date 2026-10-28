@@ -83,11 +83,17 @@ export async function POST(req: NextRequest) {
     // Fail closed: without a usable higher timeframe the analysis is shown for
     // information only — never POTENTIAL_SETUP, never tracked. Its candles are
     // not folded in when they are stale, short or invalid.
+    //
+    // Closed higher-timeframe candles only, for the trend read as well as the
+    // check: a higher candle still forming can turn its trend before it closes,
+    // and the scanner never reads one. One clock reading for every decision.
+    const now = Date.now();
+    const higherClosed = higher ? closedCandlesOnly<Candle>(higher.candles, now) : [];
     const higherShortfall: AnalysisShortfall | null = higher
       ? assessHigherTimeframe({
-          candles: closedCandlesOnly<Candle>(higher.candles, Date.now()),
+          candles: higherClosed,
           timeframe: body.higherTimeframe,
-          now: Date.now(),
+          now,
           servedStale: higher.stale,
         })
       : unavailableHigherTimeframe(body.higherTimeframe, "UNAVAILABLE");
@@ -96,7 +102,7 @@ export async function POST(req: NextRequest) {
       higher && !higherShortfall
         ? analyzeMultiTimeframe({
             lowerCandles: lower.candles,
-            higherCandles: higher.candles,
+            higherCandles: higherClosed,
             lowerTimeframe: body.lowerTimeframe,
             higherTimeframe: body.higherTimeframe,
           })
@@ -106,12 +112,14 @@ export async function POST(req: NextRequest) {
     // problem, whatever the higher timeframe says.
     const incomplete = lower.stale ? staleEntryTimeframe(body.lowerTimeframe) : higherShortfall;
 
+    const lastCandleIsForming = isLastCandleForming(lower.candles, now);
+
     // Named properties, not spreads: a spread is not checked for unknown keys,
     // and a misspelt option here would silently drop the gate.
     const result = runAnalysis(lower.candles, {
       mtf,
       incomplete: incomplete ?? undefined,
-      lastCandleIsForming: isLastCandleForming(lower.candles),
+      lastCandleIsForming,
     });
 
     const snapshotId = userId
@@ -126,8 +134,13 @@ export async function POST(req: NextRequest) {
     // Same lifecycle path as the single-timeframe route — one setup per pair
     // and entry timeframe, however the analysis was run. Never from an
     // incomplete analysis (stale entry candles, or no usable higher timeframe):
-    // a setup must not be created or moved from data unfit to decide on.
-    if (userId && !result.incomplete) {
+    // a setup must not be created or moved from data unfit to decide on. Nor
+    // while the entry candle is still forming: a tracked setup's snapshot is
+    // written once, and its state would come from a price the candle may not
+    // close at — which the scanner, reading closed candles only, would then
+    // move back. The result is still shown and recorded; the scanner tracks it
+    // once the candle has closed.
+    if (userId && !result.incomplete && !lastCandleIsForming) {
       await trackSetup({
         userId,
         tradingPairId: market.pairId,

@@ -98,7 +98,7 @@ describe("riskPrefillFrom", () => {
 });
 
 describe("the prefill and lib/risk agree", () => {
-  it("sizes from the same entry and stop the setup recorded", () => {
+  it("sizes from the top of the entry zone and the stop the setup recorded", () => {
     // One formula, and it is the Phase H one. The prefill supplies inputs; it
     // does not compute a position, and there is no second sizing rule here.
     const prefill = riskPrefillFrom(levels);
@@ -115,14 +115,48 @@ describe("the prefill and lib/risk agree", () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
 
+    expect(prefill.entry).toBe(levels.entryHigh);
     expect(result.calculation.entry).toBe(prefill.entry);
     expect(result.calculation.stopLoss).toBe(prefill.stopLoss);
-    // 1% of 1000 over a 6-wide stop: 1.666… units, 170 of quote.
+    // 1% of 1000 over an 8-wide stop (104 down to 96): 1.25 units.
     expect(result.calculation.intendedRiskAmount).toBeCloseTo(10, 10);
-    expect(result.calculation.quantity).toBeCloseTo(10 / 6, 10);
+    expect(result.calculation.quantity).toBeCloseTo(10 / 8, 10);
   });
 
-  it("reports the ratio the engine measured, to the target it measured to", () => {
+  it("never understates the loss of a fill anywhere in the zone", () => {
+    // The P0 this guards: sized from the midpoint, a fill at the top of the zone
+    // — where price arriving from above fills first — lost a third more than
+    // the calculator said. Sized from the top, no fill inside the zone can.
+    const prefill = riskPrefillFrom(levels);
+    const sized = calculateRisk({
+      balance: 1000,
+      riskPercent: 1,
+      entry: prefill.entry,
+      stopLoss: prefill.stopLoss,
+    });
+    const fromMid = calculateRisk({
+      balance: 1000,
+      riskPercent: 1,
+      entry: (levels.entryLow + levels.entryHigh) / 2,
+      stopLoss: prefill.stopLoss,
+    });
+
+    expect(sized.ok && fromMid.ok).toBe(true);
+    if (!sized.ok || !fromMid.ok) return;
+
+    const intended = sized.calculation.intendedRiskAmount;
+    const lossAt = (quantity: number, fill: number) => quantity * (fill - levels.stopLoss);
+
+    for (const fill of [levels.entryLow, 102, levels.entryHigh]) {
+      expect(lossAt(sized.calculation.quantity, fill)).toBeLessThanOrEqual(intended + 1e-9);
+    }
+    expect(lossAt(sized.calculation.quantity, levels.entryHigh)).toBeCloseTo(intended, 10);
+
+    // What the midpoint sizing would have cost at the same top-of-zone fill.
+    expect(lossAt(fromMid.calculation.quantity, levels.entryHigh)).toBeCloseTo((intended * 8) / 6);
+  });
+
+  it("reports the ratio from the entry it sizes from, never more than the panel's", () => {
     const prefill = riskPrefillFrom(levels);
 
     const result = calculateRisk({
@@ -136,13 +170,12 @@ describe("the prefill and lib/risk agree", () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
 
-    // The engine stores each target's own ratio to the same entry midpoint and
-    // the same stop, so sizing to the measured target must reproduce exactly
-    // the ratio the panel quoted — not something close to it.
-    const measured = levels.takeProfits.find((t) => t.label === prefill.takeProfitLabel)!;
-
-    expect(result.calculation.riskReward).toBeCloseTo(measured.rr!, 10);
-    expect(result.calculation.riskReward).toBeCloseTo(levels.riskReward, 10);
+    // Size, loss and reward all describe the same fill: (120 − 104) / (104 − 96).
+    // The engine's stored ratio is measured from the midpoint, so the panel
+    // quotes more for the same target — the calculator must never quote more.
+    expect(prefill.takeProfitLabel).toBe("TP2");
+    expect(result.calculation.riskReward).toBeCloseTo(2, 10);
+    expect(result.calculation.riskReward).toBeLessThanOrEqual(levels.riskReward);
   });
 
   it("charges fees on both legs without changing the ratio", () => {
@@ -205,6 +238,7 @@ describe("riskCalculatorParams", () => {
     expect(params.get("runId")).toBe("run-1");
     expect(params.get("setupId")).toBe("setup-1");
     expect(params.get("entry")).toBe(String(entryPriceOf(levels)));
+    expect(params.get("entry")).toBe("104");
     expect(params.get("stop")).toBe("96");
     expect(params.get("tp")).toBe("120");
   });
