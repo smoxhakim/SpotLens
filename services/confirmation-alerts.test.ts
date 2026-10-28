@@ -72,8 +72,12 @@ beforeEach(() => {
   vi.clearAllMocks();
   created = 0;
 
+  // Telegram on, as delivery needs: `telegramEnabled` is the master switch for
+  // this bot too, and the product default leaves it off. The master switch has
+  // its own tests below.
   db.notificationPreference.findUnique.mockResolvedValue({
     ...DEFAULT_PREFERENCES,
+    telegramEnabled: true,
     userId: "user-1",
   });
   db.notification.create.mockImplementation(async () => ({ id: `n${(created += 1)}` }));
@@ -504,6 +508,115 @@ describe("preferences", () => {
         update: expect.objectContaining({ announcedEvidence: "HIGHER_LOW" }),
       }),
     );
+  });
+});
+
+describe("the Telegram master switch", () => {
+  const prefs = (overrides: Partial<typeof DEFAULT_PREFERENCES>) =>
+    db.notificationPreference.findUnique.mockResolvedValue({
+      ...DEFAULT_PREFERENCES,
+      ...overrides,
+      userId: "user-1",
+    });
+  const inAppRows = () =>
+    db.notification.create.mock.calls
+      .map(([arg]) => arg.data)
+      .filter((d) => d.channel === "IN_APP");
+
+  it("off, with the confirmation bot connected: in-app only, no Telegram row, nothing sent", async () => {
+    // The bug this guards: the confirmation bot ignored the switch and was only
+    // ever stopped by not being connected.
+    prefs({ telegramEnabled: false });
+    db.setupConfirmationWatch.findFirst.mockResolvedValue(watched(""));
+
+    const outcome = await deliverConfirmationAlerts({
+      userId: "user-1",
+      observations: [observation()],
+    });
+
+    expect(sendTelegramMessage).not.toHaveBeenCalled();
+    expect(db.telegramConnection.findUnique).not.toHaveBeenCalled();
+    expect(telegramRows()).toEqual([]);
+    expect(db.notification.update).not.toHaveBeenCalled();
+    // The in-app record is unaffected, and recorded as delivered — it was.
+    expect(inAppRows()).toHaveLength(1);
+    expect(inAppRows()[0]).toMatchObject({ status: "SENT" });
+    expect(outcome).toMatchObject({ created: 1, sent: 0, failed: 0, telegramDisabled: 1 });
+  });
+
+  it("off: the alert still counts as announced, so switching on later replays nothing", async () => {
+    prefs({ telegramEnabled: false });
+    db.setupConfirmationWatch.findFirst.mockResolvedValueOnce(watched(""));
+    await deliverConfirmationAlerts({ userId: "user-1", observations: [observation()] });
+
+    expect(db.setupConfirmationWatch.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        update: expect.objectContaining({ announcedEvidence: "HIGHER_LOW" }),
+      }),
+    );
+
+    // Telegram switched on; the next pass reads the state the first one wrote.
+    prefs({ telegramEnabled: true });
+    db.setupConfirmationWatch.findFirst.mockResolvedValueOnce(watched("HIGHER_LOW"));
+    const later = await deliverConfirmationAlerts({
+      userId: "user-1",
+      observations: [observation()],
+    });
+
+    expect(sendTelegramMessage).not.toHaveBeenCalled();
+    expect(telegramRows()).toEqual([]);
+    expect(later.sent).toBe(0);
+  });
+
+  it("on, with the confirmation bot connected: sent once, through that bot", async () => {
+    prefs({ telegramEnabled: true });
+    db.setupConfirmationWatch.findFirst.mockResolvedValue(watched(""));
+
+    const outcome = await deliverConfirmationAlerts({
+      userId: "user-1",
+      observations: [observation()],
+    });
+
+    expect(sendTelegramMessage).toHaveBeenCalledTimes(1);
+    expect(sendTelegramMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ chatId: "42", bot: "CONFIRMATION" }),
+    );
+    expect(telegramRows()).toHaveLength(1);
+    expect(outcome).toMatchObject({ sent: 1, failed: 0, telegramDisabled: 0 });
+  });
+
+  it("on, with the bot not connected: recorded as not sent, never as delivered", async () => {
+    prefs({ telegramEnabled: true });
+    db.setupConfirmationWatch.findFirst.mockResolvedValue(watched(""));
+    db.telegramConnection.findUnique.mockResolvedValue(null);
+
+    const outcome = await deliverConfirmationAlerts({
+      userId: "user-1",
+      observations: [observation()],
+    });
+
+    expect(sendTelegramMessage).not.toHaveBeenCalled();
+    expect(outcome).toMatchObject({ sent: 0, failed: 1 });
+    expect(db.notification.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ status: "FAILED" }) }),
+    );
+  });
+
+  it("the per-event switch still comes first: off means nothing written, Telegram on or not", async () => {
+    for (const telegramEnabled of [true, false]) {
+      vi.clearAllMocks();
+      prefs({ confirmationAlerts: false, telegramEnabled });
+      db.setupConfirmationWatch.findFirst.mockResolvedValue(watched(""));
+
+      const outcome = await deliverConfirmationAlerts({
+        userId: "user-1",
+        observations: [observation()],
+      });
+
+      expect(db.notification.create).not.toHaveBeenCalled();
+      expect(sendTelegramMessage).not.toHaveBeenCalled();
+      expect(outcome).toMatchObject({ suppressed: 1, telegramDisabled: 0 });
+    }
   });
 });
 

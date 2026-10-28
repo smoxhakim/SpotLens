@@ -41,6 +41,15 @@ import { sendAndRecord } from "@/services/telegram-delivery";
  *
  * Nothing here throws. It runs inside the scanner process, and an alert channel
  * that can abort a scan is worse than no alert channel.
+ *
+ * ## The Telegram switch
+ *
+ * `telegramEnabled` is the master switch for every bot, this one included. With
+ * it off, an alert is recorded in-app only: no row is written on this channel
+ * and nothing is sent, so nothing can read as delivered or as failed. The watch
+ * state still advances — the alert was announced, in-app — so switching
+ * Telegram on later does not replay what accumulated while it was off, exactly
+ * as the main channel never replays an in-app-only event.
  */
 
 const CHANNEL = "TELEGRAM_CONFIRMATION" as const;
@@ -54,6 +63,8 @@ export interface ConfirmationDeliveryOutcome {
   duplicates: number;
   suppressed: number;
   quiet: number;
+  /** Alerts recorded in-app only, because Telegram is switched off. */
+  telegramDisabled: number;
 }
 
 const NOTHING: ConfirmationDeliveryOutcome = {
@@ -65,7 +76,16 @@ const NOTHING: ConfirmationDeliveryOutcome = {
   duplicates: 0,
   suppressed: 0,
   quiet: 0,
+  telegramDisabled: 0,
 };
+
+/** The owner's two switches, read once per pass. */
+interface Switches {
+  /** The per-event preference: whether confirmation alerts are wanted at all. */
+  alertsEnabled: boolean;
+  /** The master switch for every Telegram bot. */
+  telegramEnabled: boolean;
+}
 
 /**
  * Processes every confirmation observation from one scanner pass.
@@ -83,10 +103,13 @@ export async function deliverConfirmationAlerts(input: {
   const totals = { ...NOTHING };
 
   // Read once rather than per observation: a pass can carry ninety of these.
-  let alertsEnabled: boolean;
+  let switches: Switches;
   try {
     const prefs = await getPreferences(input.userId);
-    alertsEnabled = prefs[PREFERENCE_FOR_EVENT.CONFIRMATION_REACHED];
+    switches = {
+      alertsEnabled: prefs[PREFERENCE_FOR_EVENT.CONFIRMATION_REACHED],
+      telegramEnabled: prefs.telegramEnabled,
+    };
   } catch (err) {
     warnOnce(
       "confirmation-alerts:preferences",
@@ -109,7 +132,7 @@ export async function deliverConfirmationAlerts(input: {
       continue;
     }
 
-    const outcome = await processOne(observation, alertsEnabled);
+    const outcome = await processOne(observation, switches);
     totals.observed += outcome.observed;
     totals.baselined += outcome.baselined;
     totals.created += outcome.created;
@@ -118,6 +141,7 @@ export async function deliverConfirmationAlerts(input: {
     totals.duplicates += outcome.duplicates;
     totals.suppressed += outcome.suppressed;
     totals.quiet += outcome.quiet;
+    totals.telegramDisabled += outcome.telegramDisabled;
   }
 
   return totals;
@@ -125,7 +149,7 @@ export async function deliverConfirmationAlerts(input: {
 
 async function processOne(
   observation: ConfirmationObservation,
-  alertsEnabled: boolean,
+  { alertsEnabled, telegramEnabled }: Switches,
 ): Promise<ConfirmationDeliveryOutcome> {
   try {
     const stored = await prisma.setupConfirmationWatch.findFirst({
@@ -174,11 +198,12 @@ async function processOne(
     const totals = { ...NOTHING, observed: 1 };
 
     for (const alert of plan.alerts) {
-      const outcome = await deliverOne(alert, numbers);
+      const outcome = await deliverOne(alert, numbers, telegramEnabled);
       totals.created += outcome.created;
       totals.sent += outcome.sent;
       totals.failed += outcome.failed;
       totals.duplicates += outcome.duplicates;
+      totals.telegramDisabled += outcome.telegramDisabled;
     }
 
     // Last, so that a crash anywhere above re-derives the same alert on the
@@ -203,10 +228,14 @@ async function processOne(
  * are different judgements, and because the Notifications page is where a
  * reader goes to see what they missed. It never touches the main bot: the
  * in-app channel is not a bot at all.
+ *
+ * With Telegram switched off, the in-app copy is the whole delivery: no row on
+ * this channel, no send, nothing recorded as delivered or as failed.
  */
 async function deliverOne(
   alert: ConfirmationAlert,
   numbers: SetupNumbers | null,
+  telegramEnabled: boolean,
 ): Promise<ConfirmationDeliveryOutcome> {
   const type: NotificationEventType =
     alert.level === "REACHED" ? "CONFIRMATION_REACHED" : "CONFIRMATION_EVIDENCE";
@@ -219,6 +248,8 @@ async function deliverOne(
   const inApp = await insertRow({ alert, type, channel: "IN_APP", title, body, sent: true });
   if (inApp === "DUPLICATE") totals.duplicates += 1;
   else totals.created += 1;
+
+  if (!telegramEnabled) return { ...totals, telegramDisabled: 1 };
 
   const row = await insertRow({ alert, type, channel: CHANNEL, title, body, sent: false });
 
