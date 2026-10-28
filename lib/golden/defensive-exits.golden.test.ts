@@ -1,6 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { buildExplanations, runAnalysis, type TakeProfitTarget } from "@/lib/analysis";
+import {
+  buildExplanations,
+  runAnalysis,
+  runAnalysisWithDiagnostics,
+  type TakeProfitTarget,
+} from "@/lib/analysis";
 import { pullbackIntoSupport } from "@/lib/test-utils/scenarios";
 
 import { FINGERPRINT_FORMAT, fingerprintLine } from "./fingerprint";
@@ -87,6 +92,29 @@ describe("golden master: defensive exits", () => {
 
     expect(branchOf(result)).toBe("INVALID_LEVELS");
     expect(result.statusReason).toMatch(/TP1 is not above the entry zone/);
+  });
+
+  it("names each exit in its diagnostics, beside the unchanged result", () => {
+    // Phase 5, commit 1. The only place these two codes are reached.
+    const outcomes = CASES.map(([name, build]) => {
+      ladder.override = build;
+      const { result, diagnostics } = runAnalysisWithDiagnostics(pullbackIntoSupport());
+      const plain = runAnalysis(pullbackIntoSupport());
+      ladder.override = null;
+
+      expect(result, name).toStrictEqual(plain);
+      expect(diagnostics.blockingGate, name).toBe(branchOf(result));
+      const outcome = (gate: string) => diagnostics.gates.find((g) => g.gate === gate)!.outcome;
+      return [outcome("LEVEL_ORDER"), outcome("REWARD_MEASURABLE"), diagnostics.reward];
+    });
+
+    expect(outcomes).toEqual([
+      // No targets: nothing for the order check to look at, and nothing to measure.
+      ["NOT_APPLICABLE", "FAIL", null],
+      // Refused before the reward was measured, so it never was.
+      ["FAIL", "UNAVAILABLE", null],
+      ["FAIL", "UNAVAILABLE", null],
+    ]);
   });
 
   it("pins the verdict, reason and withheld levels for each", async () => {

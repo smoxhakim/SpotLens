@@ -15,6 +15,7 @@ import {
   type SetupScore,
   type TradeStatus,
 } from "@/lib/analysis";
+import { decideStatus } from "@/lib/analysis/setup/status";
 import { makeCandles } from "@/lib/test-utils/candles";
 import { downtrend, pullbackIntoSupport, rangeBound } from "@/lib/test-utils/scenarios";
 
@@ -492,6 +493,23 @@ describe("golden master: determineStatus, rule by rule", () => {
   it("uses real confirmation results of each kind", () => {
     expect(NOT_PRESENT.status).toBe("NOT_PRESENT");
     expect(CONTRADICTED.status).toBe("CONTRADICTED");
+  });
+
+  it("names, in each decision's gate, the rule the classifier reads from its reason", () => {
+    // Phase 5, commit 1. `decideStatus` is the verdict plus the code of the
+    // return that produced it; `determineStatus` must still be the verdict alone.
+    for (const c of CASES) {
+      const inputs = baseline();
+      c.change(inputs);
+      const { read, entry, riskReward, score, mtf, confirmation } = inputs;
+      const decision = decideStatus(read, entry, riskReward, score, mtf, confirmation);
+
+      expect(decision.gate ?? "PASSED", c.name).toBe(run(c).branch);
+      expect(decide(inputs), c.name).toStrictEqual({
+        status: decision.status,
+        reason: decision.reason,
+      });
+    }
   });
 
   it.each(CASES.map((c): [string, Case] => [c.name, c]))("%s", (_name, c) => {

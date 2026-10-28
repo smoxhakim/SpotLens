@@ -2,8 +2,9 @@ import {
   analyzeMultiTimeframe,
   assessHigherTimeframe,
   defaultHigherTimeframe,
-  runAnalysis,
+  runAnalysisWithDiagnostics,
   unavailableHigherTimeframe,
+  type AnalysisDiagnostics,
   type AnalysisResult,
 } from "@/lib/analysis";
 import type { ConfirmationObservation } from "@/lib/confirmation-watch";
@@ -11,6 +12,7 @@ import { isDatabaseConfigured, prisma } from "@/lib/db/prisma";
 import type { Candle, Timeframe } from "@/lib/market-data/provider";
 import {
   DEFAULT_SCAN_TIMEFRAMES,
+  breakdownOf,
   buildShortlist,
   closedCandlesOnly,
   eventsForOutcome,
@@ -25,6 +27,7 @@ import {
   type ClassifiedFailure,
   type ScannerEvent,
   type Shortlist,
+  type TimeframeGateCounts,
 } from "@/lib/scanner";
 import { classifyRegime } from "@/lib/regime";
 import type { MarketSummary } from "@/types/market";
@@ -84,6 +87,12 @@ export interface MarketScanOutcome {
   trend: string | null;
   mtfAgreement: string | null;
   regimeDirection: string | null;
+  /**
+   * How the engine reached this verdict: the deciding gate and every gate's
+   * outcome. Held for this pass's log only — no column stores it. Null on a
+   * failed market.
+   */
+  diagnostics: AnalysisDiagnostics | null;
   failure: ClassifiedFailure | null;
   attempts: number;
   durationMs: number;
@@ -118,6 +127,11 @@ export interface ScanSummary {
   invalidations: number;
   durationMs: number;
   events: ScannerEvent[];
+  /**
+   * Per timeframe, the gate that held each analysis back. Counted from the
+   * diagnostics above, in memory; not stored.
+   */
+  breakdown: TimeframeGateCounts[];
   /** Every market, ranked. Losers included — a scan is mostly no-trades. */
   results: MarketScanOutcome[];
   /**
@@ -274,10 +288,14 @@ async function scanOne(
       const mtf = await higherTimeframeContext(market, timeframe, closed, now);
 
       // The same engine the manual page and the backtester call. Every candle
-      // here has closed, so `lastCandleIsForming` is false by construction.
+      // here has closed, so `lastCandleIsForming` is false by construction. The
+      // result is the one `runAnalysis` returns; the diagnostics ride beside it.
       return {
         closed,
-        result: runAnalysis(closed, { ...(mtf ? { mtf } : {}), lastCandleIsForming: false }),
+        ...runAnalysisWithDiagnostics(closed, {
+          ...(mtf ? { mtf } : {}),
+          lastCandleIsForming: false,
+        }),
       };
     },
     { signal: options.signal },
@@ -307,6 +325,7 @@ async function scanOne(
         trend: null,
         mtfAgreement: null,
         regimeDirection: null,
+        diagnostics: null,
         failure,
         attempts: attempt.attempts,
         durationMs: Date.now() - started,
@@ -326,7 +345,7 @@ async function scanOne(
     };
   }
 
-  const { closed, result } = attempt.value;
+  const { closed, result, diagnostics } = attempt.value;
 
   // Phase D owns identity and deduplication. The scanner calls it and does not
   // second-guess it — that is the whole reason repeated scans stay quiet.
@@ -370,6 +389,7 @@ async function scanOne(
       trend: result.read.trend.trend,
       mtfAgreement: result.mtf?.agreement ?? null,
       regimeDirection: classifyRegime(result.read).direction,
+      diagnostics,
       failure: null,
       attempts: attempt.attempts,
       durationMs: Date.now() - started,
@@ -452,6 +472,7 @@ function abortedOutcome(market: MarketSummary, timeframe: Timeframe): OneOutcome
       trend: null,
       mtfAgreement: null,
       regimeDirection: null,
+      diagnostics: null,
       failure: { category: "UNKNOWN", message: "The scan was stopped.", retryable: false },
       attempts: 0,
       durationMs: 0,
@@ -550,6 +571,7 @@ function summarise(
     invalidations: events.filter((e) => e.type === "SETUP_INVALIDATED").length,
     durationMs,
     events,
+    breakdown: breakdownOf(results),
   };
 }
 
@@ -622,8 +644,16 @@ async function finishRun(
         },
       }),
     ]);
-  } catch {
-    // Recording the outcome is best-effort; the analysis already happened.
+  } catch (err) {
+    // Recording the outcome is best-effort; the analysis already happened. It
+    // is still said: a pass whose rows were lost otherwise looks exactly like
+    // one still running. The run's status handling is unchanged — it stays
+    // RUNNING until `closeAbandonedRuns` closes it. Category and sanitised
+    // message only, never the raw error.
+    const failure = classifyFailure(err);
+    console.error(
+      `[scanner] results not recorded for run ${runId}: ${failure.category} — ${failure.message}`,
+    );
   }
 }
 

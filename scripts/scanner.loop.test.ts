@@ -110,6 +110,7 @@ function summary(kind: Exclude<Kind, "THROW_DB">, interrupted = false) {
         detail: "timeout",
       })),
     observations: [],
+    breakdown: [],
     shortlist: {
       totalEligible: 0,
       totalAnalysed: results.length,

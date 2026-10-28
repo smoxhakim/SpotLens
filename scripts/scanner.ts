@@ -34,6 +34,7 @@ import {
   FAILED_PASS_RETRY_DELAYS_MS,
   classifyPass,
   classifyPassError,
+  describeBreakdown,
   nextWake,
   recordPass,
   startSchedule,
@@ -112,6 +113,10 @@ async function scan(triggeredBy: "SCHEDULE" | "MANUAL", due: Timeframe[], userId
     `   potential ${summary.potentialSetups} · waiting ${summary.waiting} · ` +
       `high risk ${summary.highRisk} · avoid ${summary.avoided}`,
   );
+  // Why, per timeframe: the gate that held each analysis back. Counts of what
+  // the engine already decided, so a pass with no potential setup says which
+  // rule refused them.
+  for (const counts of summary.breakdown) log(`   ${describeBreakdown(counts)}`);
 
   if (summary.setupsCreated || summary.stateChanges || summary.invalidations) {
     log(
