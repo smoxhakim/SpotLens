@@ -9,8 +9,11 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { fetchApi } from "@/features/market/hooks/fetch-api";
+import { AnalysisFreshnessNotice } from "@/features/scanner/components/AnalysisFreshnessNotice";
+import { useNow } from "@/features/scanner/hooks/use-now";
 import { TIMEFRAME_LABELS, type Timeframe } from "@/lib/market-data/provider";
 
+import { candidateFreshness, scanTime, shortlistFreshness } from "../freshness";
 import { STATUS_LABELS } from "../labels";
 import type { ShortlistResponse } from "../types";
 
@@ -29,6 +32,7 @@ const PREVIEW_COUNT = 3;
 
 export function OpportunitiesPreview() {
   const { status: authStatus } = useSession();
+  const now = useNow();
 
   const query = useQuery<ShortlistResponse>({
     // The identical key and URL the full page uses, so opening one warms the
@@ -65,7 +69,12 @@ export function OpportunitiesPreview() {
         </CardTitle>
       </CardHeader>
 
-      <CardContent className="pt-0">
+      <CardContent className="space-y-2 pt-0">
+        <AnalysisFreshnessNotice
+          freshness={shortlistFreshness(query.data, now)}
+          asOf={scanTime(query.data.run)}
+          subject="this scan"
+        />
         <ul className="divide-y">
           {candidates.map((candidate) => (
             <li
@@ -88,6 +97,8 @@ export function OpportunitiesPreview() {
               </span>
               <span className="w-full text-[10px] text-muted-foreground">
                 {STATUS_LABELS[candidate.analysisStatus].label}
+                {candidateFreshness(candidate, query.data.run, now).state === "STALE" &&
+                  " · out of date"}
               </span>
             </li>
           ))}

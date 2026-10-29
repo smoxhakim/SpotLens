@@ -19,6 +19,9 @@ interface RunRow {
 
 const runs: RunRow[] = [];
 
+/** Where each tracked setup stands now, by id. Open unless a test closes it. */
+const setupStatus = new Map<string, string>();
+
 const result = (runId: string) => ({
   scannerRunId: runId,
   tradingPair: { exchangeSymbol: "BTCUSDT" },
@@ -79,6 +82,10 @@ vi.mock("@/lib/db/prisma", () => ({
         return run && run.status !== "RUNNING" && run.status !== "FAILED" ? [result(run.id)] : [];
       },
     },
+    trackedSetup: {
+      findMany: async ({ where }: { where: { id: { in: string[] } } }) =>
+        where.id.in.map((id) => ({ id, status: setupStatus.get(id) ?? "SETUP_FORMING" })),
+    },
   },
 }));
 
@@ -94,6 +101,7 @@ const run = (id: string, status: RunRow["status"], startedAt: Date): RunRow => (
 
 beforeEach(() => {
   runs.length = 0;
+  setupStatus.clear();
   findFirst.mockClear();
 });
 
@@ -170,5 +178,24 @@ describe("Opportunities: an explicit run id", () => {
 
   it("an unknown id is null", async () => {
     expect(await getShortlist({ runId: "nope" })).toBeNull();
+  });
+});
+
+describe("Opportunities: setups closed after the pass that ranked them", () => {
+  it("offers a setup that is still open", async () => {
+    runs.push(run("r1", "COMPLETED", at(10, 1)));
+    const shown = await getShortlist({ runId: "r1" });
+    expect(shown?.shortlist.allEligible.map((c) => c.trackedSetupId)).toEqual(["setup-r1"]);
+  });
+
+  it("does not offer one invalidated or replaced since, and counts it", async () => {
+    // The row still says SETUP_FORMING; the setup has closed since that pass.
+    runs.push(run("r1", "COMPLETED", at(10, 1)));
+    setupStatus.set("setup-r1", "INVALIDATED");
+
+    const shown = await getShortlist({ runId: "r1" });
+
+    expect(shown?.shortlist.allEligible).toEqual([]);
+    expect(shown?.shortlist.excluded.SETUP_INVALIDATED).toBe(1);
   });
 });

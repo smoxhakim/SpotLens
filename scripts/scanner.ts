@@ -156,7 +156,9 @@ async function scan(triggeredBy: "SCHEDULE" | "MANUAL", due: Timeframe[], userId
   log(
     `   shortlist: ${shortlist.totalEligible} of ${shortlist.totalAnalysed} eligible · ` +
       `excluded ${excluded.AVOID} avoid, ${excluded.HIGH_RISK} high risk, ` +
-      `${excluded.NO_LEVELS} without levels, ${excluded.BELOW_QUALITY_BAR} below the quality bar, ` +
+      `${excluded.NO_LEVELS} without levels, ${excluded.SETUP_INVALIDATED} setup invalidated, ` +
+      `${excluded.CONFIRMATION_CONTRADICTED} contradicted, ${excluded.NOT_TRACKED} not tracked, ` +
+      `${excluded.BELOW_QUALITY_BAR} below the quality bar, ` +
       `${excluded.REWARD_NOT_MEASURED} unmeasured reward, ${excluded.FAILED} failed`,
   );
 

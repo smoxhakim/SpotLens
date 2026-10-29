@@ -11,6 +11,9 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { DecisionSection } from "@/features/decision/components/DecisionSection";
 import { fetchApi } from "@/features/market/hooks/fetch-api";
+import { AnalysisFreshnessNotice } from "@/features/scanner/components/AnalysisFreshnessNotice";
+import { useNow } from "@/features/scanner/hooks/use-now";
+import { analysisFreshness, combinedFreshness } from "@/lib/scanner/freshness";
 import {
   VERDICT_LABELS,
   type CoachContext,
@@ -64,6 +67,7 @@ export function CoachReviewView({
   setupId: string | null;
 }) {
   const { status: authStatus } = useSession();
+  const now = useNow();
   const complete = symbol !== null && timeframe !== null && runId !== null;
 
   const params = new URLSearchParams();
@@ -158,9 +162,27 @@ export function CoachReviewView({
 
   const { context, review, degraded, source } = query.data;
   const levels = context.levels;
+  // The reviewed record is the analysis as it stood when it was made — a
+  // tracked setup's snapshot or one pass's result — never a live read.
+  const freshness = combinedFreshness([
+    {
+      timeframe: context.identity.timeframe,
+      freshness: analysisFreshness({
+        timeframe: context.identity.timeframe,
+        analysedCandleOpen: context.identity.analysedAtCandle,
+        scannedAt: context.identity.recordedAt,
+        now,
+      }),
+    },
+  ]);
 
   return (
     <div className="space-y-4">
+      <AnalysisFreshnessNotice
+        freshness={freshness}
+        asOf={context.identity.recordedAt ?? context.identity.analysedAtCandle}
+        subject="the analysis this review reads"
+      />
       {/* Which reading this is, said plainly. A reader deciding how much weight
           to give a paragraph deserves to know whether a model wrote it, and a
           page that quietly swapped between the two would be the worse

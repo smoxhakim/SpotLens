@@ -169,17 +169,18 @@ describe("a pass of contradicted, never-tracked candidates", () => {
     }
   });
 
-  it("names the reason, as its own field, on this pass's results and shortlist", async () => {
+  it("names the reason on this pass's results, and keeps them off its shortlist", async () => {
     const summary = await scan();
 
     expect(summary.results.map((r) => r.untrackedReason)).toEqual([
       "CONFIRMATION_CONTRADICTED",
       "CONFIRMATION_CONTRADICTED",
     ]);
-    for (const candidate of summary.shortlist.allEligible) {
-      expect(candidate.lifecycleStatus).toBeNull();
-      expect(candidate.untrackedReason).toBe("CONFIRMATION_CONTRADICTED");
-    }
+    // Nothing to follow and confirmation contradicted: not offered for review,
+    // and counted under that reason rather than as unrecorded.
+    expect(summary.shortlist.allEligible).toEqual([]);
+    expect(summary.shortlist.excluded.CONFIRMATION_CONTRADICTED).toBe(2);
+    expect(summary.shortlist.excluded.NOT_TRACKED).toBe(0);
   });
 });
 

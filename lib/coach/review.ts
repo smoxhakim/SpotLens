@@ -177,6 +177,26 @@ function confirmationReviewFor(context: CoachContext): CoachSection {
   return { title: "Confirmation", points };
 }
 
+/**
+ * The engine's entry sentence, told as what it was when the record was made.
+ *
+ * The Coach reads a stored record — never a live market — so "price is inside
+ * the zone now" would describe a moment that has passed as the present. Only
+ * the two sentences that place price relative to the zone are restated, in the
+ * past tense, with their figures untouched; anything else is quoted as written.
+ */
+export function asRecorded(entryReason: string): string {
+  return entryReason
+    .replace(
+      /Price is inside the zone now, at (.+?)\.(?=\s|$)/,
+      "Price was inside the zone when this was analysed, at $1.",
+    )
+    .replace(
+      /Price is currently (\S+) ATR above the zone, so entering here would mean chasing the move rather than buying the level\./,
+      "Price was $1 ATR above the zone when this was analysed, so entering then would have meant chasing the move rather than buying the level.",
+    );
+}
+
 /** The levels, discussed but never altered. */
 function riskRewardReviewFor(context: CoachContext): CoachSection {
   const levels = context.levels;
@@ -190,7 +210,7 @@ function riskRewardReviewFor(context: CoachContext): CoachSection {
   }
 
   const points: string[] = [];
-  if (levels.entryReason) points.push(`Entry — ${levels.entryReason}`);
+  if (levels.entryReason) points.push(`Entry — ${asRecorded(levels.entryReason)}`);
   if (levels.stopLossReason) points.push(`Stop — ${levels.stopLossReason}`);
 
   points.push(

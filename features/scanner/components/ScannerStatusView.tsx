@@ -11,7 +11,11 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { fetchApi } from "@/features/market/hooks/fetch-api";
 import { TIMEFRAME_LABELS, type Timeframe } from "@/lib/market-data/provider";
+import { analysisFreshness, combinedFreshness } from "@/lib/scanner/freshness";
 import { cn } from "@/lib/utils";
+
+import { useNow } from "../hooks/use-now";
+import { AnalysisFreshnessNotice } from "./AnalysisFreshnessNotice";
 
 interface ScannerRun {
   id: string;
@@ -43,6 +47,7 @@ const STATUS_META: Record<ScannerRun["status"], { label: string; className: stri
 
 export function ScannerStatusView() {
   const { status: authStatus } = useSession();
+  const now = useNow();
 
   const query = useQuery<{ runs: ScannerRun[] }>({
     queryKey: ["scanner-runs"],
@@ -93,14 +98,42 @@ export function ScannerStatusView() {
     );
   }
 
+  // The newest pass that actually read the markets. A FAILED or still-running
+  // one read nothing, so it cannot be the analysis anyone is looking at.
+  const latest = runs.find((run) => run.status === "COMPLETED" || run.status === "PARTIAL");
+
   return (
-    <ul className="space-y-3">
-      {runs.map((run) => (
-        <li key={run.id}>
-          <RunCard run={run} />
-        </li>
-      ))}
-    </ul>
+    <div className="space-y-3">
+      {latest ? (
+        <AnalysisFreshnessNotice
+          freshness={combinedFreshness(
+            latest.timeframes.map((timeframe) => ({
+              timeframe,
+              freshness: analysisFreshness({
+                timeframe,
+                scannedAt: Date.parse(latest.startedAt),
+                now,
+              }),
+            })),
+          )}
+          asOf={Date.parse(latest.completedAt ?? latest.startedAt)}
+          subject="the latest successful scan"
+        />
+      ) : (
+        <AnalysisFreshnessNotice
+          freshness={{ state: "UNKNOWN", staleTimeframes: [], unknownTimeframes: [] }}
+          asOf={null}
+          subject="the latest successful scan"
+        />
+      )}
+      <ul className="space-y-3">
+        {runs.map((run) => (
+          <li key={run.id}>
+            <RunCard run={run} />
+          </li>
+        ))}
+      </ul>
+    </div>
   );
 }
 
