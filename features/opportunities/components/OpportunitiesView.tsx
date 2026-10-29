@@ -10,9 +10,12 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { fetchApi } from "@/features/market/hooks/fetch-api";
+import { AnalysisFreshnessNotice } from "@/features/scanner/components/AnalysisFreshnessNotice";
+import { useNow } from "@/features/scanner/hooks/use-now";
 import { TIMEFRAME_LABELS, type Timeframe } from "@/lib/market-data/provider";
 import { cn } from "@/lib/utils";
 
+import { candidateFreshness, scanTime, shortlistFreshness } from "../freshness";
 import {
   DEFAULT_VIEW,
   VIEW_LABELS,
@@ -39,6 +42,8 @@ export function OpportunitiesView({ runId }: { runId?: string | null }) {
   const { status: authStatus } = useSession();
   const [view, setView] = useState<ViewSize>(DEFAULT_VIEW);
   const [timeframe, setTimeframe] = useState<TimeframeFilter>("all");
+  // Re-judged as candles close, on a page that stays open.
+  const now = useNow();
 
   const query = useQuery<ShortlistResponse>({
     // `size=ALL` once, sliced locally, rather than a request per view: four
@@ -110,6 +115,11 @@ export function OpportunitiesView({ runId }: { runId?: string | null }) {
   return (
     <div className="space-y-4">
       <ScanContext data={data} pinned={Boolean(runId)} />
+      <AnalysisFreshnessNotice
+        freshness={shortlistFreshness(data, now)}
+        asOf={scanTime(data.run)}
+        subject="this scan"
+      />
 
       {data.totalEligible === 0 ? (
         <NothingEligible data={data} />
@@ -150,7 +160,11 @@ export function OpportunitiesView({ runId }: { runId?: string | null }) {
             <ul className="space-y-3">
               {visible.map((candidate) => (
                 <li key={`${candidate.symbol}:${candidate.timeframe}`}>
-                  <OpportunityCard candidate={candidate} runId={data.run.id} />
+                  <OpportunityCard
+                    candidate={candidate}
+                    runId={data.run.id}
+                    freshness={candidateFreshness(candidate, data.run, now)}
+                  />
                 </li>
               ))}
             </ul>
@@ -203,6 +217,8 @@ function ScanContext({ data, pinned }: { data: ShortlistResponse; pinned: boolea
           </span>
         )}
 
+        <ClosedOrUntracked excluded={data.excluded} />
+
         {pinned && (
           // A pinned pass is not necessarily the newest one, and a reader who
           // followed a link here deserves to be told that rather than left to
@@ -216,6 +232,33 @@ function ScanContext({ data, pinned }: { data: ShortlistResponse; pinned: boolea
         )}
       </CardContent>
     </Card>
+  );
+}
+
+/**
+ * What was left off the list for having no open setup behind it, and why.
+ *
+ * Said rather than silently dropped: a candidate the reader saw on an earlier
+ * visit should not just vanish. Contradiction and an unrecorded reason are named
+ * separately, because only one of them is a fact.
+ */
+function ClosedOrUntracked({ excluded }: { excluded: ShortlistResponse["excluded"] }) {
+  const invalidated = excluded.SETUP_INVALIDATED ?? 0;
+  const contradicted = excluded.CONFIRMATION_CONTRADICTED ?? 0;
+  const untracked = excluded.NOT_TRACKED ?? 0;
+  if (invalidated + contradicted + untracked === 0) return null;
+
+  const parts = [
+    invalidated > 0 && `${invalidated} whose tracked setup has been invalidated or replaced`,
+    contradicted > 0 && `${contradicted} whose confirmation was contradicted`,
+    untracked > 0 && `${untracked} with no tracked setup and no recorded reason`,
+  ].filter(Boolean);
+
+  return (
+    <span className="w-full">
+      Not listed: {parts.join(", ")}. A closed or untracked setup has nothing left to follow, so it
+      is not offered for review.
+    </span>
   );
 }
 

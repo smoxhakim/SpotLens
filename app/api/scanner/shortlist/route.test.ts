@@ -6,9 +6,10 @@ import { describe, expect, it, vi } from "vitest";
  * `getShortlist` and the real `buildShortlist` — with persistence stubbed.
  *
  * Stored rows carry no untracked reason: `ScannerResult` has no column for it.
- * What these protect is that the API says so ("not recorded") rather than
- * guessing, says "no levels" only when the stored row proves it, and never
- * reads a stored INVALIDATED on an untracked row as confirmation contradiction.
+ * What these protect is that the API keeps such a candidate off the list as
+ * not tracked rather than guessing it was contradicted, says "no levels" only
+ * when the stored row proves it, and never reads a stored INVALIDATED on an
+ * untracked row as confirmation contradiction or as a closed setup.
  */
 
 function row(symbol: string, overrides: Record<string, unknown> = {}) {
@@ -61,6 +62,10 @@ vi.mock("@/lib/db/prisma", () => ({
             },
     },
     scannerResult: { findMany: async () => ROWS },
+    // Where each referenced setup stands now: BTC's is still open.
+    trackedSetup: {
+      findMany: async () => [{ id: "setup-btc", status: "SETUP_FORMING" }],
+    },
   },
 }));
 
@@ -94,18 +99,19 @@ describe("GET /api/scanner/shortlist — untracked candidates over stored rows",
     expect(btc.untrackedReason).toBeNull();
   });
 
-  it("says 'not recorded' for an untracked candidate with levels, rather than guessing", async () => {
-    const { candidates } = await shortlist();
-    const near = candidates.find((c) => c.symbol === "NEARUSDT")!;
-    expect(near.untrackedReason).toBe("NOT_RECORDED");
-    expect(near.reasons[1]).toBe("Not tracked, and the reason was not recorded.");
+  it("keeps an untracked candidate with levels off the list, as not tracked rather than guessed", async () => {
+    const { candidates, excluded } = await shortlist();
+    expect(candidates.map((c) => c.symbol)).not.toContain("NEARUSDT");
+    // Counted as an unrecorded reason, never as contradiction.
+    expect(excluded.NOT_TRACKED).toBe(2);
+    expect(excluded.CONFIRMATION_CONTRADICTED).toBe(0);
   });
 
-  it("never reads a stored INVALIDATED with no setup id as confirmation contradiction", async () => {
-    const { candidates } = await shortlist();
-    const arb = candidates.find((c) => c.symbol === "ARBUSDT")!;
-    expect(arb.untrackedReason).toBe("NOT_RECORDED");
-    expect(arb.reasons.join(" ")).not.toMatch(/contradicted/i);
+  it("never reads a stored INVALIDATED with no setup id as contradiction or a closed setup", async () => {
+    const { candidates, excluded } = await shortlist();
+    expect(candidates.map((c) => c.symbol)).not.toContain("ARBUSDT");
+    expect(excluded.SETUP_INVALIDATED).toBe(0);
+    expect(excluded.CONFIRMATION_CONTRADICTED).toBe(0);
   });
 
   it("counts a WAIT without levels as NO_LEVELS, not FAILED, and keeps it off the list", async () => {
@@ -115,8 +121,8 @@ describe("GET /api/scanner/shortlist — untracked candidates over stored rows",
     expect(candidates.map((c) => c.symbol)).not.toContain("DOTUSDT");
   });
 
-  it("ranks by the engine's facts alone — the reason moves nothing", async () => {
+  it("lists only candidates with an open tracked setup, ranked from one", async () => {
     const { candidates } = await shortlist();
-    expect(candidates.map((c) => c.symbol)).toEqual(["BTCUSDT", "NEARUSDT", "ARBUSDT"]);
+    expect(candidates.map((c) => c.symbol)).toEqual(["BTCUSDT"]);
   });
 });

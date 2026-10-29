@@ -807,6 +807,20 @@ export async function getShortlist(input: { runId?: string; limit?: number; now?
     include: { tradingPair: { select: { exchangeSymbol: true } } },
   });
 
+  // Where each referenced setup stands now. A pass ranks what it saw; a setup
+  // invalidated or replaced since must not be offered on the strength of it.
+  const setupIds = rows.flatMap((row) => (row.trackedSetupId ? [row.trackedSetupId] : []));
+  const statusNow = new Map<string, string>(
+    setupIds.length === 0
+      ? []
+      : (
+          await prisma.trackedSetup.findMany({
+            where: { id: { in: setupIds } },
+            select: { id: true, status: true },
+          })
+        ).map((setup) => [setup.id, setup.status]),
+  );
+
   const shortlist = buildShortlist(
     rows.map((row) => ({
       symbol: row.tradingPair.exchangeSymbol,
@@ -818,6 +832,7 @@ export async function getShortlist(input: { runId?: string; limit?: number; now?
       ok: row.status === "OK",
       lifecycleStatus: row.lifecycleStatus,
       trackedSetupId: row.trackedSetupId,
+      setupStatusNow: row.trackedSetupId ? (statusNow.get(row.trackedSetupId) ?? null) : null,
       analysedAtCandle: row.analysedAtCandle === null ? null : Number(row.analysedAtCandle),
       trend: row.trend,
       mtfAgreement: row.mtfAgreement,

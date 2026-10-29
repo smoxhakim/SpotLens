@@ -121,6 +121,9 @@ describe("eligibility", () => {
       AVOID: 1,
       HIGH_RISK: 1,
       NO_LEVELS: 1,
+      SETUP_INVALIDATED: 0,
+      CONFIRMATION_CONTRADICTED: 0,
+      NOT_TRACKED: 0,
       BELOW_QUALITY_BAR: 1,
       REWARD_NOT_MEASURED: 1,
     });
@@ -150,13 +153,11 @@ describe("untracked candidates", () => {
   });
 
   it("gives the reason the pass recorded, as its own field", () => {
-    const [candidate] = buildShortlist([contradicted]).allEligible;
-    expect(candidate.trackedSetupId).toBeNull();
-    expect(candidate.untrackedReason).toBe("CONFIRMATION_CONTRADICTED");
+    expect(untrackedReasonFor(contradicted)).toBe("CONFIRMATION_CONTRADICTED");
     // Never dressed up as a lifecycle state: nothing was invalidated.
-    expect(candidate.lifecycleStatus).toBeNull();
-    // Second, so the card shows it before the disclosure.
-    expect(candidate.reasons[1]).toMatch(/Not tracked: confirmation was contradicted/);
+    expect(contradicted.lifecycleStatus).toBeNull();
+    // Second, so any surface that shows it puts it before the disclosure.
+    expect(reasonsFor(contradicted)[1]).toMatch(/Not tracked: confirmation was contradicted/);
   });
 
   it("says there were no levels only when the stored facts prove it", () => {
@@ -186,20 +187,90 @@ describe("untracked candidates", () => {
   });
 });
 
-describe("shortlist policy for untracked candidates — informational, not excluded", () => {
-  // Documented in `exclusionFor` and TODO.md: the reason is not stored, so an
-  // exclusion would make the scanner's list and Opportunities disagree.
-  const reasons = ["CONFIRMATION_CONTRADICTED", "NOT_RECORDED", null] as const;
+describe("a candidate needs an open tracked setup behind it", () => {
+  // Phase B readiness: INJ/USDT 4h ranked fifth on a real pass whose own
+  // lifecycle had just invalidated its setup, and EGLD/USDT 1h second with
+  // confirmation contradicted and no setup at all.
 
-  it("admits or excludes exactly as it would with a setup", () => {
-    for (const untrackedReason of reasons) {
-      const r = result({ trackedSetupId: null, untrackedReason });
-      expect(exclusionFor(r), String(untrackedReason)).toBe(exclusionFor(result()));
+  it("excludes a candidate whose tracked setup this pass invalidated", () => {
+    const invalidated = result({ symbol: "INJUSDT", timeframe: "H4", score: 74 });
+    expect(exclusionFor({ ...invalidated, lifecycleStatus: "INVALIDATED" })).toBe(
+      "SETUP_INVALIDATED",
+    );
+  });
+
+  it("excludes one whose setup has been invalidated or replaced since the pass", () => {
+    // The row still says nothing moved; the setup itself has closed since.
+    expect(exclusionFor(result({ setupStatusNow: "INVALIDATED" }))).toBe("SETUP_INVALIDATED");
+    expect(exclusionFor(result({ setupStatusNow: "WAITING_CONFIRMATION" }))).toBeNull();
+  });
+
+  it("excludes contradicted confirmation as its own reason", () => {
+    const r = result({ trackedSetupId: null, untrackedReason: "CONFIRMATION_CONTRADICTED" });
+    expect(exclusionFor(r)).toBe("CONFIRMATION_CONTRADICTED");
+  });
+
+  it("tells an unrecorded reason apart from contradiction, and never guesses", () => {
+    // A stored row: no setup, no reason. Not called contradicted.
+    expect(exclusionFor(result({ trackedSetupId: null }))).toBe("NOT_TRACKED");
+    expect(exclusionFor(result({ trackedSetupId: null, untrackedReason: "NOT_RECORDED" }))).toBe(
+      "NOT_TRACKED",
+    );
+    // Nor is a legacy INVALIDATED written on an untracked row read as either.
+    expect(exclusionFor(result({ trackedSetupId: null, lifecycleStatus: "INVALIDATED" }))).toBe(
+      "NOT_TRACKED",
+    );
+  });
+
+  it("keeps a tracked setup still waiting for evidence: missing confirmation is not a reason", () => {
+    for (const lifecycleStatus of [null, "SETUP_FORMING", "WAITING_CONFIRMATION"]) {
+      expect(exclusionFor(result({ lifecycleStatus })), String(lifecycleStatus)).toBeNull();
     }
   });
 
-  it("ranks an untracked candidate by the engine's facts alone", () => {
-    const ranked = buildShortlist([
+  it("leaves a valid candidate eligible, with the explanations it always had", () => {
+    const valid = result({ lifecycleStatus: "CONFIRMATION_DETECTED" });
+    const [candidate] = buildShortlist([valid]).allEligible;
+    expect(candidate.reasons).toEqual(reasonsFor(valid));
+    expect(candidate.reasons).toContain(
+      "Confirmation evidence appeared at this level on this pass.",
+    );
+  });
+
+  it("re-ranks and re-counts after the exclusions, with no gaps in the order", () => {
+    const shortlist = buildShortlist([
+      result({ symbol: "AAAUSDT", score: 95, lifecycleStatus: "INVALIDATED" }),
+      result({ symbol: "BBBUSDT", score: 90 }),
+      result({
+        symbol: "CCCUSDT",
+        score: 88,
+        trackedSetupId: null,
+        untrackedReason: "CONFIRMATION_CONTRADICTED",
+      }),
+      result({ symbol: "DDDUSDT", score: 85, trackedSetupId: null }),
+      result({ symbol: "EEEUSDT", score: 80, setupStatusNow: "INVALIDATED" }),
+      result({ symbol: "FFFUSDT", score: 75 }),
+    ]);
+
+    expect(shortlist.allEligible.map((c) => [c.rank, c.symbol])).toEqual([
+      [1, "BBBUSDT"],
+      [2, "FFFUSDT"],
+    ]);
+    expect(shortlist.totalEligible).toBe(2);
+    expect(shortlist.excluded).toMatchObject({
+      SETUP_INVALIDATED: 2,
+      CONFIRMATION_CONTRADICTED: 1,
+      NOT_TRACKED: 1,
+    });
+    const excludedTotal = Object.values(shortlist.excluded).reduce((a, b) => a + b, 0);
+    expect(shortlist.totalEligible + excludedTotal).toBe(shortlist.totalAnalysed);
+    expect(shortlist.top5).toEqual(shortlist.allEligible);
+  });
+
+  it("gives the scanner's in-memory list and the stored rows the same order", () => {
+    // The pass knows the contradiction; the stored row only knows there is no
+    // setup. Both drop it, so one pass has one order.
+    const inMemory = buildShortlist([
       result({ symbol: "AAAUSDT", score: 80 }),
       result({
         symbol: "BBBUSDT",
@@ -207,14 +278,14 @@ describe("shortlist policy for untracked candidates — informational, not exclu
         trackedSetupId: null,
         untrackedReason: "CONFIRMATION_CONTRADICTED",
       }),
-      result({ symbol: "CCCUSDT", score: 85, trackedSetupId: null }),
-    ]).allEligible;
-    expect(ranked.map((c) => c.symbol)).toEqual(["BBBUSDT", "CCCUSDT", "AAAUSDT"]);
-    expect(ranked.map((c) => c.untrackedReason)).toEqual([
-      "CONFIRMATION_CONTRADICTED",
-      "NOT_RECORDED",
-      null,
     ]);
+    const stored = buildShortlist([
+      result({ symbol: "AAAUSDT", score: 80 }),
+      result({ symbol: "BBBUSDT", score: 90, trackedSetupId: null }),
+    ]);
+    expect(stored.allEligible.map((c) => c.symbol)).toEqual(
+      inMemory.allEligible.map((c) => c.symbol),
+    );
   });
 
   it("still excludes a no-levels WAIT, by its own exclusion", () => {

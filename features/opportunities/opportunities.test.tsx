@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 
-import { buildShortlist, type ShortlistCandidate } from "@/lib/scanner";
+import { reasonsFor, type ShortlistCandidate } from "@/lib/scanner";
 
 import { OpportunityCard } from "./components/OpportunityCard";
 import { qualityLabel, riskRewardLabel } from "./labels";
@@ -422,10 +422,15 @@ describe("the candidate card", () => {
   });
 
   it("shows why an untracked candidate has no setup without expanding the card", () => {
-    // Built by the real shortlist, so the order of the reasons is the order the
-    // page receives — the card renders them as given and shows two.
-    const [untracked] = buildShortlist([
-      {
+    // The shortlist no longer lists one (ranking version 2), but the card still
+    // renders what it is given — a response from the older version included. Its
+    // reasons come from the real `reasonsFor`, so their order is the real order.
+    const untracked = candidate({
+      symbol: "NEARUSDT",
+      timeframe: "H4",
+      trackedSetupId: null,
+      untrackedReason: "CONFIRMATION_CONTRADICTED",
+      reasons: reasonsFor({
         symbol: "NEARUSDT",
         timeframe: "H4",
         analysisStatus: "WAIT_FOR_CONFIRMATION",
@@ -440,8 +445,8 @@ describe("the candidate card", () => {
         trend: "BULLISH",
         mtfAgreement: null,
         regimeDirection: null,
-      },
-    ]).allEligible;
+      }),
+    });
     render(<OpportunityCard candidate={untracked} />);
 
     const visible = screen.getAllByRole("listitem").map((li) => li.textContent ?? "");

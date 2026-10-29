@@ -39,6 +39,13 @@ export interface ShortlistInput extends RankableResult {
   /** The setup this result belongs to, so a candidate opens its own analysis. */
   trackedSetupId: string | null;
   /**
+   * The tracked setup's status as it stands now, when the reader looked it up.
+   * Catches a setup closed after this pass — invalidated or replaced by a later
+   * one. Absent on the scanner's own in-memory results, where `lifecycleStatus`
+   * is current by construction.
+   */
+  setupStatusNow?: string | null;
+  /**
    * Why there is no tracked setup, when the pass that produced this result
    * knew. Present on the scanner's own in-memory results; absent on stored
    * rows, because `ScannerResult` has no column for it (see `TODO.md`).
@@ -59,7 +66,18 @@ export interface ShortlistInput extends RankableResult {
  * eligible" is only meaningful next to what happened to the other eighty-two.
  */
 export type ExclusionReason =
-  "FAILED" | "AVOID" | "HIGH_RISK" | "NO_LEVELS" | "BELOW_QUALITY_BAR" | "REWARD_NOT_MEASURED";
+  | "FAILED"
+  | "AVOID"
+  | "HIGH_RISK"
+  | "NO_LEVELS"
+  /** Its tracked setup is closed: invalidated on this pass, or invalidated or replaced since. */
+  | "SETUP_INVALIDATED"
+  /** No tracked setup, because confirmation was contradicted at this level. */
+  | "CONFIRMATION_CONTRADICTED"
+  /** No tracked setup, and the reason was not recorded. Never guessed to be contradiction. */
+  | "NOT_TRACKED"
+  | "BELOW_QUALITY_BAR"
+  | "REWARD_NOT_MEASURED";
 
 /**
  * Why a candidate has no tracked setup behind it — never inferred.
@@ -70,8 +88,9 @@ export type ExclusionReason =
  * is NOT_RECORDED — most such rows were contradicted at an untracked level,
  * but "most" is a guess, and a lifecycle step that could not run looks the same.
  *
- * Context for the reader only. It is not a rank input and not an exclusion: see
- * `exclusionFor` for why a contradicted candidate stays on the list.
+ * Not a rank input. It is an exclusion, though — see `exclusionFor` — and the
+ * reason it gives is kept apart: contradicted is a fact the pass recorded,
+ * NOT_RECORDED is only the absence of one.
  */
 export function untrackedReasonFor(
   result: Pick<ShortlistInput, "trackedSetupId" | "untrackedReason" | "riskReward">,
@@ -128,7 +147,8 @@ export interface Shortlist {
   rankingVersion: number;
 }
 
-export const SHORTLIST_RANKING_VERSION = 1;
+/** 2: a closed or untracked setup is excluded rather than ranked and labelled. */
+export const SHORTLIST_RANKING_VERSION = 2;
 
 /**
  * The quality bar for a setup that has not been promoted.
@@ -157,14 +177,23 @@ const MINIMUM_WAITING_GRADE: SetupGrade[] = ["STRONG", "MODERATE"];
  *    tool warned about outranking a structurally healthier candidate.
  *  - AVOID is excluded, and carries no levels to review in any case.
  *
- * A candidate with no tracked setup is ranked exactly like one with a setup,
- * and labelled (`untrackedReason`) instead. That includes one whose
- * confirmation was contradicted at an untracked level — a WAIT the lifecycle
- * would invalidate if it were tracking it. Excluding it is the better policy,
- * but not yet a sound one: the reason is not stored, so the scanner's own list
- * would drop it while Opportunities, built from stored rows, kept it — two
- * orders for one pass. Decided deliberately; see `TODO.md` for the column that
- * would let this become an exclusion.
+ * A candidate must also have an open tracked setup behind it:
+ *
+ *  - SETUP_INVALIDATED when this pass invalidated its setup (for a result with
+ *    levels, the lifecycle does that only on contradicted confirmation), or
+ *    when the setup has been invalidated or replaced since. Ranking a closed
+ *    setup would offer a level its own lifecycle has already given up on.
+ *  - CONFIRMATION_CONTRADICTED when the pass recorded that no setup was opened
+ *    because confirmation was contradicted.
+ *  - NOT_TRACKED when there is no setup and no recorded reason — the case for
+ *    every stored row, since the reason has no column. Kept apart from
+ *    contradiction rather than guessed to be it. Both lists drop the same rows
+ *    anyway: with the lifecycle recording, an untracked result with levels is
+ *    exactly a contradicted one, so the scanner's list and Opportunities keep
+ *    one order for one pass.
+ *
+ * Missing confirmation is not in this list: a tracked setup still waiting for
+ * evidence is exactly what the WAIT rule above admits.
  *
  * Returns the reason for exclusion, or null when the result is eligible, so the
  * caller can count both without asking twice.
@@ -193,6 +222,17 @@ export function exclusionFor(result: ShortlistInput): ExclusionReason | null {
     if (result.riskReward === null || result.riskRewardIsSynthetic !== false) {
       return "REWARD_NOT_MEASURED";
     }
+  }
+
+  // Last, so these count exactly the candidates that would otherwise have been
+  // listed. Untracked first, so a stored INVALIDATED with no setup id — an
+  // overload an earlier draft wrote — is never read as a closed setup, or as
+  // contradiction.
+  const untracked = untrackedReasonFor(result);
+  if (untracked === "CONFIRMATION_CONTRADICTED") return "CONFIRMATION_CONTRADICTED";
+  if (untracked !== null) return "NOT_TRACKED";
+  if (result.lifecycleStatus === "INVALIDATED" || result.setupStatusNow === "INVALIDATED") {
+    return "SETUP_INVALIDATED";
   }
 
   return null;
@@ -295,6 +335,9 @@ export function buildShortlist(results: readonly ShortlistInput[]): Shortlist {
     AVOID: 0,
     HIGH_RISK: 0,
     NO_LEVELS: 0,
+    SETUP_INVALIDATED: 0,
+    CONFIRMATION_CONTRADICTED: 0,
+    NOT_TRACKED: 0,
     BELOW_QUALITY_BAR: 0,
     REWARD_NOT_MEASURED: 0,
   };

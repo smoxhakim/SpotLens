@@ -67,6 +67,12 @@ export {
 } from "./shortlist";
 export { SUCCESSFUL_RUN_STATUSES, successfulPassWhere, type SuccessfulRunStatus } from "./runs";
 export {
+  analysisFreshness,
+  combinedFreshness,
+  type AnalysisFreshness,
+  type FreshnessState,
+} from "./freshness";
+export {
   breakdownOf,
   describeBreakdown,
   type GateCountInput,

@@ -48,14 +48,18 @@ No migration.
       `ScannerResult.untrackedReason` (`CONFIRMATION_CONTRADICTED`,
       `NO_LEVELS`, `NOT_RECORDED`), written by `finishRun`, read by
       `getShortlist` and the daily summary. Needs `npm run prisma:deploy`
-      before the scanner runs with it. Until then stored rows say "reason not
-      recorded" unless they have no levels at all.
-- [ ] **Then exclude contradicted candidates from the shortlist.** A WAIT whose
-      confirmation was contradicted at an untracked level is one the lifecycle
-      would invalidate if it were tracking it, and it cannot be followed or
-      alerted on. Today it ranks and is labelled; excluding it before the
-      reason is stored would give the scanner's list and Opportunities two
-      different orders for one pass.
+      before the scanner runs with it. Still useful, but no longer needed for
+      the shortlist: it would let stored rows (Opportunities, the daily summary,
+      research) say a candidate was _contradicted_ rather than that its reason
+      was _not recorded_. Exclusion already happens without it — see below.
+- [x] **Then exclude contradicted candidates from the shortlist.** Done
+      (Phase B readiness, ranking version 2), without the column: `exclusionFor`
+      requires an open tracked setup. No setup is CONFIRMATION_CONTRADICTED when
+      the pass recorded it and NOT_TRACKED otherwise; a setup invalidated this
+      pass, or invalidated or replaced since (`getShortlist` reads its current
+      status), is SETUP_INVALIDATED. The scanner's list and Opportunities keep
+      one order because, with the lifecycle recording, an untracked result with
+      levels is exactly a contradicted one.
 - [ ] Stored setups with a non-ascending ladder are never rewritten; the setups,
       Coach and decision pages flag them, and the Coach prompt marks them
       "Levels check: FAILED". Replay and Telegram show TP1–TP2 only and carry no

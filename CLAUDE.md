@@ -71,7 +71,8 @@ make that unnecessary most of the time.
   into CONFIRMATION_CONTRADICTED, NO_LEVELS or NOT_RECORDED. It is held in
   memory only — `ScannerResult` has no column for it (proposal in `TODO.md`) —
   so a stored row says NOT_RECORDED unless its null reward proves NO_LEVELS. It
-  labels a shortlist candidate and never ranks or excludes one.
+  is never a rank input, but it is an exclusion: a candidate with no tracked
+  setup has nothing to follow or alert on (see the shortlist rule below).
 - **A stored setup's numbers never change.** `TrackedSetup`'s snapshot columns
   are written once. Later analysis moving the entry or the score is the market,
   not a correction — rewriting them would destroy the record of what was
@@ -121,7 +122,20 @@ make that unnecessary most of the time.
   at MODERATE or better with a **measured** reward, and refuses HIGH_RISK and
   AVOID entirely. A WAIT the engine reached before it could build levels has no
   score and is excluded as NO_LEVELS — not FAILED, which is reserved for a
-  market the engine never read. There is exactly **one canonical order** — rank, then spread
+  market the engine never read. A candidate must also have an **open tracked
+  setup** behind it (ranking version 2). With no setup it is
+  CONFIRMATION_CONTRADICTED when the pass recorded that, otherwise NOT_TRACKED —
+  never guessed to be contradiction; a setup invalidated this pass
+  (`lifecycleStatus`) or invalidated or replaced since (`setupStatusNow`, which
+  `getShortlist` reads from the setup itself) is SETUP_INVALIDATED. Missing
+  confirmation is not an exclusion: a tracked setup still waiting for evidence
+  stays. These checks run after the quality and reward gates, so their counts
+  are exactly the candidates that would otherwise have been listed, and the
+  scanner's in-memory list and Opportunities keep one order — with the lifecycle
+  recording, an untracked result with levels is exactly a contradicted one. The
+  buckets: FAILED, AVOID, HIGH_RISK, NO_LEVELS, BELOW_QUALITY_BAR,
+  REWARD_NOT_MEASURED, CONFIRMATION_CONTRADICTED, NOT_TRACKED, SETUP_INVALIDATED,
+  each counted and named on the page. There is exactly **one canonical order** — rank, then spread
   across markets — and `top5`/`top10`/`top15` are prefixes of it, so a candidate
   cannot be fifth on one view and eleventh on another. Every eligible result
   stays in `allEligible`, every result stays in the database, and a candidate
@@ -136,7 +150,15 @@ make that unnecessary most of the time.
   it. The timeframe filter removes entries and never reorders them, and each
   card shows its canonical rank so a filtered list still says where its entries
   sit in the whole. There is no comparator anywhere in the UI: it imports label
-  constants and types from `lib/`, and nothing that computes. `/coach` is the
+  constants and types from `lib/`, and one calculation that ranks and filters
+  nothing — `analysisFreshness` (`lib/scanner/freshness.ts`). A shown analysis
+  is out of date once a newer candle of its timeframe has closed and the settle
+  delay has passed — the moment `isCatchUpDue` treats a pass as due — judged
+  from the analysed candle (or the pass's start) against a clock re-read every
+  30s, so an open page goes stale by itself; unknown, never fresh, when it
+  cannot be judged. The same notice is on the Dashboard, Scanner and Coach pages.
+  It uses `DEFAULT_CLOSE_DELAY_MS`; a customised `SCANNER_CLOSE_DELAY_MS` is not
+  passed to the UI. `/coach` is the
   handoff destination and a placeholder until Phase N — it carries references
   (symbol, timeframe, setup id), never a copy of the analysis, calls no model,
   and says plainly that no review has happened.
