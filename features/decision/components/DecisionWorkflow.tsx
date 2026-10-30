@@ -11,13 +11,22 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { fetchApi } from "@/features/market/hooks/fetch-api";
+import { AnalysisFreshnessNotice } from "@/features/scanner/components/AnalysisFreshnessNotice";
+import { useNow } from "@/features/scanner/hooks/use-now";
 import type { CoachContext } from "@/lib/coach";
 import { ANALYSIS_DISCLAIMER } from "@/lib/constants/disclaimers";
-import type { JournalDecision, JournalSkipReason } from "@/lib/journal";
+import type { DecisionSetup, JournalDecision, JournalSkipReason } from "@/lib/journal";
 import { TIMEFRAME_LABELS, type Timeframe } from "@/lib/market-data/provider";
 import { riskCalculatorParams, type RiskPrefill } from "@/lib/risk";
-import { confirmationCaveat, lifecycleLabel, storedTargetsWarning } from "@/lib/setups/labels";
+import type { AnalysisRead } from "@/lib/scanner/freshness";
+import {
+  CLOSED_SETUP_NOTE,
+  confirmationCaveat,
+  lifecycleLabel,
+  storedTargetsWarning,
+} from "@/lib/setups/labels";
 
+import { decisionStanding } from "../standing";
 import { DecisionPanel, type DecisionTarget } from "./DecisionPanel";
 
 /**
@@ -34,6 +43,10 @@ import { DecisionPanel, type DecisionTarget } from "./DecisionPanel";
 
 interface DecisionContextResponse {
   context: CoachContext;
+  /** When a pass last found the tracked setup still open. Null if none has. */
+  lastScan: AnalysisRead | null;
+  /** The setup as the journal's closed-setup rule reads it. Null when untracked. */
+  setup: DecisionSetup | null;
   prefill: RiskPrefill | null;
   journal: {
     id: string;
@@ -57,6 +70,7 @@ export function DecisionWorkflow({
   setupId: string | null;
 }) {
   const { status: authStatus } = useSession();
+  const now = useNow();
   const complete = symbol !== null && timeframe !== null && runId !== null;
 
   const params = new URLSearchParams();
@@ -138,8 +152,11 @@ export function DecisionWorkflow({
     );
   }
 
-  const { context, prefill, journal } = query.data;
+  const { context, prefill, journal, lastScan, setup } = query.data;
   const levels = context.levels;
+  // Closed, or how fresh the newest read is — said at the top and again beside
+  // the choices, never instead of the record.
+  const standing = decisionStanding(context, lastScan, now, setup);
   // A legacy stored ladder that fails the long-only order check is shown as
   // recorded and flagged — never rewritten, never presented as a valid plan.
   const levelsWarning = levels ? storedTargetsWarning(levels) : null;
@@ -180,6 +197,20 @@ export function DecisionWorkflow({
       {/* --- what SpotLens recorded ---------------------------------------- */}
       <Card>
         <CardContent className="space-y-3 p-4">
+          {standing.closed ? (
+            <Alert variant="warning" data-standing="closed">
+              <AlertDescription className="text-[11px] leading-relaxed">
+                <span className="font-medium">Closed setup.</span> {CLOSED_SETUP_NOTE}
+              </AlertDescription>
+            </Alert>
+          ) : (
+            <AnalysisFreshnessNotice
+              freshness={standing.freshness}
+              asOf={standing.asOf}
+              subject={standing.subject}
+            />
+          )}
+
           <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
             <h2 className="text-sm font-semibold">
               {context.identity.symbol} <span className="text-muted-foreground">· {tfLabel}</span>
@@ -252,6 +283,20 @@ export function DecisionWorkflow({
             )}
           </dl>
 
+          {levels && context.identity.setupId && (
+            <p className="text-[10px] leading-relaxed text-muted-foreground">
+              These levels are as recorded when the setup was first seen
+              {context.identity.recordedAt
+                ? `, ${new Date(context.identity.recordedAt).toLocaleString()}`
+                : ""}
+              , and never change.
+              {!standing.closed &&
+                (lastScan?.recordedAt
+                  ? ` A scan last found it still open ${new Date(lastScan.recordedAt).toLocaleString()}.`
+                  : " No scan has found it open since.")}
+            </p>
+          )}
+
           {levelsWarning && (
             <Alert variant="warning">
               <AlertDescription className="text-[11px] leading-relaxed">
@@ -318,7 +363,7 @@ export function DecisionWorkflow({
         </CardContent>
       </Card>
 
-      <DecisionPanel target={target} existing={journal} />
+      <DecisionPanel target={target} existing={journal} standing={standing} />
 
       <p className="text-[11px] leading-relaxed text-muted-foreground">
         {ANALYSIS_DISCLAIMER} Recording a decision writes it down; it places nothing and sends

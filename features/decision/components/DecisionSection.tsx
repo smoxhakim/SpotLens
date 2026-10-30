@@ -8,10 +8,13 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { fetchApi } from "@/features/market/hooks/fetch-api";
+import { useNow } from "@/features/scanner/hooks/use-now";
 import type { CoachContext } from "@/lib/coach";
-import type { JournalDecision, JournalSkipReason } from "@/lib/journal";
+import type { DecisionSetup, JournalDecision, JournalSkipReason } from "@/lib/journal";
 import { riskCalculatorParams, type RiskPrefill } from "@/lib/risk";
+import type { AnalysisRead } from "@/lib/scanner/freshness";
 
+import { decisionStanding } from "../standing";
 import { DecisionPanel, type CoachReadingRef } from "./DecisionPanel";
 
 /**
@@ -31,6 +34,9 @@ import { DecisionPanel, type CoachReadingRef } from "./DecisionPanel";
 
 interface DecisionContextResponse {
   context: CoachContext;
+  lastScan: AnalysisRead | null;
+  /** The setup as the journal's closed-setup rule reads it. Null when untracked. */
+  setup: DecisionSetup | null;
   prefill: RiskPrefill | null;
   journal: {
     id: string;
@@ -55,6 +61,7 @@ export function DecisionSection({
   coach?: CoachReadingRef | null;
 }) {
   const { symbol, timeframe, runId, setupId } = context.identity;
+  const now = useNow();
 
   const params = new URLSearchParams({ symbol, tf: timeframe, runId });
   if (setupId) params.set("setupId", setupId);
@@ -85,7 +92,8 @@ export function DecisionSection({
     );
   }
 
-  const { prefill, journal } = query.data;
+  const { prefill, journal, lastScan, setup } = query.data;
+  const standing = decisionStanding(query.data.context, lastScan, now, setup);
 
   const riskHref = prefill
     ? `/risk-calculator?${riskCalculatorParams(prefill, {
@@ -125,6 +133,7 @@ export function DecisionSection({
         target={{ symbol, timeframe, runId, setupId }}
         existing={journal}
         coach={coach}
+        standing={standing}
       />
     </div>
   );

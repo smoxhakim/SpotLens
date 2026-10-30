@@ -91,7 +91,20 @@ export type JournalErrorCode =
   | "INVALID_COSTS"
   | "STOP_NOT_BELOW_ENTRY"
   | "CLOSED_REQUIRES_EXIT"
-  | "INVALID_TIMESTAMPS";
+  | "INVALID_TIMESTAMPS"
+  /** Watching a setup that has closed. */
+  | "SETUP_CLOSED"
+  /** Taking a closed setup without stating it was entered while open. */
+  | "LATE_ENTRY_REQUIRED"
+  /** A late entry that cannot be accepted as stated. */
+  | "LATE_ENTRY_INVALID";
+
+/** The codes for a decision a closed setup refuses — a conflict with its state, not a bad request. */
+export const CLOSED_SETUP_ERROR_CODES: readonly JournalErrorCode[] = [
+  "SETUP_CLOSED",
+  "LATE_ENTRY_REQUIRED",
+  "LATE_ENTRY_INVALID",
+];
 
 export interface JournalError {
   code: JournalErrorCode;

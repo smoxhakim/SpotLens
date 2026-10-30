@@ -51,6 +51,10 @@ export interface JournalEntrySummary {
     score: number;
     scoreGrade: string;
     analysisStatus: string;
+    /** When SpotLens first recorded the setup. */
+    createdAt?: string;
+    /** When SpotLens recorded it closed. Null while open. */
+    invalidatedAt?: string | null;
   } | null;
   trade: { realizedR: number | null; netPnl: number | null } | null;
 }

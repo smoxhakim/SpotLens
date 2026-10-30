@@ -4,17 +4,25 @@ import { prisma } from "@/lib/db/prisma";
 import {
   buildAmendmentPayload,
   buildDecisionContext,
+  buildLateEntryPayload,
+  checkSetupDecision,
   coachWasRead,
   computeOutcome,
+  describeLateEntry,
+  lateEntryRecord,
   readAmendmentPayload,
   readDecisionContext,
+  readLateEntry,
   supersededVersions,
   validateOutcome,
   validateTransition,
   type CoachReference,
+  type DecisionSetup,
   type JournalDecision,
   type JournalError,
   type JournalSkipReason,
+  type LateEntryClaim,
+  type LateEntryRecord,
   type TradeOutcomeInput,
 } from "@/lib/journal";
 import { gradeFor as gradeForScore } from "@/lib/analysis";
@@ -52,6 +60,8 @@ export interface CreateEntryInput {
   notes?: string;
   /** A Coach review the user had read, when they had read one. */
   coach?: Omit<CoachReference, "recordedAt"> | null;
+  /** A trade the user says they entered while a now-closed setup was open. */
+  lateEntry?: LateEntryClaim | null;
 }
 
 /**
@@ -95,7 +105,7 @@ async function createTrackedEntry(
 ): Promise<JournalResult<{ id: string; created: boolean }>> {
   const setup = await prisma.trackedSetup.findFirst({
     where: { id: target.trackedSetupId, userId: input.userId },
-    select: { id: true, status: true },
+    select: { id: true, status: true, createdAt: true, invalidatedAt: true },
   });
 
   if (!setup) {
@@ -125,6 +135,21 @@ async function createTrackedEntry(
 
   const decision = input.decision ?? "WATCHING";
 
+  // Checked only here, after ownership and the existing entry: a closed setup
+  // refuses a new watch and a new take, and accepts a take only as a trade the
+  // user states they entered while it was open. The status frozen below stays
+  // the setup's actual one — INVALIDATED for a late take — and nothing about
+  // when the trade happened is inferred from it.
+  const standing = decisionSetupOf(setup);
+  const refusal = checkSetupDecision({
+    setup: standing,
+    from: null,
+    to: decision,
+    lateEntry: input.lateEntry,
+  });
+  if (refusal) return { ok: false, errors: [refusal] };
+  const late = input.lateEntry ? lateEntryRecord(standing, input.lateEntry) : null;
+
   const entry = await prisma.journalEntry.create({
     data: {
       userId: input.userId,
@@ -137,12 +162,17 @@ async function createTrackedEntry(
           type: "CREATED",
           fromDecision: null,
           toDecision: decision,
-          detail: `Journaled while the setup was ${setup.status.toLowerCase().replace(/_/g, " ")}.`,
-          ...payloadOf({
-            source: "TRACKED_SETUP",
-            runId: null,
-            coach: coachReferenceFrom(input.coach),
-          }),
+          detail:
+            `Journaled while the setup was ${setup.status.toLowerCase().replace(/_/g, " ")}.` +
+            (late ? describeLateEntry(late) : ""),
+          ...payloadOf(
+            {
+              source: "TRACKED_SETUP",
+              runId: null,
+              coach: coachReferenceFrom(input.coach),
+            },
+            late,
+          ),
         },
       },
     },
@@ -209,6 +239,16 @@ async function createUntrackedEntry(
 
   const decision = input.decision ?? "WATCHING";
 
+  // No setup, so nothing can be closed — but a late-entry statement has nothing
+  // to be checked against either, and is refused rather than stored unchecked.
+  const refusal = checkSetupDecision({
+    setup: null,
+    from: null,
+    to: decision,
+    lateEntry: input.lateEntry,
+  });
+  if (refusal) return { ok: false, errors: [refusal] };
+
   const entry = await prisma.journalEntry.create({
     data: {
       userId: input.userId,
@@ -255,10 +295,20 @@ export async function updateDecision(input: {
   skipReason?: JournalSkipReason;
   notes?: string;
   coach?: Omit<CoachReference, "recordedAt"> | null;
+  /** A trade the user says they entered while a now-closed setup was open. */
+  lateEntry?: LateEntryClaim | null;
 }): Promise<JournalResult<{ changed: boolean }>> {
   const entry = await prisma.journalEntry.findFirst({
     where: { id: input.id, userId: input.userId },
-    select: { id: true, decision: true, trackedSetupId: true, scannerRunId: true },
+    select: {
+      id: true,
+      decision: true,
+      trackedSetupId: true,
+      scannerRunId: true,
+      // The setup as it is now, not as it was when the entry was created: a
+      // change of mind is judged against whether there is still a setup.
+      trackedSetup: { select: { status: true, createdAt: true, invalidatedAt: true } },
+    },
   });
 
   if (!entry) {
@@ -271,6 +321,18 @@ export async function updateDecision(input: {
   const from = entry.decision as JournalDecision;
   const error = validateTransition(from, input.decision);
   if (error) return { ok: false, errors: [error] };
+
+  // The journal's own transitions first, then what a closed setup allows. A
+  // note against an unchanged decision is never refused here.
+  const standing = entry.trackedSetup ? decisionSetupOf(entry.trackedSetup) : null;
+  const refusal = checkSetupDecision({
+    setup: standing,
+    from,
+    to: input.decision,
+    lateEntry: input.lateEntry,
+  });
+  if (refusal) return { ok: false, errors: [refusal] };
+  const late = standing && input.lateEntry ? lateEntryRecord(standing, input.lateEntry) : null;
 
   const unchanged = from === input.decision;
   const notesChanged = input.notes !== undefined;
@@ -303,15 +365,19 @@ export async function updateDecision(input: {
           : `Decision changed from ${from.toLowerCase()} to ${input.decision.toLowerCase()}.` +
             (input.skipReason
               ? ` Reason: ${input.skipReason.toLowerCase().replace(/_/g, " ")}.`
-              : ""),
+              : "") +
+            (late ? describeLateEntry(late) : ""),
         // What was on screen for *this* change of mind. A review read before
         // the first decision does not describe the second one, so each event
         // carries its own context rather than the entry carrying one.
-        ...payloadOf({
-          source: entry.trackedSetupId ? "TRACKED_SETUP" : "SCANNER_RESULT",
-          runId: entry.scannerRunId,
-          coach: coachReferenceFrom(input.coach),
-        }),
+        ...payloadOf(
+          {
+            source: entry.trackedSetupId ? "TRACKED_SETUP" : "SCANNER_RESULT",
+            runId: entry.scannerRunId,
+            coach: coachReferenceFrom(input.coach),
+          },
+          late,
+        ),
       },
     }),
   ]);
@@ -657,6 +723,9 @@ export async function findEntry(userId: string, id: string) {
       // read from, and whether a Coach review had been read. Never a judgement
       // on the decision itself. Null on events written before Phase O.
       decisionContext: readDecisionContext(event.payload),
+      // A trade the user stated they entered while the setup was open, recorded
+      // after it closed. Self-reported, never verified. Null otherwise.
+      lateEntry: readLateEntry(event.payload),
     })),
     // Every previous version of the trade, oldest first. The entry's own
     // `trade` above is the current one, so the two together are the full
@@ -727,6 +796,9 @@ function serialise(row: EntryRow, candidate?: CandidateFacts | null) {
           scoreGrade: setup.scoreGrade,
           analysisStatus: setup.analysisStatus,
           createdAt: setup.createdAt.toISOString(),
+          // When SpotLens recorded it closed: the end of the window a late
+          // entry is checked against. Null while the setup is open.
+          invalidatedAt: setup.invalidatedAt?.toISOString() ?? null,
           invalidationReason: setup.invalidationReason,
         }
       : null,
@@ -791,9 +863,58 @@ function decimal(value: Prisma.Decimal | null): number | null {
  * A sibling key beside `supersededOutcome`, never a replacement for it:
  * `readAmendmentPayload` looks only at its own key and ignores the rest, so
  * the two coexist on one event without either needing to know about the other.
+ * An accepted late entry is a third sibling, `lateEntry`, read only by
+ * `readLateEntry` — the user's own statement, under its own key.
  */
-function payloadOf(context: Parameters<typeof buildDecisionContext>[0]) {
-  return { payload: toJson(buildDecisionContext(context)) };
+function payloadOf(
+  context: Parameters<typeof buildDecisionContext>[0],
+  late: LateEntryRecord | null = null,
+) {
+  return {
+    payload: toJson({
+      ...buildDecisionContext(context),
+      ...(late ? buildLateEntryPayload(late) : {}),
+    }),
+  };
+}
+
+/**
+ * A setup as the closed-setup rule reads it, for the decision surface — the
+ * same shape the service checks against, so the page and the server judge a
+ * late entry by the same window. Owner-scoped; null for a missing setup or
+ * another account's.
+ */
+export async function decisionSetupFor(
+  userId: string,
+  setupId: string,
+): Promise<DecisionSetup | null> {
+  const setup = await prisma.trackedSetup.findFirst({
+    where: { id: setupId, userId },
+    select: { status: true, createdAt: true, invalidatedAt: true },
+  });
+  return setup ? decisionSetupOf(setup) : null;
+}
+
+/**
+ * The setup row, as the closed-setup rule reads it. A time that is missing or
+ * not a time stays unknown — and an unknown window refuses a late entry rather
+ * than being filled in.
+ */
+function decisionSetupOf(setup: {
+  status: string;
+  createdAt?: Date | null;
+  invalidatedAt?: Date | null;
+}): DecisionSetup {
+  return {
+    status: setup.status,
+    firstSeenAt: timeOf(setup.createdAt),
+    closedAt: timeOf(setup.invalidatedAt),
+  };
+}
+
+function timeOf(value: Date | null | undefined): number | null {
+  const ms = value instanceof Date ? value.getTime() : Number.NaN;
+  return Number.isFinite(ms) ? ms : null;
 }
 
 function toJson(value: unknown): Prisma.InputJsonValue {

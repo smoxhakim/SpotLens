@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 
 import { isDenied, requireUser } from "@/lib/api/auth-guard";
 import { apiError, handleRouteError } from "@/lib/api/response";
+import { CLOSED_SETUP_ERROR_CODES } from "@/lib/journal";
 import { updateDecision } from "@/services/journal";
 
 import { journalDecisionSchema, journalIdSchema } from "../../validation";
@@ -23,6 +24,16 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     const result = await updateDecision({ userId: guard.userId, id, ...body });
 
     if (!result.ok) {
+      // A closed setup refusing the move: a conflict with the setup's state,
+      // reported under its own code rather than as a malformed request.
+      const [first] = result.errors;
+      if (CLOSED_SETUP_ERROR_CODES.includes(first.code)) {
+        return NextResponse.json(
+          { error: { code: first.code, message: first.message }, errors: result.errors },
+          { status: 409 },
+        );
+      }
+
       const missing = result.errors[0].field === "id";
       return NextResponse.json(
         {

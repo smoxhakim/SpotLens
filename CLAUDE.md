@@ -156,7 +156,18 @@ make that unnecessary most of the time.
   delay has passed — the moment `isCatchUpDue` treats a pass as due — judged
   from the analysed candle (or the pass's start) against a clock re-read every
   30s, so an open page goes stale by itself; unknown, never fresh, when it
-  cannot be judged. The same notice is on the Dashboard, Scanner and Coach pages.
+  cannot be judged. The same notice is on the Dashboard, Scanner, Coach and
+  Decision pages, and per setup on Setups. A tracked setup is not judged by its
+  creation — its snapshot is the creation's and never changes, so that would
+  call every setup older than one candle out of date for ever. It is judged by
+  `newestReadFreshness` over two reads: the creating analysis, and the latest
+  successful pass that found it still open — the entry-zone monitor's
+  provenance (an OK `ScannerResult` with its `trackedSetupId`, on a COMPLETED or
+  PARTIAL run), read by `lastScanReads` (`services/setups.ts`) and returned as
+  `lastScan` beside the context, never inside it. An untracked opportunity is
+  one pass's result and judged by that pass alone. A closed (INVALIDATED) setup
+  gets no freshness verdict; it is marked closed instead. The Decision page
+  repeats the notice beside the decision controls.
   It uses `DEFAULT_CLOSE_DELAY_MS`; a customised `SCANNER_CLOSE_DELAY_MS` is not
   passed to the UI. `/coach` is the
   handoff destination and a placeholder until Phase N — it carries references
@@ -388,6 +399,41 @@ WAITING_CONFIRMATION` is price arriving somewhere, not structure changing,
   `setupStatusAtDecision` is null rather than defaulted, since there was no
   lifecycle to be at a point in. Numbers never travel in a request either: the
   create contract is references only, and `.strict()` refuses the rest.
+- **A closed setup is a record, not an opportunity.** One pure rule,
+  `checkSetupDecision` (`lib/journal/closed-setup.ts`), decides what may be
+  recorded against an INVALIDATED setup (invalidated or replaced). The service
+  enforces it — in `createEntry` after the owner lookup and the existing-entry
+  return, in `updateDecision` after `validateTransition` — and the decision
+  panel and Journal Detail import the same function, so a button cannot offer
+  what the server refuses. A new **watch** is refused (`SETUP_CLOSED`;
+  creating with no decision defaults to watching and is refused too). Skip,
+  cancel, close and a note against an unchanged decision are unaffected, and
+  so are open setups and untracked entries. **Take** is refused as a new entry
+  (`LATE_ENTRY_REQUIRED`) and accepted only as a **late entry**: a trade the
+  user says they entered while the setup was still open, recorded after it
+  closed. That needs an explicit acknowledgement (`acknowledged: true`, a
+  literal) and the user's own entry time, which must fall inside the window
+  SpotLens recorded the setup open — `createdAt` to `invalidatedAt`, both ends
+  included. A time outside it, a time that is not one, a statement on an open
+  setup, an untracked entry or a move other than to Take, and a setup with no
+  recorded window are all refused (`LATE_ENTRY_INVALID`) — never completed by
+  a guess. **The time is self-reported and not independently verified.**
+  SpotLens has no order path and cannot know when a trade happened; the window
+  check refuses only a statement that contradicts the record, and cannot catch
+  a false one inside it. An accepted statement is stored as `lateEntry`
+  (`source: "USER_STATED"`, the stated time and the window it was checked
+  against) beside `decisionContext` on the event payload — no migration, read
+  field by field by `readLateEntry` — and the event's detail says
+  "self-reported, not verified". It never becomes `decidedAt` or `openedAt`,
+  and `setupStatusAtDecision` stays the setup's actual status (INVALIDATED for
+  a new late entry); nothing about when the trade happened is inferred.
+  Refusals are 409 under their own code (`CLOSED_SETUP_ERROR_CODES`), reached
+  only after the owner-scoped lookup, so a missing or foreign setup is still
+  the same 404. `recordOutcome` never reads the setup and is unaffected.
+  Research does not read `lateEntry` yet, and it groups trades only by
+  `confirmationAtDecision`, which counts INVALIDATED as `NOT_PRESENT` — so a
+  late take is grouped with ordinary takes today, whether its entry was
+  created after the close or while the setup was still open.
 - **The decision surface cannot reach a model.** `resolveCoachContext` takes a
   request and nothing else — no provider argument, no flag — while
   `buildCoachReview` is the only path that calls one. `/api/decision/context`

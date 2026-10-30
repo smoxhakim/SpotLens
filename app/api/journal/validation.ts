@@ -61,6 +61,23 @@ export const coachReferenceSchema = z
   .strict();
 
 /**
+ * A trade the user says they entered while the setup was open, recorded after
+ * it closed.
+ *
+ * The acknowledgement is a literal `true` — there is no way to send it unticked
+ * and have it count — and the entry time is the user's own, required, never
+ * defaulted from the clock or from the setup. Whether it falls inside the
+ * window the setup was open is the journal's rule (`checkSetupDecision`), not
+ * the schema's: the schema only knows it is a time.
+ */
+export const lateEntrySchema = z
+  .object({
+    acknowledged: z.literal(true),
+    enteredAt: z.number().int().positive(),
+  })
+  .strict();
+
+/**
  * What a decision is recorded against.
  *
  * Two shapes, and exactly one of them. A tracked setup is referenced by its
@@ -76,6 +93,7 @@ export const journalCreateSchema = z.union([
       decision: decisionSchema.optional(),
       notes: z.string().max(2000).optional(),
       coach: coachReferenceSchema.optional(),
+      lateEntry: lateEntrySchema.optional(),
     })
     .strict(),
   z
@@ -89,6 +107,7 @@ export const journalCreateSchema = z.union([
       decision: decisionSchema.optional(),
       notes: z.string().max(2000).optional(),
       coach: coachReferenceSchema.optional(),
+      lateEntry: lateEntrySchema.optional(),
     })
     .strict(),
 ]);
@@ -99,6 +118,7 @@ export const journalDecisionSchema = z
     skipReason: z.enum(SKIP_REASONS).optional(),
     notes: z.string().max(2000).optional(),
     coach: coachReferenceSchema.optional(),
+    lateEntry: lateEntrySchema.optional(),
   })
   .strict();
 

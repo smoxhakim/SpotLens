@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { TIMEFRAME_MS } from "@/lib/market-data/provider";
 
-import { analysisFreshness, combinedFreshness } from "./freshness";
+import { analysisFreshness, combinedFreshness, newestReadFreshness } from "./freshness";
 import { DEFAULT_CLOSE_DELAY_MS, latestScanWindow } from "./schedule";
 
 /**
@@ -93,6 +93,71 @@ describe("analysisFreshness", () => {
     expect(analysisFreshness({ timeframe: "H2", analysedCandleOpen: H1_CANDLE, now }).state).toBe(
       "UNKNOWN",
     );
+  });
+});
+
+describe("newestReadFreshness", () => {
+  // A 4h setup created on the 08:00 candle, re-confirmed by the pass that read
+  // the 12:00 candle (the 18:06:59 pass above).
+  const created = { analysedAtCandle: at(8), recordedAt: at(12, 1, 40) };
+  const reconfirmed = { analysedAtCandle: H4_CANDLE, recordedAt: at(18, 7, 12) };
+
+  it("judges a re-confirmed setup by its latest pass, not by when it was created", () => {
+    const now = at(19);
+    expect(analysisFreshness({ timeframe: "H4", analysedCandleOpen: at(8), now }).state).toBe(
+      "STALE",
+    );
+    const { freshness, read } = newestReadFreshness({
+      timeframe: "H4",
+      reads: [created, reconfirmed],
+      now,
+    });
+    expect(freshness.state).toBe("FRESH");
+    expect(read).toBe(reconfirmed);
+  });
+
+  it("is the same rule as a single read, so it goes stale at the same moment", () => {
+    for (const now of [at(20, 1, 29), at(20, 1, 30)]) {
+      expect(newestReadFreshness({ timeframe: "H4", reads: [reconfirmed], now }).freshness).toEqual(
+        analysisFreshness({ timeframe: "H4", analysedCandleOpen: H4_CANDLE, now }),
+      );
+    }
+  });
+
+  it("falls back to the creation read when no pass re-read the setup", () => {
+    const { freshness, read } = newestReadFreshness({
+      timeframe: "H4",
+      reads: [null, created],
+      now: at(19),
+    });
+    expect(read).toBe(created);
+    expect(freshness.state).toBe("STALE");
+  });
+
+  it("never lets a read it cannot judge stand in for a newer one", () => {
+    // From the future: a fault. The creation read is older, so the answer can
+    // only be staler for skipping it.
+    const future = { analysedAtCandle: at(19) + 24 * H, recordedAt: at(19) + 24 * H };
+    expect(
+      newestReadFreshness({ timeframe: "H4", reads: [future, created], now: at(19) }).read,
+    ).toBe(created);
+  });
+
+  it("is unknown, never fresh, with no judgeable read or an unknown timeframe", () => {
+    const now = at(19);
+    expect(newestReadFreshness({ timeframe: "H4", reads: [], now }).freshness.state).toBe(
+      "UNKNOWN",
+    );
+    expect(
+      newestReadFreshness({
+        timeframe: "H4",
+        reads: [{ analysedAtCandle: null, recordedAt: null }, null],
+        now,
+      }).freshness.state,
+    ).toBe("UNKNOWN");
+    expect(
+      newestReadFreshness({ timeframe: "H2", reads: [reconfirmed], now }).freshness.state,
+    ).toBe("UNKNOWN");
   });
 });
 
