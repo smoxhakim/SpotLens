@@ -11,10 +11,19 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { fetchApi } from "@/features/market/hooks/fetch-api";
+import { FreshnessBadge } from "@/features/scanner/components/FreshnessBadge";
+import { useNow } from "@/features/scanner/hooks/use-now";
 import { formatPrice } from "@/lib/format";
 import { TIMEFRAME_LABELS, type Timeframe } from "@/lib/market-data/provider";
+import { combinedFreshness, newestReadFreshness, type AnalysisRead } from "@/lib/scanner/freshness";
 import type { SetupLifecycleStatus } from "@/lib/setups";
-import { confirmationCaveat, LIFECYCLE_LABELS, storedLevelsWarning } from "@/lib/setups/labels";
+import {
+  CLOSED_SETUP_NOTE,
+  confirmationCaveat,
+  isClosedSetup,
+  LIFECYCLE_LABELS,
+  storedLevelsWarning,
+} from "@/lib/setups/labels";
 import { cn } from "@/lib/utils";
 
 export interface TrackedSetup {
@@ -34,11 +43,32 @@ export interface TrackedSetup {
   analysisStatus: string;
   score: number;
   scoreGrade: string;
+  /** Open time of the last closed candle the creating analysis read. */
+  analysedAtCandle: number | null;
   createdAt: string;
   confirmedAt: string | null;
   invalidatedAt: string | null;
   invalidationReason: string | null;
   eventCount: number;
+  /** The latest successful scanner pass that found this setup still open. */
+  lastScan: AnalysisRead | null;
+}
+
+/**
+ * How fresh a setup's newest read is: the latest pass that found it still open,
+ * else the analysis that created it. Its levels are the creation's either way —
+ * this says whether the market has moved on since anyone looked, not whether
+ * the numbers changed, because they never do.
+ */
+export function setupReadFreshness(setup: TrackedSetup, now: number) {
+  return newestReadFreshness({
+    timeframe: setup.timeframe,
+    reads: [
+      { analysedAtCandle: setup.analysedAtCandle, recordedAt: Date.parse(setup.createdAt) },
+      setup.lastScan,
+    ],
+    now,
+  });
 }
 
 /**
@@ -57,6 +87,7 @@ const STATUS_CLASS: Record<SetupLifecycleStatus, string> = {
 
 export function SetupHistoryView() {
   const { status: authStatus } = useSession();
+  const now = useNow();
 
   const query = useQuery<{ setups: TrackedSetup[] }>({
     queryKey: ["setups"],
@@ -103,17 +134,60 @@ export function SetupHistoryView() {
   }
 
   return (
-    <ul className="space-y-3">
-      {setups.map((setup) => (
-        <li key={setup.id}>
-          <SetupCard setup={setup} />
-        </li>
-      ))}
-    </ul>
+    <div className="space-y-3">
+      <OpenSetupsFreshness setups={setups} now={now} />
+      <ul className="space-y-3">
+        {setups.map((setup) => (
+          <li key={setup.id}>
+            <SetupCard setup={setup} now={now} />
+          </li>
+        ))}
+      </ul>
+    </div>
   );
 }
 
-export function SetupCard({ setup }: { setup: TrackedSetup }) {
+/**
+ * The page-level count, so a list of stale setups cannot scroll past as if it
+ * were current. Open setups only: a closed one is a record whatever its age,
+ * and says so on its own card. Nothing while every open setup is fresh.
+ */
+export function OpenSetupsFreshness({ setups, now }: { setups: TrackedSetup[]; now: number }) {
+  const open = setups.filter((setup) => !isClosedSetup(setup.status));
+  const judged = open.map((setup) => ({
+    timeframe: setup.timeframe,
+    freshness: setupReadFreshness(setup, now).freshness,
+  }));
+  const stale = judged.filter((entry) => entry.freshness.state === "STALE").length;
+  const unknown = judged.filter((entry) => entry.freshness.state === "UNKNOWN").length;
+  if (stale === 0 && unknown === 0) return null;
+
+  const { staleTimeframes } = combinedFreshness(judged);
+  const names = staleTimeframes.map((t) => TIMEFRAME_LABELS[t as Timeframe] ?? t).join(" and ");
+
+  return (
+    <Alert variant="warning" data-freshness={stale > 0 ? "STALE" : "UNKNOWN"}>
+      <AlertDescription className="text-[11px] leading-relaxed">
+        {stale > 0 ? (
+          <>
+            <span className="font-medium">Out of date.</span> {stale} of {open.length} open setups
+            were last read by a scan before the newest {names} candle closed. Their levels are
+            historical, not the market now — a new scanner pass is needed before relying on them.
+            {unknown > 0 && ` Freshness is unknown for ${unknown} more.`} Each is marked below.
+          </>
+        ) : (
+          <>
+            <span className="font-medium">Freshness unknown.</span> For {unknown} of {open.length}{" "}
+            open setups, when a scan last read them could not be established, so they may be out of
+            date. Treat their levels as historical. Each is marked below.
+          </>
+        )}
+      </AlertDescription>
+    </Alert>
+  );
+}
+
+export function SetupCard({ setup, now }: { setup: TrackedSetup; now: number }) {
   // Evidence on a setup that was never promoted is not a green light — least of
   // all on one the engine rated high risk.
   const caveat =
@@ -123,6 +197,11 @@ export function SetupCard({ setup }: { setup: TrackedSetup }) {
       : null;
   const statusClass = caveat ? CAUTION : STATUS_CLASS[setup.status];
   const levelsWarning = storedLevelsWarning(setup);
+  // Two separate facts: the lifecycle (closed or not) and, for an open setup,
+  // whether a scan has read the latest closed candle. A closed setup has no
+  // freshness to speak of — it is a record.
+  const closed = isClosedSetup(setup.status);
+  const { freshness } = setupReadFreshness(setup, now);
 
   return (
     <Card>
@@ -130,6 +209,7 @@ export function SetupCard({ setup }: { setup: TrackedSetup }) {
         <CardTitle className="flex flex-wrap items-baseline gap-2 text-sm">
           <span>{setup.symbol}</span>
           <span className="text-muted-foreground">{TIMEFRAME_LABELS[setup.timeframe]}</span>
+          {!closed && <FreshnessBadge freshness={freshness} />}
           <span className={cn("ml-auto text-xs font-semibold", statusClass)}>
             {LIFECYCLE_LABELS[setup.status]}
           </span>
@@ -142,6 +222,11 @@ export function SetupCard({ setup }: { setup: TrackedSetup }) {
       </CardHeader>
 
       <CardContent className="space-y-2">
+        {closed && (
+          <p className="text-[11px] font-medium leading-relaxed text-muted-foreground">
+            {CLOSED_SETUP_NOTE}
+          </p>
+        )}
         {caveat && <p className="text-[11px] leading-relaxed text-muted-foreground">{caveat}</p>}
         <dl className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-[11px] sm:grid-cols-4">
           <Field label="Entry">
@@ -177,6 +262,14 @@ export function SetupCard({ setup }: { setup: TrackedSetup }) {
           {setup.confirmedAt && (
             <span>· Confirmed {new Date(setup.confirmedAt).toLocaleString()}</span>
           )}
+          {!closed && (
+            <span>
+              ·{" "}
+              {setup.lastScan?.recordedAt
+                ? `Last found open by a scan ${new Date(setup.lastScan.recordedAt).toLocaleString()}`
+                : "Not read by a scan since"}
+            </span>
+          )}
           <span>
             · {setup.eventCount} {setup.eventCount === 1 ? "event" : "events"}
           </span>
@@ -187,7 +280,7 @@ export function SetupCard({ setup }: { setup: TrackedSetup }) {
           them; this record deliberately does not follow.
         </p>
 
-        <JournalActions setupId={setup.id} />
+        <JournalActions setupId={setup.id} closed={closed} />
 
         {setup.invalidationReason && (
           <Alert variant="warning">
@@ -215,8 +308,11 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
  * deciding to pass. Nothing is sent to an exchange, and the request is
  * idempotent — a setup already journaled returns its existing entry rather
  * than a second one.
+ *
+ * A closed setup can still be journaled as skipped — passing on it is worth
+ * recording — but not as watching: there is nothing left to watch.
  */
-function JournalActions({ setupId }: { setupId: string }) {
+function JournalActions({ setupId, closed }: { setupId: string; closed: boolean }) {
   const queryClient = useQueryClient();
   const [entryId, setEntryId] = useState<string | null>(null);
 
@@ -241,15 +337,17 @@ function JournalActions({ setupId }: { setupId: string }) {
         </Button>
       ) : (
         <>
-          <Button
-            size="sm"
-            variant="outline"
-            className="h-7 px-2 text-[10px]"
-            onClick={() => journal.mutate("WATCHING")}
-            disabled={journal.isPending}
-          >
-            Journal as watching
-          </Button>
+          {!closed && (
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-7 px-2 text-[10px]"
+              onClick={() => journal.mutate("WATCHING")}
+              disabled={journal.isPending}
+            >
+              Journal as watching
+            </Button>
+          )}
           <Button
             size="sm"
             variant="ghost"

@@ -19,6 +19,21 @@ export const LIFECYCLE_LABELS: Record<SetupLifecycleStatus, string> = {
   INVALIDATED: "Invalidated",
 };
 
+/**
+ * A closed setup — invalidated, or replaced by a new setup on a different level,
+ * which invalidates the old one — is a record, not an opportunity.
+ *
+ * Said wherever its levels are still shown, because the levels never change
+ * and look exactly like a live setup's. Nothing can reopen it: INVALIDATED is
+ * terminal, and a level that comes back is a new setup with a new id.
+ */
+export function isClosedSetup(status: string | null | undefined): boolean {
+  return status === "INVALIDATED";
+}
+
+export const CLOSED_SETUP_NOTE =
+  "This setup is closed: it was invalidated, or replaced by a newer setup on a different level. Its levels are a record of what was on offer, not a plan — there is nothing left to watch or take.";
+
 export function lifecycleLabel(status: string): string {
   return (
     LIFECYCLE_LABELS[status as SetupLifecycleStatus] ?? status.toLowerCase().replace(/_/g, " ")

@@ -6,6 +6,7 @@ import Link from "next/link";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { FreshnessBadge } from "@/features/scanner/components/FreshnessBadge";
 import { TIMEFRAME_LABELS, type Timeframe } from "@/lib/market-data/provider";
 import type { AnalysisFreshness } from "@/lib/scanner/freshness";
 import { cn } from "@/lib/utils";
@@ -114,14 +115,7 @@ export function OpportunityCard({
           <h3 className="text-sm font-semibold">
             {candidate.symbol} <span className="text-muted-foreground">· {timeframe}</span>
           </h3>
-          {freshness && freshness.state !== "FRESH" && (
-            <Badge
-              variant="outline"
-              className="border-amber-500/50 text-[10px] text-amber-700 dark:text-amber-400"
-            >
-              {freshness.state === "STALE" ? "Out of date" : "Freshness unknown"}
-            </Badge>
-          )}
+          <FreshnessBadge freshness={freshness} />
           <span className={cn("ml-auto text-xs font-semibold", TONE_CLASS[status.tone])}>
             {status.label}
           </span>

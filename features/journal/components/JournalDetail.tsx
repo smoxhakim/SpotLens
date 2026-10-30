@@ -13,9 +13,17 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
+import { LateEntryForm, useLateEntryClaim } from "@/features/decision/components/LateEntryForm";
 import { fetchApi } from "@/features/market/hooks/fetch-api";
 import { formatPrice } from "@/lib/format";
-import { ALLOWED_TRANSITIONS, type DecisionContext, type JournalDecision } from "@/lib/journal";
+import {
+  ALLOWED_TRANSITIONS,
+  checkSetupDecision,
+  type DecisionContext,
+  type DecisionSetup,
+  type JournalDecision,
+  type LateEntryRecord,
+} from "@/lib/journal";
 import { TIMEFRAME_LABELS } from "@/lib/market-data/provider";
 import { cn } from "@/lib/utils";
 
@@ -57,6 +65,8 @@ interface JournalEntryDetail extends JournalEntrySummary {
     supersededOutcome: SupersededOutcome | null;
     /** What was on screen when this decision was made. Null before Phase O. */
     decisionContext: DecisionContext | null;
+    /** A trade the user stated they entered before the setup closed. Self-reported. */
+    lateEntry?: LateEntryRecord | null;
   }[];
   trade: {
     actualEntry: number;
@@ -222,9 +232,43 @@ function Plan({ entry }: { entry: JournalEntryDetail }) {
   );
 }
 
+/**
+ * The setup as the journal's closed-setup rule reads it, from the serialised
+ * entry. A time that is missing or unreadable stays unknown, so a late entry
+ * against it is refused rather than checked against a guess.
+ */
+function ruleSetupOf(setup: JournalEntryDetail["setup"]): DecisionSetup | null {
+  if (!setup) return null;
+  const time = (iso: string | null | undefined) => {
+    const ms = iso ? Date.parse(iso) : Number.NaN;
+    return Number.isFinite(ms) ? ms : null;
+  };
+  return {
+    status: setup.currentStatus,
+    firstSeenAt: time(setup.createdAt),
+    closedAt: time(setup.invalidatedAt),
+  };
+}
+
 function Decision({ entry, onChanged }: { entry: JournalEntryDetail; onChanged: () => void }) {
   const [notes, setNotes] = useState(entry.notes ?? "");
   const [skipReason, setSkipReason] = useState<string>(entry.skipReason ?? "");
+  // The move waiting on a late-entry statement, when one is.
+  const [lateFor, setLateFor] = useState<JournalDecision | null>(null);
+  const late = useLateEntryClaim();
+
+  const current = entry.decision;
+  const options = ALLOWED_TRANSITIONS[current];
+  // The same rule the service runs on the same setup, so nothing is offered
+  // here that the server would refuse.
+  const ruleSetup = ruleSetupOf(entry.setup);
+  const closedRule = (option: JournalDecision) =>
+    checkSetupDecision({ setup: ruleSetup, from: current, to: option });
+  const lateEntryError = lateFor
+    ? (checkSetupDecision({ setup: ruleSetup, from: current, to: lateFor, lateEntry: late.claim })
+        ?.message ?? null)
+    : null;
+  const refusedHere = options.filter((option) => closedRule(option)?.code === "SETUP_CLOSED");
 
   const update = useMutation({
     mutationFn: (decision: JournalDecision) =>
@@ -235,13 +279,19 @@ function Decision({ entry, onChanged }: { entry: JournalEntryDetail; onChanged: 
           decision,
           ...(decision === "SKIPPED" && skipReason ? { skipReason } : {}),
           notes,
+          ...(decision === lateFor && late.claim ? { lateEntry: late.claim } : {}),
         }),
       }),
-    onSuccess: onChanged,
+    onSuccess: () => {
+      // A recorded statement is spent. Left open, the form would judge it
+      // against the decision it just changed and show a refusal for a move that
+      // already succeeded.
+      setLateFor(null);
+      late.setAcknowledged(false);
+      late.setEnteredAt("");
+      onChanged();
+    },
   });
-
-  const current = entry.decision;
-  const options = ALLOWED_TRANSITIONS[current];
 
   return (
     <Card>
@@ -261,18 +311,58 @@ function Decision({ entry, onChanged }: { entry: JournalEntryDetail; onChanged: 
           </p>
         ) : (
           <div className="flex flex-wrap gap-1.5">
-            {options.map((option) => (
+            {options.map((option) => {
+              const rule = closedRule(option);
+              return (
+                <Button
+                  key={option}
+                  size="sm"
+                  variant={lateFor === option ? "secondary" : "outline"}
+                  className="h-7 px-2 text-[11px]"
+                  onClick={() =>
+                    rule?.code === "LATE_ENTRY_REQUIRED"
+                      ? setLateFor(option)
+                      : update.mutate(option)
+                  }
+                  disabled={update.isPending || rule?.code === "SETUP_CLOSED"}
+                >
+                  {DECISION_META[option].label}
+                </Button>
+              );
+            })}
+          </div>
+        )}
+
+        {refusedHere.length > 0 && (
+          <p className="text-[11px] text-muted-foreground">
+            This setup has closed, so{" "}
+            {refusedHere.map((option) => DECISION_META[option].label.toLowerCase()).join(" and ")}{" "}
+            is not available. Taken can be recorded only for a trade you already entered while it
+            was open.
+          </p>
+        )}
+
+        {lateFor && (
+          <div className="space-y-2">
+            <LateEntryForm setup={ruleSetup} state={late} error={lateEntryError} />
+            <div className="flex flex-wrap gap-1.5">
               <Button
-                key={option}
                 size="sm"
                 variant="outline"
                 className="h-7 px-2 text-[11px]"
-                onClick={() => update.mutate(option)}
-                disabled={update.isPending}
+                onClick={() => setLateFor(null)}
               >
-                {DECISION_META[option].label}
+                Cancel
               </Button>
-            ))}
+              <Button
+                size="sm"
+                className="h-7 px-2 text-[11px]"
+                onClick={() => update.mutate(lateFor)}
+                disabled={update.isPending || lateEntryError !== null}
+              >
+                Record as {DECISION_META[lateFor].label.toLowerCase()}
+              </Button>
+            </div>
           </div>
         )}
 

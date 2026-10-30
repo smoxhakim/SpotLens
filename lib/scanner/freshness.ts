@@ -71,6 +71,54 @@ function isTime(value: number | null | undefined): value is number {
   return typeof value === "number" && Number.isFinite(value) && value > 0;
 }
 
+/** One read of a market: the newest closed candle it saw, and when it was recorded. */
+export interface AnalysisRead {
+  analysedAtCandle: number | null;
+  recordedAt: number | null;
+}
+
+/**
+ * Freshness from the newest of several reads of the same market.
+ *
+ * A tracked setup is read more than once: the analysis that created it, then
+ * every successful pass that found it still open. Its snapshot numbers are the
+ * creation's and never change, but whether the market still supports the setup
+ * is answered by the latest pass — so a setup re-confirmed an hour ago is as
+ * fresh as that pass, however long ago it was created.
+ *
+ * A read that cannot be judged — no time, one from the future — is never the
+ * newest. Skipping one only ever falls back to an older read, which is staler,
+ * never fresher; with no judgeable read at all the answer is UNKNOWN.
+ */
+export function newestReadFreshness(input: {
+  timeframe: string;
+  reads: readonly (AnalysisRead | null | undefined)[];
+  now: number;
+}): { freshness: AnalysisFreshness; read: AnalysisRead | null } {
+  let newest: { freshness: AnalysisFreshness; read: AnalysisRead } | null = null;
+
+  for (const read of input.reads) {
+    if (!read) continue;
+    const freshness = analysisFreshness({
+      timeframe: input.timeframe,
+      analysedCandleOpen: read.analysedAtCandle,
+      scannedAt: read.recordedAt,
+      now: input.now,
+    });
+    const open = freshness.analysedCandleOpen;
+    if (open === null) continue;
+
+    const previous = newest?.freshness.analysedCandleOpen ?? null;
+    const later =
+      previous === null ||
+      open > previous ||
+      (open === previous && (read.recordedAt ?? 0) > (newest?.read.recordedAt ?? 0));
+    if (later) newest = { freshness, read };
+  }
+
+  return newest ?? { freshness: UNKNOWN, read: null };
+}
+
 /**
  * The page-level answer for several analyses shown together: STALE if any is,
  * else UNKNOWN if any is, else FRESH — and which timeframes are behind it, so

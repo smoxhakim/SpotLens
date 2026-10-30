@@ -9,15 +9,29 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { fetchApi } from "@/features/market/hooks/fetch-api";
-import { canTransition, type JournalDecision, type JournalSkipReason } from "@/lib/journal";
+import { AnalysisFreshnessNotice } from "@/features/scanner/components/AnalysisFreshnessNotice";
+import {
+  canTransition,
+  checkSetupDecision,
+  type DecisionSetup,
+  type JournalDecision,
+  type JournalSkipReason,
+} from "@/lib/journal";
+import { CLOSED_SETUP_NOTE } from "@/lib/setups/labels";
 import { cn } from "@/lib/utils";
 
+import type { DecisionStanding } from "../standing";
 import {
   DECISION_COPY,
   OFFERED_DECISIONS,
   SKIP_REASON_LABELS,
   type OfferedDecision,
 } from "../types";
+import { LateEntryForm, useLateEntryClaim } from "./LateEntryForm";
+
+/** Said on Take when the setup has closed: it is not a way to enter a new trade. */
+const LATE_TAKE_MEANING =
+  "Only for a trade you already entered while this setup was open. You will be asked to state that, and when.";
 
 /**
  * Your decision — the only place in SpotLens where a decision is created.
@@ -61,6 +75,7 @@ export function DecisionPanel({
   target,
   existing,
   coach,
+  standing,
 }: {
   target: DecisionTarget;
   existing: ExistingEntry | null;
@@ -69,6 +84,12 @@ export function DecisionPanel({
    * without one is an ordinary decision, not an incomplete one.
    */
   coach?: CoachReadingRef | null;
+  /**
+   * Whether the setup is closed, and how fresh its newest read is. Said here,
+   * beside the choices, because this is where it is decided — a warning at the
+   * top of the page has scrolled away by the time a button is pressed.
+   */
+  standing?: DecisionStanding;
 }) {
   const queryClient = useQueryClient();
 
@@ -77,18 +98,37 @@ export function DecisionPanel({
   const [skipReason, setSkipReason] = useState<JournalSkipReason | "">(existing?.skipReason ?? "");
   const [confirming, setConfirming] = useState(false);
   const [entryId, setEntryId] = useState<string | null>(existing?.id ?? null);
+  const late = useLateEntryClaim();
 
   const current = existing?.decision ?? null;
+
+  // The setup as the journal's closed-setup rule reads it. A closed setup whose
+  // window was not supplied is still closed — and with no window, a late entry
+  // cannot be checked, so it is refused rather than guessed.
+  const closed = standing?.closed ?? false;
+  const ruleSetup: DecisionSetup | null =
+    standing?.setup ??
+    (closed ? { status: "INVALIDATED", firstSeenAt: null, closedAt: null } : null);
+  // The journal's own rule, imported rather than re-expressed — the server runs
+  // the same function on the same setup, so a button cannot offer what the
+  // service would refuse.
+  const closedRule = (decision: OfferedDecision) =>
+    checkSetupDecision({ setup: ruleSetup, from: current, to: decision });
+  const needsLateEntry = (decision: OfferedDecision) =>
+    closedRule(decision)?.code === "LATE_ENTRY_REQUIRED";
 
   const record = useMutation({
     mutationFn: async (decision: OfferedDecision) => {
       // The note and the reason are the user's own words and travel with the
-      // decision. No timestamp is sent: the server stamps it, because a moment
-      // the browser chose is not a record of when anything happened.
+      // decision. No timestamp is sent for the decision: the server stamps it,
+      // because a moment the browser chose is not a record of when anything
+      // happened. A late entry's time is different — it is the user's own
+      // statement about their trade, sent and stored as exactly that.
       const body = {
         ...(note.trim() ? { notes: note.trim() } : {}),
         ...(decision === "SKIPPED" && skipReason ? { skipReason } : {}),
         ...(coach ? { coach: { providerId: coach.providerId, verdict: coach.verdict } } : {}),
+        ...(needsLateEntry(decision) && late.claim ? { lateEntry: late.claim } : {}),
       };
 
       const patch = (id: string) =>
@@ -134,8 +174,30 @@ export function DecisionPanel({
   // A decision the journal would refuse is not offered. `canTransition` is the
   // journal's own rule, imported rather than re-expressed, so the buttons and
   // the service cannot disagree about what is allowed.
+  //
+  // A closed setup narrows that further, by the same shared rule: no watching,
+  // and taking only as a late entry. Nothing already recorded is changed: an
+  // existing entry keeps its decision and its history.
+  const closedRefuses = (decision: OfferedDecision): boolean =>
+    closedRule(decision)?.code === "SETUP_CLOSED";
   const allowed = (decision: OfferedDecision): boolean =>
-    current === null || current === decision || canTransition(current, decision);
+    !closedRefuses(decision) &&
+    (current === null || current === decision || canTransition(current, decision));
+
+  // A late entry as it stands, judged by the rule. Null when it would be accepted.
+  const lateEntryActive = choice !== null && needsLateEntry(choice);
+  const lateEntryError = lateEntryActive
+    ? (checkSetupDecision({
+        setup: ruleSetup,
+        from: current,
+        to: choice,
+        lateEntry: late.claim,
+      })?.message ?? null)
+    : null;
+
+  // Out of date or unknown. Deciding stays possible — it is the reader's call —
+  // but not without the state being said where the choice is made.
+  const unsure = !closed && standing !== undefined && standing.freshness.state !== "FRESH";
 
   const recorded = record.isSuccess;
   const pending = record.isPending;
@@ -161,6 +223,21 @@ export function DecisionPanel({
               : ""}
             . Changing it appends to the history rather than replacing it.
           </p>
+        )}
+
+        {closed && (
+          <Alert variant="warning" data-standing="closed">
+            <AlertDescription className="text-[11px] leading-relaxed">
+              <span className="font-medium">Closed setup.</span> {CLOSED_SETUP_NOTE}
+            </AlertDescription>
+          </Alert>
+        )}
+        {unsure && standing && (
+          <AnalysisFreshnessNotice
+            freshness={standing.freshness}
+            asOf={standing.asOf}
+            subject={standing.subject}
+          />
         )}
 
         {/* Radio semantics, because these are one choice among three and a
@@ -196,13 +273,19 @@ export function DecisionPanel({
                 <span className="block text-sm font-medium">{copy.label}</span>
                 <span className="mt-0.5 block text-[11px] leading-relaxed text-muted-foreground">
                   {enabled
-                    ? copy.meaning
-                    : `Not available from ${current?.toLowerCase()} — the journal does not allow that change.`}
+                    ? needsLateEntry(decision)
+                      ? LATE_TAKE_MEANING
+                      : copy.meaning
+                    : closedRefuses(decision)
+                      ? "Not available — this setup is closed."
+                      : `Not available from ${current?.toLowerCase()} — the journal does not allow that change.`}
                 </span>
               </button>
             );
           })}
         </div>
+
+        {lateEntryActive && <LateEntryForm setup={ruleSetup} state={late} error={lateEntryError} />}
 
         {choice === "SKIPPED" && (
           <div className="space-y-1">
@@ -250,18 +333,38 @@ export function DecisionPanel({
           <Alert variant="muted">
             <AlertDescription className="space-y-2">
               <p className="text-[11px] leading-relaxed">
-                You are recording that you decided to take this setup.{" "}
+                {lateEntryActive && late.claim ? (
+                  <>
+                    You are recording a trade you state you entered at{" "}
+                    {new Date(late.claim.enteredAt).toLocaleString()}, while this setup was still
+                    open. It is kept as your own statement — SpotLens cannot verify it.{" "}
+                  </>
+                ) : (
+                  <>You are recording that you decided to take this setup. </>
+                )}
                 <span className="font-medium text-foreground">
                   SpotLens will not place an order.
                 </span>{" "}
                 Nothing is sent to an exchange, and no position is opened. If you go on to trade it,
                 you can record what actually happened afterwards.
+                {unsure && (
+                  <span className="font-medium text-foreground">
+                    {" "}
+                    The analysis behind it is{" "}
+                    {standing?.freshness.state === "STALE" ? "out of date" : "of unknown freshness"}
+                    : its levels are historical, not the market now.
+                  </span>
+                )}
               </p>
               <div className="flex flex-wrap gap-2">
                 <Button size="sm" variant="outline" onClick={() => setConfirming(false)}>
                   Cancel
                 </Button>
-                <Button size="sm" disabled={pending} onClick={() => record.mutate("TAKEN")}>
+                <Button
+                  size="sm"
+                  disabled={pending || lateEntryError !== null}
+                  onClick={() => record.mutate("TAKEN")}
+                >
                   {pending ? "Recording…" : "Record decision"}
                 </Button>
               </div>
@@ -271,7 +374,7 @@ export function DecisionPanel({
           <Button
             size="sm"
             className="w-full sm:w-auto"
-            disabled={choice === null || pending}
+            disabled={choice === null || pending || lateEntryError !== null}
             onClick={() => {
               if (choice === null) return;
               if (choice === "TAKEN") {

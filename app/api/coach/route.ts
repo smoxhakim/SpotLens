@@ -6,6 +6,7 @@ import { apiError, handleRouteError } from "@/lib/api/response";
 import { isDatabaseConfigured } from "@/lib/db/prisma";
 import { timeframeSchema } from "@/lib/market-data/schema";
 import { buildCoachReview } from "@/services/coach";
+import { lastScanReads } from "@/services/setups";
 
 export const dynamic = "force-dynamic";
 
@@ -72,8 +73,15 @@ export async function GET(req: NextRequest) {
       return apiError("NOT_FOUND", "No recorded analysis matches that reference.", 404);
     }
 
+    // When a pass last found a tracked setup still open, for the page's
+    // freshness notice. Outside the context, so it reaches neither the model nor
+    // the review cache, which are keyed on the immutable record.
+    const setupId = lookup.result.context.identity.setupId;
+    const lastScan = setupId ? ((await lastScanReads([setupId])).get(setupId) ?? null) : null;
+
     return NextResponse.json({
       context: lookup.result.context,
+      lastScan,
       review: lookup.result.review,
       // True when a provider failed or answered with something the rules
       // refused, and the deterministic reading was shown instead.

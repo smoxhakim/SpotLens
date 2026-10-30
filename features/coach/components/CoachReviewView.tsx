@@ -10,10 +10,11 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { DecisionSection } from "@/features/decision/components/DecisionSection";
+import { decisionStanding } from "@/features/decision/standing";
 import { fetchApi } from "@/features/market/hooks/fetch-api";
 import { AnalysisFreshnessNotice } from "@/features/scanner/components/AnalysisFreshnessNotice";
 import { useNow } from "@/features/scanner/hooks/use-now";
-import { analysisFreshness, combinedFreshness } from "@/lib/scanner/freshness";
+import type { AnalysisRead } from "@/lib/scanner/freshness";
 import {
   VERDICT_LABELS,
   type CoachContext,
@@ -21,7 +22,7 @@ import {
   type CoachSection,
 } from "@/lib/coach";
 import { ANALYSIS_DISCLAIMER } from "@/lib/constants/disclaimers";
-import { storedTargetsWarning } from "@/lib/setups/labels";
+import { CLOSED_SETUP_NOTE, storedTargetsWarning } from "@/lib/setups/labels";
 import { TIMEFRAME_LABELS, type Timeframe } from "@/lib/market-data/provider";
 import { cn } from "@/lib/utils";
 
@@ -40,6 +41,8 @@ import { cn } from "@/lib/utils";
 
 interface CoachResponse {
   context: CoachContext;
+  /** When a pass last found the tracked setup still open. Null if none has. */
+  lastScan: AnalysisRead | null;
   review: CoachReview;
   degraded: boolean;
   /** Whether a model wrote the prose, or SpotLens's own reading did. */
@@ -160,29 +163,29 @@ export function CoachReviewView({
     );
   }
 
-  const { context, review, degraded, source } = query.data;
+  const { context, review, degraded, source, lastScan } = query.data;
   const levels = context.levels;
   // The reviewed record is the analysis as it stood when it was made — a
-  // tracked setup's snapshot or one pass's result — never a live read.
-  const freshness = combinedFreshness([
-    {
-      timeframe: context.identity.timeframe,
-      freshness: analysisFreshness({
-        timeframe: context.identity.timeframe,
-        analysedCandleOpen: context.identity.analysedAtCandle,
-        scannedAt: context.identity.recordedAt,
-        now,
-      }),
-    },
-  ]);
+  // tracked setup's snapshot or one pass's result — never a live read. Whether
+  // it still stands is judged as the decision page judges it: closed, or from
+  // the latest pass that found the setup open.
+  const standing = decisionStanding(context, lastScan, now);
 
   return (
     <div className="space-y-4">
-      <AnalysisFreshnessNotice
-        freshness={freshness}
-        asOf={context.identity.recordedAt ?? context.identity.analysedAtCandle}
-        subject="the analysis this review reads"
-      />
+      {standing.closed ? (
+        <Alert variant="warning" data-standing="closed">
+          <AlertDescription className="text-[11px] leading-relaxed">
+            <span className="font-medium">Closed setup.</span> {CLOSED_SETUP_NOTE}
+          </AlertDescription>
+        </Alert>
+      ) : (
+        <AnalysisFreshnessNotice
+          freshness={standing.freshness}
+          asOf={standing.asOf}
+          subject={standing.subject}
+        />
+      )}
       {/* Which reading this is, said plainly. A reader deciding how much weight
           to give a paragraph deserves to know whether a model wrote it, and a
           page that quietly swapped between the two would be the worse

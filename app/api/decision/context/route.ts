@@ -7,7 +7,8 @@ import { isDatabaseConfigured } from "@/lib/db/prisma";
 import { timeframeSchema } from "@/lib/market-data/schema";
 import { riskPrefillFrom } from "@/lib/risk";
 import { resolveCoachContext } from "@/services/coach";
-import { findEntryForOpportunity } from "@/services/journal";
+import { decisionSetupFor, findEntryForOpportunity } from "@/services/journal";
+import { lastScanReads } from "@/services/setups";
 
 export const dynamic = "force-dynamic";
 
@@ -83,8 +84,20 @@ export async function GET(req: NextRequest) {
           },
     );
 
+    // When a pass last found a tracked setup still open. Beside the context,
+    // never in it: the context is the immutable record the journal references,
+    // and whether it is still current is a question about today.
+    const setupId = lookup.context.identity.setupId;
+    const lastScan = setupId ? ((await lastScanReads([setupId])).get(setupId) ?? null) : null;
+    // The setup's status and the window it was open, exactly as the journal
+    // checks a decision against them — so the panel offers what the server
+    // would accept, and a late entry is bounded by the same two times.
+    const setup = setupId ? await decisionSetupFor(guard.userId, setupId) : null;
+
     return NextResponse.json({
       context: lookup.context,
+      lastScan,
+      setup,
       journal,
       // Derived on the server from the levels that were just resolved, so the
       // calculator is prefilled from the database rather than from anything a

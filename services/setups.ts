@@ -4,6 +4,8 @@ import type { AnalysisResult } from "@/lib/analysis";
 import { isDatabaseConfigured, prisma } from "@/lib/db/prisma";
 import { warnOnce } from "@/lib/log";
 import type { Timeframe } from "@/lib/market-data/provider";
+import type { AnalysisRead } from "@/lib/scanner/freshness";
+import { successfulPassWhere } from "@/lib/scanner/runs";
 import {
   reconcileSetup,
   type ExistingSetup,
@@ -264,7 +266,47 @@ export async function listSetups(query: ListSetupsQuery) {
     },
   });
 
-  return rows.map(serialiseSetup);
+  const lastScans = await lastScanReads(rows.map((row) => row.id));
+
+  return rows.map((row) => ({ ...serialiseSetup(row), lastScan: lastScans.get(row.id) ?? null }));
+}
+
+/**
+ * The latest successful scanner pass that read each setup's market, by setup.
+ *
+ * A setup's snapshot is its creation's and never changes, so it cannot say
+ * whether the setup is still current; the passes after it can. The provenance
+ * is the entry-zone monitor's: a `ScannerResult` with `status = OK` and this
+ * `trackedSetupId` — written on every pass that leaves the setup open, the
+ * existing id when nothing changed — on a run that finished as COMPLETED or
+ * PARTIAL (`successfulPassWhere`). A run still in progress, or one that failed,
+ * vouches for nothing.
+ *
+ * `analysedAtCandle` is the newest candle any such pass read, and `recordedAt`
+ * when the newest result was written — both rise with every pass, so they are
+ * the latest pass's. A setup no pass has read is absent, and the caller falls
+ * back to the creation read. Read-only, one query however many setups.
+ */
+export async function lastScanReads(setupIds: string[]): Promise<Map<string, AnalysisRead>> {
+  const reads = new Map<string, AnalysisRead>();
+  if (setupIds.length === 0) return reads;
+
+  const groups = await prisma.scannerResult.groupBy({
+    by: ["trackedSetupId"],
+    where: { trackedSetupId: { in: setupIds }, status: "OK", scannerRun: successfulPassWhere() },
+    _max: { analysedAtCandle: true, createdAt: true },
+  });
+
+  for (const group of groups) {
+    if (!group.trackedSetupId) continue;
+    const candle = group._max.analysedAtCandle;
+    reads.set(group.trackedSetupId, {
+      analysedAtCandle: candle === null ? null : Number(candle),
+      recordedAt: group._max.createdAt?.getTime() ?? null,
+    });
+  }
+
+  return reads;
 }
 
 /**
@@ -327,6 +369,8 @@ function serialiseSetup(row: SetupRow) {
     scoreGrade: row.scoreGrade,
     analysisStatus: row.analysisStatus,
     snapshot: row.snapshot,
+    /** Open time of the last closed candle the creating analysis read. */
+    analysedAtCandle: createdFromCandle(row.snapshot),
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
     confirmedAt: row.confirmedAt?.toISOString() ?? null,
@@ -334,6 +378,12 @@ function serialiseSetup(row: SetupRow) {
     invalidationReason: row.invalidationReason,
     eventCount: row._count.events,
   };
+}
+
+function createdFromCandle(snapshot: Prisma.JsonValue): number | null {
+  if (typeof snapshot !== "object" || snapshot === null || Array.isArray(snapshot)) return null;
+  const value = (snapshot as Record<string, unknown>).createdFromCandleTime;
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
 function toJson(value: unknown): Prisma.InputJsonValue {

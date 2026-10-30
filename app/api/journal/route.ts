@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { isDenied, requireUser } from "@/lib/api/auth-guard";
 import { apiError, handleRouteError } from "@/lib/api/response";
 import { isDatabaseConfigured } from "@/lib/db/prisma";
+import { CLOSED_SETUP_ERROR_CODES } from "@/lib/journal";
 import { createEntry, listEntries } from "@/services/journal";
 
 import { journalCreateSchema, journalListQuerySchema } from "./validation";
@@ -62,9 +63,21 @@ export async function POST(req: NextRequest) {
       decision: body.decision,
       notes: body.notes,
       coach: body.coach ?? null,
+      lateEntry: body.lateEntry ?? null,
     });
 
     if (!result.ok) {
+      // A closed setup refusing the decision is a conflict with its state. It
+      // is only ever reached after the owner-scoped lookup found the setup, so
+      // saying so reveals nothing about anyone else's.
+      const [first] = result.errors;
+      if (CLOSED_SETUP_ERROR_CODES.includes(first.code)) {
+        return NextResponse.json(
+          { error: { code: first.code, message: first.message }, errors: result.errors },
+          { status: 409 },
+        );
+      }
+
       // A setup owned by someone else is reported exactly as a missing one, so
       // the endpoint cannot be used to discover which ids exist.
       return NextResponse.json(
