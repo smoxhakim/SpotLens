@@ -72,8 +72,11 @@ export async function POST(req: NextRequest) {
         ? unavailableHigherTimeframe(higherTimeframe, "NOT_CHECKED")
         : undefined;
 
+    // One clock reading for the analysis and the tracking decision below.
+    const lastCandleIsForming = isLastCandleForming(candles);
+
     const result = runAnalysis(candles, {
-      lastCandleIsForming: isLastCandleForming(candles),
+      lastCandleIsForming,
       incomplete,
     });
 
@@ -92,7 +95,15 @@ export async function POST(req: NextRequest) {
     // runs on stale candles (the exchange failed and the cache answered), or
     // incomplete ones: a setup must never be created or moved by data older
     // than the last close, or without the higher timeframe it depends on.
-    if (userId && !result.incomplete) {
+    //
+    // Nor while the last candle is still forming — the rule `/api/analysis/mtf`
+    // already keeps. Only a timeframe with no higher one gets this far, but for
+    // it the gap was real: a tracked setup's snapshot is written once, and its
+    // state and `createdFromCandleTime` would come from a candle that has not
+    // closed — a price it may not close at, which the scanner, reading closed
+    // candles only, would then move back. The result is still shown and
+    // recorded; a run after the close tracks it.
+    if (userId && !result.incomplete && !lastCandleIsForming) {
       await trackSetup({
         userId,
         tradingPairId: market.pairId,
