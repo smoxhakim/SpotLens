@@ -21,6 +21,8 @@
     "spotlens": "tsx --env-file=.env scripts/spotlens.ts",
     "monitor": "tsx --env-file=.env scripts/entry-zone-monitor.ts",
     "monitor:once": "tsx --env-file=.env scripts/entry-zone-monitor.ts --once",
+    "demo:prices": "tsx scripts/demo-price-check.ts",
+    "demo:report": "tsx --env-file=.env scripts/demo-trial-report.ts",
     "prisma:deploy": "prisma migrate deploy",
     "db:shadow": "docker compose up -d postgres && docker exec spotlens-postgres-1 psql -U spotlens -d postgres -c 'DROP DATABASE IF EXISTS spotlens_shadow' -c 'CREATE DATABASE spotlens_shadow'"
   },
