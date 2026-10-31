@@ -100,7 +100,7 @@ export function LateEntryForm({
 }
 
 /** A `datetime-local` value in the reader's own zone, to the second. */
-function toLocalInput(ms: number): string {
+export function toLocalInput(ms: number): string {
   const d = new Date(ms);
   const pad = (n: number) => String(n).padStart(2, "0");
   return (
@@ -110,6 +110,6 @@ function toLocalInput(ms: number): string {
 }
 
 /** A `datetime-local` value read in the reader's own zone. NaN when it is not a time. */
-function fromLocalInput(value: string): number {
+export function fromLocalInput(value: string): number {
   return new Date(value).getTime();
 }

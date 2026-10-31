@@ -27,6 +27,13 @@ import {
 import { TIMEFRAME_LABELS } from "@/lib/market-data/provider";
 import { cn } from "@/lib/utils";
 
+import {
+  EXIT_REASON_LABELS,
+  outcomeFormFrom,
+  outcomeRequest,
+  type OutcomeForm,
+  type RecordedTrade,
+} from "../outcome-form";
 import { DECISION_META, type JournalEntrySummary } from "./JournalList";
 
 /** A previous version of the trade, exactly as `lib/journal` preserved it. */
@@ -68,18 +75,14 @@ interface JournalEntryDetail extends JournalEntrySummary {
     /** A trade the user stated they entered before the setup closed. Self-reported. */
     lateEntry?: LateEntryRecord | null;
   }[];
-  trade: {
-    actualEntry: number;
-    actualStopLoss: number | null;
-    actualExit: number | null;
-    quantity: number;
-    fees: number | null;
-    realizedR: number | null;
-    netPnl: number | null;
-    riskAmount: number | null;
-    holdingMs: number | null;
-    exitReason: string | null;
-  } | null;
+  trade:
+    | (RecordedTrade & {
+        realizedR: number | null;
+        netPnl: number | null;
+        riskAmount: number | null;
+        holdingMs: number | null;
+      })
+    | null;
 }
 
 const SKIP_REASONS = [
@@ -412,34 +415,26 @@ function Decision({ entry, onChanged }: { entry: JournalEntryDetail; onChanged: 
 }
 
 function Outcome({ entry, onChanged }: { entry: JournalEntryDetail; onChanged: () => void }) {
-  const [form, setForm] = useState({
-    actualEntry: String(entry.trade?.actualEntry ?? ""),
-    actualStopLoss: String(entry.trade?.actualStopLoss ?? ""),
-    actualExit: String(entry.trade?.actualExit ?? ""),
-    quantity: String(entry.trade?.quantity ?? ""),
-    fees: String(entry.trade?.fees ?? ""),
-  });
+  const [form, setForm] = useState<OutcomeForm>(() => outcomeFormFrom(entry.trade));
 
   const record = useMutation({
-    mutationFn: (close: boolean) =>
-      fetchApi(`/api/journal/${entry.id}/outcome`, {
+    mutationFn: (close: boolean) => {
+      // Every field, as left — the save replaces the whole trade, so a field
+      // not sent would be cleared. A time that does not read stops it here.
+      const request = outcomeRequest(form, entry.trade, close);
+      if (!request.ok) throw new Error(request.message);
+      return fetchApi(`/api/journal/${entry.id}/outcome`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          actualEntry: Number(form.actualEntry),
-          ...(form.actualStopLoss ? { actualStopLoss: Number(form.actualStopLoss) } : {}),
-          ...(form.actualExit ? { actualExit: Number(form.actualExit) } : {}),
-          quantity: Number(form.quantity),
-          ...(form.fees ? { fees: Number(form.fees) } : {}),
-          close,
-        }),
-      }),
+        body: JSON.stringify(request.body),
+      });
+    },
     onSuccess: onChanged,
   });
 
   if (entry.decision !== "TAKEN" && entry.decision !== "CLOSED") return null;
 
-  const set = (key: keyof typeof form) => (value: string) =>
+  const set = (key: keyof OutcomeForm) => (value: string) =>
     setForm((prev) => ({ ...prev, [key]: value }));
 
   return (
@@ -465,6 +460,12 @@ function Outcome({ entry, onChanged }: { entry: JournalEntryDetail; onChanged: (
             value={form.actualStopLoss}
             onChange={set("actualStopLoss")}
           />
+          <NumberField
+            id="at"
+            label="Take-profit"
+            value={form.actualTakeProfit}
+            onChange={set("actualTakeProfit")}
+          />
           <NumberField id="qt" label="Quantity" value={form.quantity} onChange={set("quantity")} />
           <NumberField
             id="ax"
@@ -473,7 +474,36 @@ function Outcome({ entry, onChanged }: { entry: JournalEntryDetail; onChanged: (
             onChange={set("actualExit")}
           />
           <NumberField id="fe" label="Fees" value={form.fees} onChange={set("fees")} />
+          <TimeField id="fill" label="Fill time" value={form.openedAt} onChange={set("openedAt")} />
+          <TimeField
+            id="close"
+            label="Close time"
+            value={form.closedAt}
+            onChange={set("closedAt")}
+          />
+          <div className="space-y-1">
+            <Label htmlFor="exit-reason">Exit reason</Label>
+            <select
+              id="exit-reason"
+              value={form.exitReason}
+              onChange={(e) => set("exitReason")(e.target.value)}
+              className="flex h-9 w-full rounded-md border border-input bg-background px-3 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+            >
+              <option value="">Not recorded</option>
+              {Object.entries(EXIT_REASON_LABELS).map(([reason, label]) => (
+                <option key={reason} value={reason}>
+                  {label}
+                </option>
+              ))}
+            </select>
+          </div>
         </div>
+        <p className="text-[10px] leading-relaxed text-muted-foreground">
+          Quantity is what filled — for a partial fill, the part that filled. Fill time is when your
+          entry order filled, its first fill if it filled in parts. Times are in this browser&apos;s
+          time zone ({Intl.DateTimeFormat().resolvedOptions().timeZone}), to the second. Anything
+          left blank is recorded as unknown — never filled in from the plan or the clock.
+        </p>
 
         <div className="flex flex-wrap gap-2">
           <Button
@@ -630,6 +660,31 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
     <div>
       <dt className="text-[10px] uppercase tracking-wide text-muted-foreground">{label}</dt>
       <dd className="tabular font-medium">{children}</dd>
+    </div>
+  );
+}
+
+function TimeField({
+  id,
+  label,
+  value,
+  onChange,
+}: {
+  id: string;
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <div className="space-y-1">
+      <Label htmlFor={id}>{label}</Label>
+      <Input
+        id={id}
+        type="datetime-local"
+        step={1}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+      />
     </div>
   );
 }
