@@ -109,7 +109,7 @@ export interface PlannedTransition {
   from: SetupLifecycleStatus;
   to: SetupLifecycleStatus;
   event: PlannedEvent;
-  /** Stamp `confirmedAt` — the service applies it only if still null. */
+  /** Stamp `confirmedAt` — false whenever the stored setup already has one. */
   marksConfirmed: boolean;
   invalidationReason: string | null;
 }

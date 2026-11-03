@@ -210,8 +210,9 @@ async function createSetup(input: TrackSetupInput, create: PlannedCreate): Promi
  * Applies one transition and appends its event.
  *
  * The snapshot columns are never named here — that is what makes them
- * immutable. `confirmedAt` is stamped only when it is still null, so a setup
- * that loses and regains confirmation keeps the time of the first one.
+ * immutable. `confirmedAt` is stamped only when the planner marks it, which it
+ * does only while the row read for this plan still had none, so a setup that
+ * loses and regains confirmation keeps the time of the first one.
  */
 async function applyTransition(transition: PlannedTransition): Promise<void> {
   const now = new Date();

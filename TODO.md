@@ -32,6 +32,30 @@ open items are collected here.
       image has still never been built.
 - [ ] Optional: tighten CSP off `unsafe-inline`/`unsafe-eval` via nonces.
 
+## Confirmation fixes (on `fix/confirmation-wick-and-confirmed-at`, awaiting review)
+
+Two defects found by the read-only confirmation study (24 months, 45 markets ×
+1h/4h, 499-candle window). Neither changes a Potential setup: every gate
+candidate has price in the zone, so its candle always touched it.
+
+- [x] **The bearish-wick contradiction now needs contact with the zone.** It
+      tested `high >= zone.low`, which is always true because the entry zone
+      sits below the price, so any shooting star above the zone contradicted —
+      10.5% of all contradictions. It now also needs `low <= zone.high`, as its
+      positive mirror always did. A lifecycle replay with only this change:
+      contradiction invalidations 41,914 → 28,223, setups reaching their entry
+      zone while armed for an alert +8%, Potential-setup bars unchanged.
+- [x] **`confirmedAt` is stamped once.** The planner set `marksConfirmed` on
+      every move into a confirmed state and the service overwrote the column,
+      so re-confirming, or CONFIRMATION_DETECTED → POTENTIAL_SETUP, moved it
+      (11 of 240 confirmed setups on the local database). `reconcileSetup` now
+      marks it only while `hasConfirmedAt` is false. Rows already overwritten
+      are not rewritten; their first confirmation is still in `SetupEvent`.
+- [ ] Not fixed, by scope: the RECLAIM negative ("support has been lost",
+      `close < zone.low`) is unreachable for the same geometric reason, so
+      `invalidationReason` is always null; and a setup's origin is written once
+      at creation, while the `isSameOrigin` doc describes a drifting chain.
+
 ## Target validation and untracked candidates (on `fix/target-validation-and-exclusions`, uncommitted)
 
 A live pass stored LTC/USDT 1h with TP3 (4R fallback) below TP2 (5.7R swing

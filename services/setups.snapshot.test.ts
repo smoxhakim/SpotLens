@@ -147,3 +147,37 @@ describe("a stored setup's numbers never change", () => {
     }
   });
 });
+
+describe("confirmedAt is the first confirmation, written once", () => {
+  it("is not rewritten when a confirmed setup moves on", async () => {
+    expect(BULLISH.status).toBe("POTENTIAL_SETUP");
+    findFirst.mockResolvedValue({
+      id: "setup-1",
+      status: "CONFIRMATION_DETECTED",
+      originZoneLow: BULLISH.setup!.entry.low,
+      originZoneHigh: BULLISH.setup!.entry.high,
+      confirmedAt: new Date("2026-01-01T00:00:00Z"),
+    });
+
+    await trackSetup({ ...base, result: BULLISH });
+
+    expect(update).toHaveBeenCalledTimes(1);
+    expect(update.mock.calls[0][0].data.status).toBe("POTENTIAL_SETUP");
+    expect(Object.keys(update.mock.calls[0][0].data)).not.toContain("confirmedAt");
+  });
+
+  it("is written by the first transition that confirms", async () => {
+    findFirst.mockResolvedValue({
+      id: "setup-1",
+      status: "WAITING_CONFIRMATION",
+      originZoneLow: BULLISH.setup!.entry.low,
+      originZoneHigh: BULLISH.setup!.entry.high,
+      confirmedAt: null,
+    });
+
+    await trackSetup({ ...base, result: BULLISH });
+
+    expect(update).toHaveBeenCalledTimes(1);
+    expect(Object.keys(update.mock.calls[0][0].data)).toContain("confirmedAt");
+  });
+});

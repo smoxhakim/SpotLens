@@ -201,7 +201,7 @@ export function reconcileSetup(input: {
         detail: transitionDetail(existing.status, target, result),
         payload,
       },
-      marksConfirmed: marksConfirmed(target),
+      marksConfirmed: marksConfirmed(target) && !existing.hasConfirmedAt,
       invalidationReason: null,
     },
   };
@@ -244,9 +244,10 @@ function invalidation(
 /**
  * Confirmation has been seen once this state is reached.
  *
- * The service stamps `confirmedAt` only when it is still null, so a setup that
- * loses and regains confirmation keeps the timestamp of the first time — which
- * is the historical fact worth preserving.
+ * A transition marks it only when the stored setup has no `confirmedAt` yet
+ * (`hasConfirmedAt`), so a setup that loses and regains confirmation — or
+ * moves on from CONFIRMATION_DETECTED to POTENTIAL_SETUP — keeps the timestamp
+ * of the first time, which is the historical fact worth preserving.
  */
 function marksConfirmed(status: SetupLifecycleStatus): boolean {
   return status === "CONFIRMATION_DETECTED" || status === "POTENTIAL_SETUP";
