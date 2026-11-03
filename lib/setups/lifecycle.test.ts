@@ -227,6 +227,53 @@ describe("transitions", () => {
     expect(transition.marksConfirmed).toBe(false);
   });
 
+  it("keeps the first confirmation time when confirmation comes back", () => {
+    // Confirmed once, lapsed, and confirmed again: `confirmedAt` already holds
+    // the first time, and overwriting it would erase when that happened.
+    const confirmed = resultWith({ status: "HIGH_RISK", confirmation: "PRESENT" });
+    const stored = {
+      ...existing("WAITING_CONFIRMATION", originOf(confirmed)!),
+      hasConfirmedAt: true,
+    };
+
+    const { transition } = reconcileSetup({ existing: stored, result: confirmed }) as Extract<
+      SetupPlan,
+      { action: "TRANSITION" }
+    >;
+
+    expect(transition.to).toBe("CONFIRMATION_DETECTED");
+    expect(transition.marksConfirmed).toBe(false);
+  });
+
+  it("keeps the confirmation time when a confirmed setup becomes a potential setup", () => {
+    const result = runAnalysis(pullbackIntoSupport());
+    const stored = {
+      ...existing("CONFIRMATION_DETECTED", originOf(result)!),
+      hasConfirmedAt: true,
+    };
+
+    const { transition } = reconcileSetup({ existing: stored, result }) as Extract<
+      SetupPlan,
+      { action: "TRANSITION" }
+    >;
+
+    expect(transition.to).toBe("POTENTIAL_SETUP");
+    expect(transition.marksConfirmed).toBe(false);
+  });
+
+  it("marks a potential setup confirmed when nothing was recorded before", () => {
+    const result = runAnalysis(pullbackIntoSupport());
+    const stored = existing("WAITING_CONFIRMATION", originOf(result)!);
+
+    const { transition } = reconcileSetup({ existing: stored, result }) as Extract<
+      SetupPlan,
+      { action: "TRANSITION" }
+    >;
+
+    expect(transition.to).toBe("POTENTIAL_SETUP");
+    expect(transition.marksConfirmed).toBe(true);
+  });
+
   it("never transitions out of an invalidated setup", () => {
     const result = runAnalysis(pullbackIntoSupport());
     const dead = existing("INVALIDATED", originOf(result)!);

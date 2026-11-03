@@ -108,6 +108,24 @@ describe("bullish rejection", () => {
     expect(types(result, "negative")).toContain("BULLISH_REJECTION");
     expect(result.status).toBe("CONTRADICTED");
   });
+
+  it("ignores a shooting star that never reached the zone", () => {
+    // The same shape as above — upper wick 75% of the range, close at 8% of it,
+    // bearish body — printed wholly above the zone top of 104. The zone was
+    // never tested, so it cannot have rejected anything.
+    const aboveZone = { open: 123, high: 132, low: 120, close: 121, volume: 100 };
+    const result = evaluate([...filler(30, 128), ...makeCandles([aboveZone])]);
+
+    expect(types(result, "negative")).not.toContain("BULLISH_REJECTION");
+    expect(result.status).not.toBe("CONTRADICTED");
+  });
+
+  it("reads a shooting star whose low only just touches the zone top", () => {
+    const touching = { open: 107, high: 116, low: 104, close: 105, volume: 100 };
+    const result = evaluate([...filler(30, 112), ...makeCandles([touching])]);
+
+    expect(types(result, "negative")).toContain("BULLISH_REJECTION");
+  });
 });
 
 describe("higher low and structure break", () => {

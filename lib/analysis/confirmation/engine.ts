@@ -130,6 +130,12 @@ export function evaluateConfirmation(input: ConfirmationInput): ConfirmationResu
  * Negative is the mirror: it reached the zone from above, left a long upper
  * wick, closed in the bottom 40% of its range and closed down. That is the
  * zone rejecting price *downward*, which is the opposite of confirmation.
+ *
+ * Both directions require the candle to have traded into the zone. The entry
+ * zone is always below the price, so `high >= zone.low` alone is always true:
+ * without the contact test, any shooting star anywhere above the zone read as
+ * the zone rejecting price, and contradicted a setup the level had not yet
+ * been asked to defend.
  */
 function bullishRejection(candle: Candle, entry: EntryZone): ConfirmationSignal | null {
   const zone = entry.sourceZone;
@@ -166,6 +172,7 @@ function bullishRejection(candle: Candle, entry: EntryZone): ConfirmationSignal 
   }
 
   if (
+    reachedFromAbove &&
     candle.high >= zone.low &&
     upperWick / range >= REJECTION_MIN_WICK_RATIO &&
     closePosition <= 1 - REJECTION_MIN_CLOSE_POSITION &&
