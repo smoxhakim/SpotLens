@@ -79,6 +79,8 @@ const TONE_BY_TYPE: Record<NotificationEventType, NotificationTone> = {
   CONFIRMATION_EVIDENCE: "WARNING",
   CONFIRMATION_REACHED: "POSITIVE",
   ENTRY_ZONE_REACHED: "INFO",
+  // Telegram-only, so never listed in-app; here because the table is total.
+  SCAN_REPORT: "NEUTRAL",
 };
 
 /**

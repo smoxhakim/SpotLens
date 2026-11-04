@@ -1,7 +1,15 @@
 import { isPrimarySignal, type ConfirmationSignalType } from "@/lib/analysis/confirmation";
 import { ANALYSIS_DISCLAIMER, SPOT_ONLY_NOTE } from "@/lib/constants/disclaimers";
+import { TIMEFRAME_LABELS } from "@/lib/market-data/provider";
+import { LIFECYCLE_LABELS as OPEN_SETUP_LABELS } from "@/lib/setups/labels";
 
 import { ENTRY_ZONE_TOUCH_NOTE } from "./render";
+import {
+  SCAN_REPORT_TIMEFRAME,
+  scanReportDuration,
+  scanReportStamp,
+  type ScanReportFacts,
+} from "./scan-report";
 import { formatAge, utcClock } from "./time";
 import type { LifecycleNotificationEventType, NotificationEvent, SetupFacts } from "./types";
 
@@ -524,6 +532,63 @@ export function formatDailySummary(event: NotificationEvent): string {
   }
 
   lines.push("", footer());
+
+  return lines.join("\n");
+}
+
+/**
+ * The hourly 1h scan report.
+ *
+ * One line per number, because it is read on a phone between other things.
+ * The verdicts are the engine's own words, counted; the open setups use the
+ * lifecycle's labels, so "Confirmation evidence present" reads here exactly as
+ * it does everywhere else. Nothing in it is a recommendation, and a pass with
+ * no potential setup is reported as plainly as one with five.
+ */
+export function formatScanReport(facts: ScanReportFacts): string {
+  const tf = TIMEFRAME_LABELS[SCAN_REPORT_TIMEFRAME];
+  const duration = scanReportDuration(facts.durationMs);
+  const partial = facts.failed > 0;
+  const v = facts.verdicts;
+
+  const lines = [
+    `📋 ${bold(partial ? `${tf} scan report — some markets failed` : `${tf} scan report`)}`,
+    escape(`${scanReportStamp(facts.startedAt)}${duration ? ` · took ${duration}` : ""}`),
+    `${bold("Timeframe")}: ${escape(tf)}`,
+  ];
+
+  // Said, not hidden: the same pass covered another timeframe, and its counts
+  // are deliberately not in this message. The duration cannot be split.
+  if (facts.alsoScanned.length > 0) {
+    lines.push(
+      `_${escape(
+        `This pass also scanned ${facts.alsoScanned.join(" + ")}; those analyses are not ` +
+          "counted here, and the time covers both.",
+      )}_`,
+    );
+  }
+
+  lines.push(
+    "",
+    `${bold("Markets")}: ${escape(facts.markets)} · ${escape(facts.succeeded)} succeeded · ${escape(facts.failed)} failed`,
+  );
+  if (partial) {
+    lines.push(escape("The counts below cover the markets that were analysed."));
+  }
+
+  lines.push(
+    "",
+    `${escape(labelFrom(ANALYSIS_LABELS, "POTENTIAL_SETUP"))}: ${escape(v.potentialSetup)}`,
+    `${escape(labelFrom(ANALYSIS_LABELS, "WAIT_FOR_CONFIRMATION"))}: ${escape(v.waitForConfirmation)}`,
+    `${escape(labelFrom(ANALYSIS_LABELS, "HIGH_RISK"))}: ${escape(v.highRisk)}`,
+    `${escape(labelFrom(ANALYSIS_LABELS, "AVOID"))}: ${escape(v.avoid)}`,
+    "",
+    `${bold("Setups")}: ${escape(facts.setupsCreated)} created · ${escape(facts.setupsInvalidated)} invalidated`,
+    `${bold(`Open ${tf} setups`)}: ${escape(facts.openTotal)}`,
+    ...facts.openSetups.map((g) => `${escape(OPEN_SETUP_LABELS[g.status])}: ${escape(g.count)}`),
+    "",
+    footer(),
+  );
 
   return lines.join("\n");
 }

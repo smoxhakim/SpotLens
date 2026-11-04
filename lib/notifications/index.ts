@@ -29,6 +29,7 @@ export {
 export {
   dedupeKeyForDailySummary,
   dedupeKeyForEntryZone,
+  dedupeKeyForScanReport,
   dedupeKeyForSetupEvent,
   dedupeKeyForSystemError,
   eventTypeForTransition,
@@ -52,6 +53,7 @@ export {
   formatInvalidation,
   formatPotentialSetup,
   formatReplacement,
+  formatScanReport,
   formatStructureChange,
   formatSystemError,
 } from "./telegram-format";
@@ -76,3 +78,19 @@ export {
 export { IN_APP_MARKERS, renderInApp, toneForNotification, type NotificationTone } from "./render";
 
 export { formatAge, utcClock } from "./time";
+
+export {
+  SCAN_REPORT_TIMEFRAME,
+  planScanReport,
+  scanReportDuration,
+  scanReportRecord,
+  scanReportStamp,
+  type OpenLifecycleStatus,
+  type OpenSetupCount,
+  type ReportedEvent,
+  type ReportedResult,
+  type ReportedRun,
+  type ScanReportFacts,
+  type ScanReportPlan,
+  type ScanReportRefusal,
+} from "./scan-report";

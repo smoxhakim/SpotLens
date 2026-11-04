@@ -216,7 +216,7 @@ function findConnection(userId: string, bot: TelegramBot) {
 
 /** A user's settings, falling back to the conservative defaults. */
 export async function getPreferences(userId: string): Promise<NotificationPreferences> {
-  const row = await prisma.notificationPreference.findUnique({ where: { userId } });
+  const row = await readPreferenceRow(userId);
   if (!row) return DEFAULT_PREFERENCES;
 
   return {
@@ -230,7 +230,47 @@ export async function getPreferences(userId: string): Promise<NotificationPrefer
     systemError: row.systemError,
     confirmationAlerts: row.confirmationAlerts,
     entryZoneReached: row.entryZoneReached,
+    scanReport: row.scanReport,
   };
+}
+
+/**
+ * The stored row, readable before the scan-report migration is applied.
+ *
+ * Every delivery path reads preferences through `getPreferences`, and a
+ * full-row read of a table that lacks a column fails outright (P2022) — which
+ * would stop every alert, in-app included, merely because the newest column
+ * was not there yet. So that one failure is answered by reading the columns
+ * that existed before it, with the report switch at its default, off. Any
+ * other error, or a missing column among those, still throws as before.
+ */
+async function readPreferenceRow(userId: string) {
+  try {
+    return await prisma.notificationPreference.findUnique({ where: { userId } });
+  } catch (err) {
+    if (!isMissingColumn(err)) throw err;
+    warnOnce(
+      "notifications:preferences-column",
+      "[notifications] a notification preference column is missing — apply the pending " +
+        "migration. Reading the others; the hourly scan report stays off until then.",
+    );
+    const row = await prisma.notificationPreference.findUnique({
+      where: { userId },
+      select: {
+        inAppEnabled: true,
+        telegramEnabled: true,
+        setupDetected: true,
+        confirmationDetected: true,
+        setupInvalidated: true,
+        structureChanged: true,
+        dailySummary: true,
+        systemError: true,
+        confirmationAlerts: true,
+        entryZoneReached: true,
+      },
+    });
+    return row && { ...row, scanReport: DEFAULT_PREFERENCES.scanReport };
+  }
 }
 
 export async function updatePreferences(
@@ -254,6 +294,7 @@ export async function updatePreferences(
     systemError: row.systemError,
     confirmationAlerts: row.confirmationAlerts,
     entryZoneReached: row.entryZoneReached,
+    scanReport: row.scanReport,
   };
 }
 
@@ -594,6 +635,16 @@ export async function markAllRead(userId: string): Promise<number> {
 
 function hash(value: string): string {
   return createHash("sha256").update(value).digest("hex");
+}
+
+/** P2022: the database lacks a column the client expects — a migration not yet applied. */
+function isMissingColumn(err: unknown): boolean {
+  return (
+    typeof err === "object" &&
+    err !== null &&
+    "code" in err &&
+    (err as { code: unknown }).code === "P2022"
+  );
 }
 
 function isUniqueViolation(err: unknown): boolean {

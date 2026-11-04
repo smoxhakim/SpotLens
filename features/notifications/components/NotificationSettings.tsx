@@ -70,12 +70,14 @@ const BOT_COPY: Record<
  *
  * `inApp` marks the events that are recorded and shown here but never pushed to
  * Telegram, so the switch does not promise a message that will not arrive.
+ * `telegramOnly` marks the reverse: sent to Telegram and not listed here.
  */
 const EVENT_TOGGLES: {
   key: keyof NotificationPreferences;
   label: string;
   hint: string;
   inApp?: boolean;
+  telegramOnly?: boolean;
 }[] = [
   {
     key: "setupDetected",
@@ -113,6 +115,12 @@ const EVENT_TOGGLES: {
     key: "dailySummary",
     label: "Daily scanner summary",
     hint: "One message a day with what every market said, including the no-trade counts.",
+  },
+  {
+    key: "scanReport",
+    label: "Hourly 1h scan report",
+    telegramOnly: true,
+    hint: "One message after each completed 1h scan — about 24 a day — counting the 1h verdicts, setups created and invalidated, and open 1h setups. Needs the Telegram switch above on as well. Turning it off changes no alert.",
   },
   {
     key: "systemError",
@@ -209,7 +217,13 @@ export function NotificationSettings() {
           {EVENT_TOGGLES.map((toggle) => (
             <Toggle
               key={toggle.key}
-              label={toggle.inApp ? `${toggle.label} (in-app only)` : toggle.label}
+              label={
+                toggle.inApp
+                  ? `${toggle.label} (in-app only)`
+                  : toggle.telegramOnly
+                    ? `${toggle.label} (Telegram only)`
+                    : toggle.label
+              }
               hint={toggle.hint}
               checked={Boolean(p[toggle.key])}
               onChange={(v) => save.mutate({ [toggle.key]: v })}
