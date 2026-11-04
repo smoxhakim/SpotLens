@@ -2,18 +2,26 @@ import type { Prisma } from "@prisma/client";
 
 import type { AnalysisResult } from "@/lib/analysis";
 import { isDatabaseConfigured, prisma } from "@/lib/db/prisma";
-import { warnOnce } from "@/lib/log";
 import type { Timeframe } from "@/lib/market-data/provider";
 import type { AnalysisRead } from "@/lib/scanner/freshness";
 import { successfulPassWhere } from "@/lib/scanner/runs";
 import {
+  classifyLifecycleError,
+  isStaleAnalysis,
+  LifecycleConflictError,
+  lifecycleLockKey,
+  readsCanonicalContext,
   reconcileSetup,
   type ExistingSetup,
+  type LifecycleFailure,
   type NoActionCause,
   type PlannedCreate,
   type PlannedTransition,
+  type RecordedCandles,
+  type SetupEventType,
   type SetupLifecycleStatus,
   type SetupPlan,
+  type TransactionPhase,
 } from "@/lib/setups";
 
 /**
@@ -34,6 +42,14 @@ export interface TrackSetupInput {
   analysisSnapshotId?: string | null;
 }
 
+/** One `SetupEvent` a call wrote, so a notification can name it exactly. */
+export interface WrittenSetupEvent {
+  setupId: string;
+  eventId: string;
+  type: SetupEventType;
+  toStatus: SetupLifecycleStatus;
+}
+
 export interface TrackSetupOutcome {
   action: SetupPlan["action"];
   setupId: string | null;
@@ -45,6 +61,15 @@ export interface TrackSetupOutcome {
    * made, so there is no cause to report (`untrackedReasonOf` says unknown).
    */
   cause: NoActionCause | null;
+  /** The setup a REPLACE closed; null for every other action. */
+  replacedSetupId: string | null;
+  /**
+   * Every event this call wrote, in the order it wrote them — the old setup's
+   * INVALIDATED before the new one's CREATED on a REPLACE. Empty when nothing
+   * was written. A notification resolves these ids, never a guess at "the
+   * newest event" or "the setup invalidated most recently on this market".
+   */
+  events: WrittenSetupEvent[];
 }
 
 const NOTHING: TrackSetupOutcome = {
@@ -53,14 +78,54 @@ const NOTHING: TrackSetupOutcome = {
   status: null,
   reason: null,
   cause: null,
+  replacedSetupId: null,
+  events: [],
 };
+
+/**
+ * How every reconciliation runs.
+ *
+ * READ COMMITTED is required, not incidental: each statement takes a fresh
+ * snapshot, so the reads after the lock see whatever its previous holder
+ * committed. Under REPEATABLE READ the snapshot would date from the first
+ * statement — before the lock — and the re-read could miss that commit. The
+ * timeout exceeds the lock wait, so a wait is reported as a lock timeout.
+ */
+const TRANSACTION_OPTIONS = {
+  isolationLevel: "ReadCommitted",
+  maxWait: 5_000,
+  timeout: 10_000,
+} as const;
+
+/** The first try, and one retry after a failure that certainly rolled back. */
+const MAX_ATTEMPTS = 2;
+
+/** How long a writer waits for another writer's lock on the same setup. */
+const LOCK_TIMEOUT = "5s";
+
+/**
+ * How long a transaction may sit idle before Postgres ends it. Without it a
+ * client that vanishes mid-transaction (a laptop sleeping against a remote
+ * database) holds the setup's lock until TCP keepalive notices — over two
+ * hours with the server defaults — and every writer for it times out.
+ */
+const IDLE_IN_TRANSACTION_TIMEOUT = "30s";
 
 /**
  * Reconciles one analysis run against the stored setup for that pair and
  * timeframe.
  *
+ * One transaction per call, holding an advisory lock on the setup's identity
+ * for its whole length: two writers for the same setup — the scanner and a
+ * manual run, say — are serialised, and the second plans against what the
+ * first committed rather than against a row it read before. Every write is on
+ * that transaction and guarded on the state it was planned from, so a
+ * replacement and its events commit together or not at all.
+ *
  * Never throws. Losing lifecycle history must not fail the analysis the user
- * asked for — the same rule the snapshot writer follows.
+ * asked for — the same rule the snapshot writer follows. A failure that
+ * certainly rolled back is retried once; anything else is reported in one line
+ * and returns NOTHING.
  *
  * Writes nothing at all when the state has not moved, which is what stops a
  * scanner re-running every few minutes from filling the table with identical
@@ -69,63 +134,147 @@ const NOTHING: TrackSetupOutcome = {
 export async function trackSetup(input: TrackSetupInput): Promise<TrackSetupOutcome> {
   if (!isDatabaseConfigured) return NOTHING;
 
-  try {
-    const existing = await findOpenSetup(input);
-    const plan = reconcileSetup({ existing, result: input.result });
-
-    switch (plan.action) {
-      case "NONE":
-        return {
-          action: "NONE",
-          setupId: existing?.id ?? null,
-          status: null,
-          reason: plan.reason,
-          cause: plan.cause,
-        };
-
-      case "CREATE": {
-        const id = await createSetup(input, plan.create);
-        return {
-          action: "CREATE",
-          setupId: id,
-          status: plan.create.status,
-          reason: null,
-          cause: null,
-        };
-      }
-
-      case "TRANSITION": {
-        await applyTransition(plan.transition);
-        return {
-          action: "TRANSITION",
-          setupId: plan.transition.setupId,
-          status: plan.transition.to,
-          reason: null,
-          cause: null,
-        };
-      }
-
-      case "REPLACE": {
-        // Ordered, and in one transaction: the old setup is closed before the
-        // new one exists, so a reader can never see two open setups on the same
-        // level.
-        const id = await prisma.$transaction(async () => {
-          await applyTransition(plan.invalidate);
-          return createSetup(input, plan.create);
-        });
-        return {
-          action: "REPLACE",
-          setupId: id,
-          status: plan.create.status,
-          reason: null,
-          cause: null,
-        };
-      }
-    }
-  } catch (err) {
-    warnOnce("setups:track", "[setups] could not update setup lifecycle.", err);
-    return NOTHING;
+  // A property of the analysis rather than of the stored state, so it is judged
+  // before any transaction: a read that does not speak for this setup should
+  // not even queue behind the writers that do.
+  if (!readsCanonicalContext(input.timeframe, input.result)) {
+    return {
+      ...NOTHING,
+      reason:
+        "Read against a higher timeframe other than this timeframe's own, so it does not speak for the setup tracked here.",
+      cause: "NON_CANONICAL_CONTEXT",
+    };
   }
+
+  for (let attempt = 1; ; attempt += 1) {
+    let phase: TransactionPhase = "BEGIN";
+
+    try {
+      return await prisma.$transaction(async (tx) => {
+        phase = "BODY";
+        const outcome = await reconcileLocked(tx, input, new Date());
+        phase = "COMMIT";
+        return outcome;
+      }, TRANSACTION_OPTIONS);
+    } catch (err) {
+      const failure = classifyLifecycleError(err, phase);
+      if (failure.kind === "RETRY" && attempt < MAX_ATTEMPTS) continue;
+      reportFailure(input, failure);
+      return NOTHING;
+    }
+  }
+}
+
+/**
+ * One attempt, inside the transaction. Nothing here touches the global client:
+ * a statement outside `tx` would run on another connection, outside the lock,
+ * and commit on its own.
+ */
+async function reconcileLocked(
+  tx: Prisma.TransactionClient,
+  input: TrackSetupInput,
+  now: Date,
+): Promise<TrackSetupOutcome> {
+  // This transaction's only (`is_local`), so a pooled connection goes back to
+  // the pool with the server's defaults.
+  await tx.$executeRaw`SELECT set_config('lock_timeout', ${LOCK_TIMEOUT}, true), set_config('idle_in_transaction_session_timeout', ${IDLE_IN_TRANSACTION_TIMEOUT}, true)`;
+
+  // Keyed on exactly the identity `findOpenSetup` reads on, and 64-bit. Held
+  // until COMMIT or ROLLBACK and released by them — or by the backend exiting —
+  // so it can never outlive this call. `$executeRaw`, because the function
+  // returns void, which `$queryRaw` cannot deserialise.
+  await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${lifecycleLockKey(input)}, 0))`;
+
+  const existing = await findOpenSetup(input, tx);
+
+  // A stale *read* is impossible under the lock; a stale *analysis* is not. An
+  // older candle must not move a setup back, nor re-create a level a newer
+  // analysis has just closed.
+  if (
+    isStaleAnalysis({
+      timeframe: input.timeframe,
+      analysedCandleOpen: input.result.read.lastCandleTime,
+      recorded: await recordedCandles(input, tx),
+    })
+  ) {
+    return {
+      ...NOTHING,
+      reason: "An older candle than one already recorded for this setup; nothing was changed.",
+      cause: "STALE_ANALYSIS",
+    };
+  }
+
+  const plan = reconcileSetup({ existing, result: input.result });
+
+  switch (plan.action) {
+    case "NONE":
+      return {
+        action: "NONE",
+        setupId: existing?.id ?? null,
+        status: null,
+        reason: plan.reason,
+        cause: plan.cause,
+        replacedSetupId: null,
+        events: [],
+      };
+
+    case "CREATE": {
+      const created = await createSetup(tx, input, plan.create, now);
+      return {
+        action: "CREATE",
+        setupId: created.setupId,
+        status: plan.create.status,
+        reason: null,
+        cause: null,
+        replacedSetupId: null,
+        events: [created],
+      };
+    }
+
+    case "TRANSITION": {
+      const moved = await applyTransition(tx, input.userId, plan.transition, now);
+      return {
+        action: "TRANSITION",
+        setupId: plan.transition.setupId,
+        status: plan.transition.to,
+        reason: null,
+        cause: null,
+        replacedSetupId: null,
+        events: [moved],
+      };
+    }
+
+    case "REPLACE": {
+      // Ordered, and in this one transaction: the old setup is closed before
+      // the new one exists, so a reader can never see two open setups on the
+      // same level — and neither half can commit without the other.
+      const closed = await applyTransition(tx, input.userId, plan.invalidate, now);
+      const created = await createSetup(tx, input, plan.create, now);
+      return {
+        action: "REPLACE",
+        setupId: created.setupId,
+        status: plan.create.status,
+        reason: null,
+        cause: null,
+        replacedSetupId: plan.invalidate.setupId,
+        events: [closed, created],
+      };
+    }
+  }
+}
+
+/**
+ * One line per failure, naming what it means. A code, never the provider's
+ * message, which can carry query text. "May have been committed" is the one
+ * case where a change can exist without its notification — said, not hidden.
+ */
+function reportFailure(input: TrackSetupInput, failure: LifecycleFailure): void {
+  const market = `${input.tradingPairId} ${input.timeframe}`;
+  console.warn(
+    failure.kind === "UNCERTAIN"
+      ? `[setups] lifecycle outcome unknown for ${market} (${failure.code}) — the change may have been committed; its notification will not be sent.`
+      : `[setups] lifecycle not updated for ${market} (${failure.code}) — nothing was written; the next analysis reconciles it.`,
+  );
 }
 
 /**
@@ -136,8 +285,11 @@ export async function trackSetup(input: TrackSetupInput): Promise<TrackSetupOutc
  * more than one is somehow open; `trackSetup` closes the old one whenever the
  * level changes, so that should not happen.
  */
-async function findOpenSetup(input: TrackSetupInput): Promise<ExistingSetup | null> {
-  const row = await prisma.trackedSetup.findFirst({
+async function findOpenSetup(
+  input: TrackSetupInput,
+  db: Prisma.TransactionClient,
+): Promise<ExistingSetup | null> {
+  const row = await db.trackedSetup.findFirst({
     where: {
       userId: input.userId,
       tradingPairId: input.tradingPairId,
@@ -164,11 +316,41 @@ async function findOpenSetup(input: TrackSetupInput): Promise<ExistingSetup | nu
   };
 }
 
-async function createSetup(input: TrackSetupInput, create: PlannedCreate): Promise<string> {
-  const { snapshot } = create;
-  const now = new Date();
+/**
+ * The newest candle times recorded for this identity, across every setup it
+ * has had — an invalidated one included, since that is the state an older
+ * analysis must not undo. One aggregate; no row is returned.
+ */
+async function recordedCandles(
+  input: TrackSetupInput,
+  db: Prisma.TransactionClient,
+): Promise<RecordedCandles> {
+  const [row] = await db.$queryRaw<
+    { evaluated: bigint | number | null; unstamped: Date | null }[]
+  >`SELECT
+      max(("e"."payload"->>'evaluatedAt')::bigint) FILTER (WHERE "e"."payload" ? 'evaluatedAt') AS "evaluated",
+      max("e"."createdAt") FILTER (WHERE "e"."payload" IS NULL OR NOT ("e"."payload" ? 'evaluatedAt')) AS "unstamped"
+    FROM "SetupEvent" "e"
+    JOIN "TrackedSetup" "s" ON "s"."id" = "e"."setupId"
+    WHERE "s"."userId" = ${input.userId}
+      AND "s"."tradingPairId" = ${input.tradingPairId}
+      AND "s"."timeframe" = ${input.timeframe}::"Timeframe"`;
 
-  const row = await prisma.trackedSetup.create({
+  return {
+    newestEvaluatedAt: row?.evaluated === null || row === undefined ? null : Number(row.evaluated),
+    newestUnstampedAt: row?.unstamped ? row.unstamped.getTime() : null,
+  };
+}
+
+async function createSetup(
+  db: Prisma.TransactionClient,
+  input: TrackSetupInput,
+  create: PlannedCreate,
+  now: Date,
+): Promise<WrittenSetupEvent> {
+  const { snapshot } = create;
+
+  const row = await db.trackedSetup.create({
     data: {
       userId: input.userId,
       tradingPairId: input.tradingPairId,
@@ -200,46 +382,70 @@ async function createSetup(input: TrackSetupInput, create: PlannedCreate): Promi
         },
       },
     },
-    select: { id: true },
+    select: { id: true, events: { select: { id: true } } },
   });
 
-  return row.id;
+  const event = row.events[0];
+  if (!event) throw new Error("A created setup came back without its CREATED event.");
+
+  return { setupId: row.id, eventId: event.id, type: create.event.type, toStatus: create.status };
 }
 
 /**
  * Applies one transition and appends its event.
  *
  * The snapshot columns are never named here — that is what makes them
- * immutable. `confirmedAt` is stamped only when the planner marks it, which it
- * does only while the row read for this plan still had none, so a setup that
- * loses and regains confirmation keeps the time of the first one.
+ * immutable. The status write is guarded on the state the plan was made from,
+ * so an INVALIDATED row can never be moved again and a plan that no longer
+ * matches the row is refused (and retried from a fresh read) rather than
+ * applied. `confirmedAt` is stamped only when the planner marks it — only while
+ * the row read for this plan had none — and only where it is still null, so a
+ * setup that loses and regains confirmation keeps the time of the first one.
  */
-async function applyTransition(transition: PlannedTransition): Promise<void> {
-  const now = new Date();
+async function applyTransition(
+  db: Prisma.TransactionClient,
+  userId: string,
+  transition: PlannedTransition,
+  now: Date,
+): Promise<WrittenSetupEvent> {
   const invalidating = transition.to === "INVALIDATED";
 
-  await prisma.$transaction([
-    prisma.trackedSetup.update({
-      where: { id: transition.setupId },
-      data: {
-        status: transition.to,
-        ...(transition.marksConfirmed ? { confirmedAt: { set: now } } : {}),
-        ...(invalidating
-          ? { invalidatedAt: now, invalidationReason: transition.invalidationReason }
-          : {}),
-      },
-    }),
-    prisma.setupEvent.create({
-      data: {
-        setupId: transition.setupId,
-        type: transition.event.type,
-        fromStatus: transition.from,
-        toStatus: transition.to,
-        detail: transition.event.detail,
-        payload: transition.event.payload ? toJson(transition.event.payload) : undefined,
-      },
-    }),
-  ]);
+  const moved = await db.trackedSetup.updateMany({
+    where: { id: transition.setupId, userId, status: transition.from },
+    data: {
+      status: transition.to,
+      ...(invalidating
+        ? { invalidatedAt: now, invalidationReason: transition.invalidationReason }
+        : {}),
+    },
+  });
+  if (moved.count !== 1) throw new LifecycleConflictError(transition.setupId, transition.from);
+
+  if (transition.marksConfirmed) {
+    await db.trackedSetup.updateMany({
+      where: { id: transition.setupId, confirmedAt: null },
+      data: { confirmedAt: now },
+    });
+  }
+
+  const event = await db.setupEvent.create({
+    data: {
+      setupId: transition.setupId,
+      type: transition.event.type,
+      fromStatus: transition.from,
+      toStatus: transition.to,
+      detail: transition.event.detail,
+      payload: transition.event.payload ? toJson(transition.event.payload) : undefined,
+    },
+    select: { id: true },
+  });
+
+  return {
+    setupId: transition.setupId,
+    eventId: event.id,
+    type: transition.event.type,
+    toStatus: transition.to,
+  };
 }
 
 export interface ListSetupsQuery {
