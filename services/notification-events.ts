@@ -1,3 +1,5 @@
+import type { SetupEvent, TrackedSetup } from "@prisma/client";
+
 import { prisma } from "@/lib/db/prisma";
 import type { Timeframe } from "@/lib/market-data/provider";
 import {
@@ -23,6 +25,13 @@ import type { SetupLifecycleStatus } from "@/lib/setups";
  * the stored row guarantees a notification describes exactly what was recorded,
  * not a re-derivation that could drift from it.
  *
+ * Which row is not looked up — it is named. The lifecycle reports the id of
+ * every `SetupEvent` it wrote, and this reads exactly those, scoped to the
+ * owner in the query. It used to take "the newest event on the setup", which
+ * another writer's later event could replace, and to find a replaced setup as
+ * "the one invalidated most recently on this market", for any account. An
+ * event the lifecycle did not name is not notified rather than guessed.
+ *
  * The `SetupEvent` id also becomes the deduplication key, so identity comes
  * from the lifecycle rather than being invented here.
  */
@@ -34,38 +43,15 @@ export async function eventsFromScan(input: {
   const at = input.now ?? Date.now();
   const events: NotificationEvent[] = [];
 
-  const setupIds = input.scannerEvents
-    .map((event) => event.setupId)
-    .filter((id): id is string => id !== null);
+  // Failures name no event, and nothing is looked up for them.
+  const eventIds = input.scannerEvents
+    .map((event) => event.eventId)
+    .filter((id): id is string => typeof id === "string");
 
-  // A setup replaced by one on a different level is reported by the scanner
-  // with no id — the lifecycle hands back the *new* setup's id, and the old
-  // one's is not part of that outcome. Skipping those would drop the single
-  // most important thing this layer says: the level you were waiting on is
-  // gone. Resolved here from what Phase D already stored, so neither the
-  // scanner nor the lifecycle needs changing.
-  //
-  // That missing id is also how a replacement is *identified*. It is the
-  // scanner's own REPLACE signal — `eventsForOutcome` emits the closing half
-  // with `setupId: null` and the opening half with the new setup's id — so
-  // nothing here has to re-derive replacement semantics from prices, or match
-  // on the wording of a reason string.
-  const orphaned = input.scannerEvents
-    .filter((event) => event.type === "SETUP_INVALIDATED" && event.setupId === null)
-    .map((event) => ({
-      symbol: event.symbol,
-      timeframe: event.timeframe,
-      replacementSetupId: replacementFor(input.scannerEvents, event.symbol, event.timeframe),
-    }));
-
-  const resolved = orphaned.length > 0 ? await resolveInvalidated(orphaned) : new Map();
-
-  const transitions =
-    setupIds.length > 0
-      ? await loadLatestTransitions(setupIds)
-      : new Map<string, LoadedTransition>();
-
-  for (const [key, value] of resolved) transitions.set(key, value);
+  const written =
+    eventIds.length > 0
+      ? await loadWrittenEvents(input.userId, eventIds)
+      : new Map<string, StoredEvent>();
 
   for (const scannerEvent of input.scannerEvents) {
     if (scannerEvent.type === "ANALYSIS_FAILED") {
@@ -73,11 +59,22 @@ export async function eventsFromScan(input: {
       continue;
     }
 
-    const lookupKey =
-      scannerEvent.setupId ?? orphanKey(scannerEvent.symbol, scannerEvent.timeframe);
+    const stored = scannerEvent.eventId ? written.get(scannerEvent.eventId) : undefined;
+    if (!stored) continue;
 
-    const transition = transitions.get(lookupKey);
-    if (!transition) continue;
+    // A setup replaced by one on a different level is reported by the scanner
+    // with no `setupId` — that missing id is the scanner's own REPLACE signal
+    // (`eventsForOutcome` emits the closing half without it and the opening
+    // half with the new setup's), so nothing here has to re-derive replacement
+    // semantics from prices or match on the wording of a reason. The closing
+    // half still names its exact event, and the replacement's zone is read
+    // from the opening half's row, loaded in the same query.
+    const replacement =
+      scannerEvent.type === "SETUP_INVALIDATED" && scannerEvent.setupId === null
+        ? replacementContext(input.scannerEvents, scannerEvent, written)
+        : NOT_A_REPLACEMENT;
+
+    const transition = toTransition(stored.setup, stored, replacement);
 
     // Structure is only "changed" when the confirmation engine says a level
     // broke or was reclaimed — a state change on its own is not one.
@@ -108,81 +105,55 @@ export async function eventsFromScan(input: {
   return events;
 }
 
-/** Key for a setup identified by market rather than by id. */
-function orphanKey(symbol: string, timeframe: string): string {
-  return `orphan:${symbol}:${timeframe}`;
+type StoredEvent = SetupEvent & { setup: TrackedSetup };
+
+/**
+ * Exactly these events, with their setups — and only this owner's. One query
+ * for the batch: a scan can touch dozens of setups.
+ */
+async function loadWrittenEvents(
+  userId: string,
+  eventIds: string[],
+): Promise<Map<string, StoredEvent>> {
+  const rows = await prisma.setupEvent.findMany({
+    where: { id: { in: eventIds }, setup: { userId } },
+    include: { setup: true },
+  });
+
+  return new Map(rows.map((row) => [row.id, row]));
 }
 
 /**
  * The other half of a REPLACE.
  *
- * `eventsForOutcome` emits the pair together for one market, so the creation
- * that accompanies an id-less invalidation is the replacement setup. Returns
- * null when the invalidation stands alone, which is the case the lifecycle
- * produces when the level moved *and* confirmation was contradicted — nothing
- * replaced that setup, and it is a genuine invalidation.
+ * `eventsForOutcome` emits the pair together for one market, and a pass
+ * analyses each market and timeframe once, so the creation in this pass on the
+ * same market is the replacement. Its zone comes from the row its own event id
+ * resolved — not a second lookup. With no creation the invalidation stands
+ * alone, which is the case the lifecycle produces when the level moved *and*
+ * confirmation was contradicted: nothing replaced that setup.
  */
-function replacementFor(
+function replacementContext(
   scannerEvents: ScannerEvent[],
-  symbol: string,
-  timeframe: string,
-): string | null {
-  const created = scannerEvents.find(
+  closing: ScannerEvent,
+  written: Map<string, StoredEvent>,
+): ReplacementContext {
+  const opening = scannerEvents.find(
     (event) =>
       event.type === "SETUP_CREATED" &&
-      event.symbol === symbol &&
-      event.timeframe === timeframe &&
+      event.symbol === closing.symbol &&
+      event.timeframe === closing.timeframe &&
       event.setupId !== null,
   );
+  if (!opening) return NOT_A_REPLACEMENT;
 
-  return created?.setupId ?? null;
-}
+  const created = opening.eventId ? written.get(opening.eventId) : undefined;
 
-/**
- * Finds the setup behind an invalidation the scanner could not name.
- *
- * Matched on the market and timeframe, taking the most recently invalidated
- * one — which is the setup the replacement just closed. The notification's
- * identity is still the `SetupEvent` id, so this cannot produce a duplicate.
- */
-async function resolveInvalidated(
-  scannerEvents: { symbol: string; timeframe: string; replacementSetupId: string | null }[],
-): Promise<Map<string, LoadedTransition>> {
-  const map = new Map<string, LoadedTransition>();
-
-  for (const scannerEvent of scannerEvents) {
-    const setup = await prisma.trackedSetup.findFirst({
-      where: {
-        status: "INVALIDATED",
-        timeframe: scannerEvent.timeframe as Timeframe,
-        tradingPair: { exchangeSymbol: scannerEvent.symbol },
-      },
-      orderBy: { invalidatedAt: "desc" },
-      include: { events: { orderBy: { createdAt: "desc" }, take: 1 } },
-    });
-
-    if (!setup) continue;
-
-    // The zone the replacement anchored to, read from the row Phase D just
-    // wrote. Shown to the reader so "re-anchored" names both levels rather
-    // than asking them to go and look.
-    const replacement = scannerEvent.replacementSetupId
-      ? await prisma.trackedSetup.findUnique({
-          where: { id: scannerEvent.replacementSetupId },
-          select: { originZoneLow: true, originZoneHigh: true },
-        })
-      : null;
-
-    const loaded = toTransition(setup, {
-      isReplacement: scannerEvent.replacementSetupId !== null,
-      replacementZoneLow: replacement === null ? null : Number(replacement.originZoneLow),
-      replacementZoneHigh: replacement === null ? null : Number(replacement.originZoneHigh),
-    });
-
-    if (loaded) map.set(orphanKey(scannerEvent.symbol, scannerEvent.timeframe), loaded);
-  }
-
-  return map;
+  return {
+    isReplacement: true,
+    replacementZoneLow: created ? Number(created.setup.originZoneLow) : null,
+    replacementZoneHigh: created ? Number(created.setup.originZoneHigh) : null,
+  };
 }
 
 interface LoadedTransition {
@@ -195,9 +166,9 @@ interface LoadedTransition {
 /**
  * The most recent lifecycle transition for each setup, with its snapshot.
  *
- * One query for the batch rather than one per event: a scan can touch dozens of
- * setups, and the alternative is dozens of round trips for data that is already
- * indexed together.
+ * For the entry-zone monitor only (`loadSetupFacts`), which wants where the
+ * last closed-candle scan left a setup it is about to alert on. A scan's own
+ * notifications never use it: they name their events.
  */
 async function loadLatestTransitions(setupIds: string[]): Promise<Map<string, LoadedTransition>> {
   const setups = await prisma.trackedSetup.findMany({
@@ -208,8 +179,8 @@ async function loadLatestTransitions(setupIds: string[]): Promise<Map<string, Lo
   const map = new Map<string, LoadedTransition>();
 
   for (const setup of setups) {
-    const loaded = toTransition(setup);
-    if (loaded) map.set(setup.id, loaded);
+    const latest = setup.events[0];
+    if (latest) map.set(setup.id, toTransition(setup, latest));
   }
 
   return map;
@@ -229,10 +200,6 @@ export async function loadSetupFacts(setupIds: string[]): Promise<Map<string, Se
   return new Map([...transitions].map(([id, transition]) => [id, transition.facts]));
 }
 
-type SetupWithLatestEvent = Awaited<
-  ReturnType<typeof prisma.trackedSetup.findFirst<{ include: { events: true } }>>
->;
-
 /** What the caller knows that the stored row does not say on its own. */
 interface ReplacementContext {
   isReplacement: boolean;
@@ -246,66 +213,62 @@ const NOT_A_REPLACEMENT: ReplacementContext = {
   replacementZoneHigh: null,
 };
 
-/** Reads one stored setup and its latest transition into notification facts. */
+/** Reads one stored setup and one of its transitions into notification facts. */
 function toTransition(
-  setup: NonNullable<SetupWithLatestEvent>,
+  setup: TrackedSetup,
+  event: SetupEvent,
   replacement: ReplacementContext = NOT_A_REPLACEMENT,
-): LoadedTransition | null {
-  {
-    const event = setup.events[0];
-    if (!event) return null;
+): LoadedTransition {
+  const snapshot = (setup.snapshot ?? {}) as {
+    entryReason?: string;
+    statusReason?: string;
+    trend?: string;
+    mtfAgreement?: string | null;
+    regime?: { direction: string; volatility: string } | null;
+  };
 
-    const snapshot = (setup.snapshot ?? {}) as {
-      entryReason?: string;
-      statusReason?: string;
-      trend?: string;
-      mtfAgreement?: string | null;
-      regime?: { direction: string; volatility: string } | null;
-    };
+  const payload = (event.payload ?? null) as {
+    signals?: { type: string; signal: string; title: string; detail: string }[];
+    explanation?: string;
+  } | null;
 
-    const payload = (event.payload ?? null) as {
-      signals?: { type: string; signal: string; title: string; detail: string }[];
-      explanation?: string;
-    } | null;
-
-    return {
-      eventId: event.id,
-      at: event.createdAt.getTime(),
-      timeframe: setup.timeframe,
-      facts: {
-        setupId: setup.id,
-        lifecycleStatus: event.toStatus as SetupLifecycleStatus,
-        previousStatus: (event.fromStatus as SetupLifecycleStatus | null) ?? null,
-        entryLow: Number(setup.entryLow),
-        entryHigh: Number(setup.entryHigh),
-        stopLoss: Number(setup.stopLoss),
-        takeProfit1: setup.takeProfit1 === null ? null : Number(setup.takeProfit1),
-        takeProfit2: setup.takeProfit2 === null ? null : Number(setup.takeProfit2),
-        riskReward: Number(setup.riskReward),
-        riskRewardIsSynthetic: setup.riskRewardIsSynthetic,
-        score: setup.score,
-        scoreGrade: setup.scoreGrade,
-        analysisStatus: setup.analysisStatus,
-        trend: snapshot.trend ?? "UNKNOWN",
-        mtfAgreement: snapshot.mtfAgreement ?? null,
-        supportLow: Number(setup.originZoneLow),
-        supportHigh: Number(setup.originZoneHigh),
-        entryReason: snapshot.entryReason ?? "",
-        statusReason: snapshot.statusReason ?? event.detail,
-        confirmationSignals: payload?.signals ?? [],
-        confirmationExplanation: payload?.explanation ?? null,
-        invalidationReason: setup.invalidationReason,
-        regime: snapshot.regime ?? null,
-        isReplacement: replacement.isReplacement,
-        replacementZoneLow: replacement.replacementZoneLow,
-        replacementZoneHigh: replacement.replacementZoneHigh,
-        // Phase D stamps `confirmedAt` the first time a setup reaches
-        // CONFIRMATION_DETECTED or POTENTIAL_SETUP and never clears it, so this
-        // is "did this level ever get going" read straight off the record.
-        everConfirmed: setup.confirmedAt !== null,
-      },
-    };
-  }
+  return {
+    eventId: event.id,
+    at: event.createdAt.getTime(),
+    timeframe: setup.timeframe,
+    facts: {
+      setupId: setup.id,
+      lifecycleStatus: event.toStatus as SetupLifecycleStatus,
+      previousStatus: (event.fromStatus as SetupLifecycleStatus | null) ?? null,
+      entryLow: Number(setup.entryLow),
+      entryHigh: Number(setup.entryHigh),
+      stopLoss: Number(setup.stopLoss),
+      takeProfit1: setup.takeProfit1 === null ? null : Number(setup.takeProfit1),
+      takeProfit2: setup.takeProfit2 === null ? null : Number(setup.takeProfit2),
+      riskReward: Number(setup.riskReward),
+      riskRewardIsSynthetic: setup.riskRewardIsSynthetic,
+      score: setup.score,
+      scoreGrade: setup.scoreGrade,
+      analysisStatus: setup.analysisStatus,
+      trend: snapshot.trend ?? "UNKNOWN",
+      mtfAgreement: snapshot.mtfAgreement ?? null,
+      supportLow: Number(setup.originZoneLow),
+      supportHigh: Number(setup.originZoneHigh),
+      entryReason: snapshot.entryReason ?? "",
+      statusReason: snapshot.statusReason ?? event.detail,
+      confirmationSignals: payload?.signals ?? [],
+      confirmationExplanation: payload?.explanation ?? null,
+      invalidationReason: setup.invalidationReason,
+      regime: snapshot.regime ?? null,
+      isReplacement: replacement.isReplacement,
+      replacementZoneLow: replacement.replacementZoneLow,
+      replacementZoneHigh: replacement.replacementZoneHigh,
+      // Phase D stamps `confirmedAt` the first time a setup reaches
+      // CONFIRMATION_DETECTED or POTENTIAL_SETUP and never clears it, so this
+      // is "did this level ever get going" read straight off the record.
+      everConfirmed: setup.confirmedAt !== null,
+    },
+  };
 }
 
 function systemErrorEvent(

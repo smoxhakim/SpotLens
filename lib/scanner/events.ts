@@ -16,10 +16,22 @@ export interface ScannerEvent {
   type: ScannerEventType;
   symbol: string;
   timeframe: string;
+  /**
+   * The setup this is about. Null on the closing half of a REPLACE — that null
+   * is the replacement signal — and on a failure.
+   */
   setupId: string | null;
   lifecycleStatus: SetupLifecycleStatus | null;
   failureCategory: ScannerFailureCategory | null;
   detail: string;
+  /**
+   * The `SetupEvent` the lifecycle wrote for this, exactly — what a
+   * notification is built from and deduplicated on. Null when there is none
+   * (a failure) or the outcome did not name one.
+   */
+  eventId: string | null;
+  /** The setup a REPLACE closed, on its closing half only. */
+  closedSetupId: string | null;
 }
 
 /** What the lifecycle service reported after one market was analysed. */
@@ -27,6 +39,10 @@ export interface LifecycleOutcome {
   action: "NONE" | "CREATE" | "TRANSITION" | "REPLACE";
   setupId: string | null;
   status: SetupLifecycleStatus | null;
+  /** The setup a REPLACE closed. */
+  replacedSetupId?: string | null;
+  /** The events the lifecycle wrote, by setup. */
+  events?: { setupId: string; eventId: string }[];
 }
 
 /**
@@ -50,12 +66,18 @@ export function eventsForOutcome(input: {
 }): ScannerEvent[] {
   const { outcome, symbol, timeframe, detail } = input;
 
+  // The event the lifecycle wrote for a given setup, by id — never inferred.
+  const eventIdFor = (setupId: string | null | undefined): string | null =>
+    setupId ? (outcome.events?.find((event) => event.setupId === setupId)?.eventId ?? null) : null;
+
   const base = {
     symbol,
     timeframe,
     setupId: outcome.setupId,
     lifecycleStatus: outcome.status,
     failureCategory: null,
+    eventId: eventIdFor(outcome.setupId),
+    closedSetupId: null,
   };
 
   switch (outcome.action) {
@@ -82,6 +104,8 @@ export function eventsForOutcome(input: {
           setupId: null,
           lifecycleStatus: "INVALIDATED",
           detail: "The entry moved to a different level, so the previous setup was closed.",
+          eventId: eventIdFor(outcome.replacedSetupId),
+          closedSetupId: outcome.replacedSetupId ?? null,
         },
         { ...base, type: "SETUP_CREATED", detail },
       ];
@@ -103,5 +127,7 @@ export function failureEvent(input: {
     lifecycleStatus: null,
     failureCategory: input.category,
     detail: input.message,
+    eventId: null,
+    closedSetupId: null,
   };
 }

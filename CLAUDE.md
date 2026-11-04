@@ -78,6 +78,42 @@ make that unnecessary most of the time.
   not a correction — rewriting them would destroy the record of what was
   actually on offer. Lifecycle columns change, and every change appends a
   `SetupEvent`.
+- **A lifecycle write is one transaction under the setup's lock.**
+  `services/setups.ts` is the only writer, and every `trackSetup` call is one
+  READ COMMITTED interactive transaction that sets `lock_timeout` 5 s and
+  `idle_in_transaction_session_timeout` 30 s (`set_config(…, true)`, this
+  transaction's only), takes `pg_advisory_xact_lock(hashtextextended(key, 0))`,
+  and only then reads. The key (`lifecycleLockKey`, `lib/setups/conflict.ts`)
+  is **exactly** the identity `findOpenSetup` reads on — user, pair, entry
+  timeframe — never narrower: two writers holding different locks could read
+  the same open setup and both create one. READ COMMITTED is required: under
+  REPEATABLE READ the re-read's snapshot predates the lock. Every statement is
+  on `tx`; every status write is `updateMany` guarded on `{ id, userId, status:
+from }` and refused as `LifecycleConflictError` unless it moved one row, so
+  an INVALIDATED row is never moved again; `confirmedAt` is stamped only where
+  still null. A REPLACE's invalidation, creation and both events commit
+  together or not at all. Two guards run before the planner and write nothing:
+  `readsCanonicalContext` (`lib/setups/context.ts`) admits only an analysis
+  read against the entry timeframe's own higher timeframe
+  (`defaultHigherTimeframe`; none for W1) — the higher timeframe is not part of
+  identity and no column records it, so an H1 run against D1 from the MTF route
+  would otherwise invalidate or freeze a verdict into the scanner's H1 setup —
+  cause NON_CANONICAL_CONTEXT, judged before any transaction. And
+  `isStaleAnalysis` refuses an analysis of an older candle than any event
+  recorded for the identity (STALE_ANALYSIS, `setupId: null`); an event with
+  no confirmation payload — the "engine offered no setup" invalidation — is
+  bounded by the candle that had closed when it was written, so it can only
+  refuse more. Retried once, and only after a certain rollback
+  (`classifyLifecycleError`): our conflict, `55P03`, P2034, or a transaction
+  that could not start. Prisma's P2028 timeout is never retried. An error after
+  the callback finished is UNCERTAIN — it may have committed — and is logged as
+  "may have been committed; its notification will not be sent". One log line
+  per failure, a code and never the provider's message. `trackSetup` still
+  never throws. The outcome carries `events` (every `SetupEvent` it wrote) and
+  `replacedSetupId`. No migration and no partial unique index: the lock is
+  cooperative, so a writer outside `trackSetup` (psql, Studio, the e2e specs'
+  direct creates) is unprotected. Real-Postgres tests:
+  `services/setups.db.test.ts` (opt-in `SETUPS_TEST_DATABASE_URL`).
 - **The scanner has no strategy of its own.** `services/scanner.ts` calls the
   same `runAnalysis` and the same `trackSetup` everything else does; all its
   rules (scheduling, retries, ranking, failure classes) are pure functions in
@@ -220,7 +256,15 @@ make that unnecessary most of the time.
   `STRUCTURE_BREAK` or `RECLAIM` — a plain `SETUP_FORMING →
 WAITING_CONFIRMATION` is price arriving somewhere, not structure changing,
   and says nothing. Dedupe is Phase D's `SetupEvent.id`, enforced by a unique
-  index, so re-observing an unchanged setup cannot notify twice.
+  index, so re-observing an unchanged setup cannot notify twice. A scan's
+  notifications name their events: `ScannerEvent.eventId` (and `closedSetupId`
+  on a REPLACE's closing half, which keeps `setupId: null` as the replacement
+  signal) carries the id `trackSetup` wrote, and `eventsFromScan` loads exactly
+  those rows with `setup.userId` in the query. It used to take the newest event
+  per setup and "the setup invalidated most recently on this market" for any
+  owner; an event the lifecycle did not name is now not notified rather than
+  guessed. `loadSetupFacts` (the entry-zone monitor's) still reads the latest
+  transition, which is what it wants.
 - **The entry-zone monitor reads a live price, and says one thing once.**
   `ENTRY_ZONE_REACHED` is the one notification not derived from a closed
   candle or a `SetupEvent` — a deliberate, scoped exception to the two rules

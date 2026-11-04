@@ -15,6 +15,21 @@ export {
   TERMINAL_STATUS,
 } from "./lifecycle";
 export { confirmationCaveat, LIFECYCLE_LABELS, lifecycleLabel } from "./labels";
+export { readsCanonicalContext } from "./context";
+export {
+  classifyLifecycleError,
+  isStaleAnalysis,
+  LifecycleConflictError,
+  lifecycleLockKey,
+  newestRecordedCandle,
+} from "./conflict";
+export type {
+  LifecycleFailure,
+  LifecycleFailureKind,
+  RecordedCandles,
+  SetupIdentity,
+  TransactionPhase,
+} from "./conflict";
 export type {
   ConfirmationPayload,
   ExistingSetup,

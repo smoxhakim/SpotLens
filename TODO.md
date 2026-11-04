@@ -32,7 +32,49 @@ open items are collected here.
       image has still never been built.
 - [ ] Optional: tighten CSP off `unsafe-inline`/`unsafe-eval` via nonces.
 
-## Confirmation fixes (on `fix/confirmation-wick-and-confirmed-at`, awaiting review)
+## Stage 1C: lifecycle transactions (on `feat/stage-1c-lifecycle-transactions`, awaiting review)
+
+Concurrency and transaction safety for the one lifecycle writer. Code only: no
+migration, no index, no change to identity, the planner or any golden file.
+
+- [x] **One transaction per `trackSetup` call, every statement on `tx`.** The
+      REPLACE `$transaction` callback ignored `tx`, so its two writes committed
+      separately (2–139 ms apart on the local database; no damage on record).
+- [x] **A per-identity advisory lock** (64-bit, transaction-scoped, keyed on
+      exactly user + pair + entry timeframe), with `lock_timeout` 5 s and
+      `idle_in_transaction_session_timeout` 30 s set for that transaction only.
+- [x] **Guarded writes**: `updateMany` on the planned-from status; an
+      INVALIDATED row is never moved; `confirmedAt` stamped only where null.
+- [x] **Stale-analysis guard**, including events with no confirmation payload
+      (the newest event on 32 of 168 local keys), bounded by write time.
+- [x] **Canonical-context write guard**: only an analysis read against the entry
+      timeframe's own higher timeframe is tracked. The MTF route accepted any
+      longer one, and an H1-against-D1 run would reconcile against the
+      scanner's H1 setup. No stored row was ever written that way (all 870 were
+      the scanner's).
+- [x] **Retry only after a certain rollback**; an uncertain commit is logged as
+      such, never retried.
+- [x] **Notifications by exact event id**, owner-scoped; `resolveInvalidated`
+      and the newest-event lookup are gone from `eventsFromScan`.
+- [ ] Not done, by scope:
+  - **The manual routes judge "forming" after the fetch.** A request that
+    straddles a close receives the bar while it is still forming, judges it
+    closed, and can track it, with no 90 s settle delay. The window is the
+    fetch latency at each close; it has never produced an event. Route-only
+    fix: judge forming against the fetch-start time, plus the settle delay.
+  - Manual-route changes are never notified, and a committed change whose
+    acknowledgement is lost loses its notification (logged). Recoverable
+    without an outbox if ever wanted: client-generated event ids, then re-take
+    the lock and read them.
+  - The lock is cooperative. The e2e specs create setups directly (fresh users,
+    so no collision), and two of them insert COMPLETED `ScannerRun` rows into
+    whatever database they run against, which a running monitor treats as a
+    fresh pass.
+  - Optional later: the partial unique index on open setups per identity.
+    Prisma 5.22 cannot declare it, and `migrate dev` is expected to propose
+    dropping it; check on a disposable database first.
+
+## Confirmation fixes (on `fix/confirmation-wick-and-confirmed-at`, merged to local `main`)
 
 Two defects found by the read-only confirmation study (24 months, 45 markets ×
 1h/4h, 499-candle window). Neither changes a Potential setup: every gate

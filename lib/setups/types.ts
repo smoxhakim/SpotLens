@@ -128,8 +128,18 @@ export interface PlannedTransition {
  * - CONTRADICTED_UNTRACKED: the engine built levels, but confirmation was
  *   contradicted on a level nobody was tracking, so none is created.
  * - UNCHANGED: a tracked setup was re-observed in the state it is already in.
+ *
+ * Two more are the service's, decided before the planner runs — it never
+ * returns them:
+ *
+ * - NON_CANONICAL_CONTEXT: the analysis read a higher timeframe other than the
+ *   entry timeframe's canonical one (`readsCanonicalContext`), so it does not
+ *   speak for the setup tracked there.
+ * - STALE_ANALYSIS: the analysis is of an older candle than one already
+ *   recorded for this setup (`isStaleAnalysis`), so it may not move it back.
  */
-export type NoActionCause = "NO_SETUP" | "CONTRADICTED_UNTRACKED" | "UNCHANGED";
+export type NoActionCause =
+  "NO_SETUP" | "CONTRADICTED_UNTRACKED" | "UNCHANGED" | "NON_CANONICAL_CONTEXT" | "STALE_ANALYSIS";
 
 /**
  * Why a scanned result has no tracked setup behind it.

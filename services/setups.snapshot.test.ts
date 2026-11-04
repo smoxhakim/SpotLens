@@ -1,6 +1,7 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { runAnalysis } from "@/lib/analysis";
+import { analyzeMultiTimeframe, runAnalysis } from "@/lib/analysis";
+import type { Candle } from "@/lib/market-data/provider";
 import { extendedAboveSupport, pullbackIntoSupport } from "@/lib/test-utils/scenarios";
 
 /**
@@ -34,27 +35,65 @@ const FROZEN = [
 
 const findFirst = vi.fn();
 const create = vi.fn();
-const update = vi.fn();
+const updateMany = vi.fn();
 const eventCreate = vi.fn();
 
-vi.mock("@/lib/db/prisma", () => ({
-  isDatabaseConfigured: true,
-  prisma: {
+/**
+ * Every write runs on the transaction client. The global client's model
+ * methods record and refuse any call: `trackSetup` never throws, so a refusal
+ * alone would be swallowed — the record is what the tests assert on.
+ */
+const globalCalls: string[] = [];
+const refuse = (name: string) => () => {
+  globalCalls.push(name);
+  throw new Error(`${name} called on the global client`);
+};
+
+vi.mock("@/lib/db/prisma", () => {
+  const tx = {
     trackedSetup: {
       findFirst: (a: unknown) => findFirst(a),
       create: (a: unknown) => create(a),
-      update: (a: unknown) => update(a),
+      updateMany: (a: unknown) => updateMany(a),
     },
     setupEvent: { create: (a: unknown) => eventCreate(a) },
-    $transaction: async (arg: unknown) =>
-      typeof arg === "function" ? (arg as () => unknown)() : arg,
-  },
-}));
+    $executeRaw: async () => 1,
+    $queryRaw: async () => [{ evaluated: null, unstamped: null }],
+  };
+
+  return {
+    isDatabaseConfigured: true,
+    prisma: {
+      trackedSetup: {
+        findFirst: refuse("trackedSetup.findFirst"),
+        create: refuse("trackedSetup.create"),
+        update: refuse("trackedSetup.update"),
+        updateMany: refuse("trackedSetup.updateMany"),
+      },
+      setupEvent: { create: refuse("setupEvent.create") },
+      $executeRaw: refuse("$executeRaw"),
+      $queryRaw: refuse("$queryRaw"),
+      $transaction: async (fn: (client: typeof tx) => unknown) => fn(tx),
+    },
+  };
+});
 
 const { trackSetup } = await import("./setups");
 
-const BULLISH = runAnalysis(pullbackIntoSupport());
-const OTHER = runAnalysis(extendedAboveSupport());
+/** Read the way a tracked H4 setup is: against D1, its canonical higher timeframe. */
+function asTracked(candles: Candle[]) {
+  return runAnalysis(candles, {
+    mtf: analyzeMultiTimeframe({
+      lowerCandles: candles,
+      higherCandles: pullbackIntoSupport(),
+      lowerTimeframe: "H4",
+      higherTimeframe: "D1",
+    }),
+  });
+}
+
+const BULLISH = asTracked(pullbackIntoSupport());
+const OTHER = asTracked(extendedAboveSupport());
 
 const base = {
   userId: "user-1",
@@ -62,15 +101,24 @@ const base = {
   timeframe: "H4" as const,
 };
 
+/** The status write of a transition — the guarded one, keyed on the state it was planned from. */
+const statusWrites = () =>
+  updateMany.mock.calls.filter((call) => call[0].where.status !== undefined);
+
 beforeEach(() => {
   findFirst.mockReset();
   create.mockReset();
-  update.mockReset();
+  updateMany.mockReset();
   eventCreate.mockReset();
+  globalCalls.length = 0;
 
-  create.mockResolvedValue({ id: "setup-1" });
-  update.mockResolvedValue({});
-  eventCreate.mockResolvedValue({});
+  create.mockResolvedValue({ id: "setup-1", events: [{ id: "event-created" }] });
+  updateMany.mockResolvedValue({ count: 1 });
+  eventCreate.mockResolvedValue({ id: "event-1" });
+});
+
+afterEach(() => {
+  expect(globalCalls, "a write escaped the transaction").toEqual([]);
 });
 
 describe("a stored setup's numbers never change", () => {
@@ -98,9 +146,10 @@ describe("a stored setup's numbers never change", () => {
 
     await trackSetup({ ...base, result: BULLISH });
 
-    // Either it moved or it did nothing. If it moved, the update must touch
+    // Either it moved or it did nothing. If it moved, every write must touch
     // lifecycle columns only.
-    for (const call of update.mock.calls) {
+    expect(updateMany).toHaveBeenCalled();
+    for (const call of updateMany.mock.calls) {
       const written = Object.keys(call[0].data);
       for (const column of FROZEN) {
         expect(written, `transition wrote ${column}`).not.toContain(column);
@@ -122,7 +171,8 @@ describe("a stored setup's numbers never change", () => {
 
     await trackSetup({ ...base, result: OTHER });
 
-    for (const call of update.mock.calls) {
+    expect(updateMany).toHaveBeenCalled();
+    for (const call of updateMany.mock.calls) {
       expect(call[0].where.id).toBe("setup-old");
       for (const column of FROZEN) {
         expect(Object.keys(call[0].data), column).not.toContain(column);
@@ -141,10 +191,10 @@ describe("a stored setup's numbers never change", () => {
 
     const outcome = await trackSetup({ ...base, result: BULLISH });
 
-    if (outcome.action === "NONE") {
-      expect(update).not.toHaveBeenCalled();
-      expect(create).not.toHaveBeenCalled();
-    }
+    expect(outcome.action).toBe("NONE");
+    expect(updateMany).not.toHaveBeenCalled();
+    expect(create).not.toHaveBeenCalled();
+    expect(eventCreate).not.toHaveBeenCalled();
   });
 });
 
@@ -161,12 +211,12 @@ describe("confirmedAt is the first confirmation, written once", () => {
 
     await trackSetup({ ...base, result: BULLISH });
 
-    expect(update).toHaveBeenCalledTimes(1);
-    expect(update.mock.calls[0][0].data.status).toBe("POTENTIAL_SETUP");
-    expect(Object.keys(update.mock.calls[0][0].data)).not.toContain("confirmedAt");
+    expect(updateMany).toHaveBeenCalledTimes(1);
+    expect(updateMany.mock.calls[0][0].data.status).toBe("POTENTIAL_SETUP");
+    expect(Object.keys(updateMany.mock.calls[0][0].data)).not.toContain("confirmedAt");
   });
 
-  it("is written by the first transition that confirms", async () => {
+  it("is written by the first transition that confirms, and only where it is unset", async () => {
     findFirst.mockResolvedValue({
       id: "setup-1",
       status: "WAITING_CONFIRMATION",
@@ -177,7 +227,10 @@ describe("confirmedAt is the first confirmation, written once", () => {
 
     await trackSetup({ ...base, result: BULLISH });
 
-    expect(update).toHaveBeenCalledTimes(1);
-    expect(Object.keys(update.mock.calls[0][0].data)).toContain("confirmedAt");
+    expect(statusWrites()).toHaveLength(1);
+    expect(Object.keys(statusWrites()[0][0].data)).not.toContain("confirmedAt");
+
+    const stamp = updateMany.mock.calls.find((call) => "confirmedAt" in call[0].data);
+    expect(stamp?.[0].where).toEqual({ id: "setup-1", confirmedAt: null });
   });
 });
