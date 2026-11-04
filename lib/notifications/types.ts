@@ -27,7 +27,12 @@ export type NotificationEventType =
    * The live price moved from outside a tracked setup's stored entry zone to
    * inside it. Once per setup, informational only — see `lib/entry-zone`.
    */
-  | "ENTRY_ZONE_REACHED";
+  | "ENTRY_ZONE_REACHED"
+  /**
+   * One count of a finished pass's 1h analyses. Telegram-only, once per run —
+   * see `lib/notifications/scan-report.ts`.
+   */
+  | "SCAN_REPORT";
 
 /**
  * The two confirmation-watch types, in one place.
@@ -55,10 +60,15 @@ export function isConfirmationWatchEvent(type: NotificationEventType): boolean {
  * renders it — so making the two Phase Q types unrepresentable in it means no
  * amount of wrong wiring downstream can put confirmation traffic on the main
  * bot. The confirmation path has its own event object in `lib/confirmation-watch`.
+ *
+ * `SCAN_REPORT` is excluded for the same structural reason: it is about a pass,
+ * not a setup, and has its own path (`services/scan-report.ts`) with its own
+ * switch. `deliverEvents` cannot be handed one, so the report can never ride
+ * on — or be withheld by — the rules that route alerts.
  */
 export type LifecycleNotificationEventType = Exclude<
   NotificationEventType,
-  "CONFIRMATION_EVIDENCE" | "CONFIRMATION_REACHED"
+  "CONFIRMATION_EVIDENCE" | "CONFIRMATION_REACHED" | "SCAN_REPORT"
 >;
 
 export type NotificationChannel = "IN_APP" | "TELEGRAM" | "TELEGRAM_CONFIRMATION";
@@ -86,6 +96,9 @@ export const EVENT_PRIORITY: Record<NotificationEventType, NotificationPriority>
   // Price arriving is worth reading; it is not evidence and not a verdict, so
   // it does not rank beside a level failing.
   ENTRY_ZONE_REACHED: "MEDIUM",
+  // A count of a pass that already happened. Nothing in it is new about any
+  // one setup; the alerts that are have already been sent by then.
+  SCAN_REPORT: "LOW",
 };
 
 /** Levels and reasoning as they stood, copied from the stored setup snapshot. */
@@ -228,6 +241,7 @@ export const notificationEventTypeSchema = z.enum([
   "CONFIRMATION_EVIDENCE",
   "CONFIRMATION_REACHED",
   "ENTRY_ZONE_REACHED",
+  "SCAN_REPORT",
 ]);
 
 export const notificationChannelSchema = z.enum(["IN_APP", "TELEGRAM", "TELEGRAM_CONFIRMATION"]);
@@ -245,6 +259,8 @@ export interface NotificationPreferences {
   confirmationAlerts: boolean;
   /** Live entry-zone alerts. One per setup at most. */
   entryZoneReached: boolean;
+  /** The hourly 1h scan report. Telegram-only, and only with `telegramEnabled` on too. */
+  scanReport: boolean;
 }
 
 /**
@@ -275,6 +291,10 @@ export const DEFAULT_PREFERENCES: NotificationPreferences = {
   // On: it fires at most once per setup, and Telegram still only carries the
   // subset `telegramPriorityFor` admits.
   entryZoneReached: true,
+  // Off, and a second switch on top of `telegramEnabled` rather than riding on
+  // it: twenty-four messages a day is a volume someone has to choose, and
+  // leaving it off must not cost a single alert.
+  scanReport: false,
 };
 
 /** Which preference flag governs which event type. */
@@ -293,4 +313,5 @@ export const PREFERENCE_FOR_EVENT: Record<
   CONFIRMATION_EVIDENCE: "confirmationAlerts",
   CONFIRMATION_REACHED: "confirmationAlerts",
   ENTRY_ZONE_REACHED: "entryZoneReached",
+  SCAN_REPORT: "scanReport",
 };

@@ -128,6 +128,18 @@ export function dedupeKeyForDailySummary(date: string): string {
   return `daily-summary:${date}`;
 }
 
+/**
+ * One scan report per scanner run, ever.
+ *
+ * The run id is the whole identity: a pass finishes once, so a second report
+ * for it — a repeated call, a restart, a second scanner — is a duplicate the
+ * unique index rejects. A retry of a failed pass is a new run with a new id,
+ * which is right: it is a different pass.
+ */
+export function dedupeKeyForScanReport(runId: string): string {
+  return `scan-report:${runId}`;
+}
+
 // --- channel routing -------------------------------------------------------
 
 /**
@@ -234,6 +246,13 @@ export function telegramPriorityFor(event: RoutingFacts): TelegramPriority {
       }
       return "LOW";
     }
+
+    // Not an alert, and never routed by these rules: the report has its own
+    // path and its own switch (`services/scan-report.ts`). LOW is the second
+    // lock on that door — handed to `deliverEvents` by mistake, it still
+    // cannot reach a phone.
+    case "SCAN_REPORT":
+      return "LOW";
   }
 }
 

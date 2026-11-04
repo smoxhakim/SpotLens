@@ -50,6 +50,7 @@ import {
 import { deliverConfirmationAlerts } from "@/services/confirmation-alerts";
 import { buildDailySummary, eventsFromScan } from "@/services/notification-events";
 import { deliverEvents } from "@/services/notifications";
+import { deliverScanReport } from "@/services/scan-report";
 import {
   DEFAULT_MAX_CONCURRENCY,
   closeAbandonedRuns,
@@ -144,6 +145,11 @@ async function scan(triggeredBy: "SCHEDULE" | "MANUAL", due: Timeframe[], userId
   // to the main bot, confirmation activity to its own, and neither function can
   // reach the other's destination.
   await watchConfirmation(summary.observations, userId);
+
+  // The hourly report, last: it counts what this pass recorded, so the alerts
+  // the pass produced go out before it. Its own path and its own switch — off
+  // by default, and on top of the Telegram one.
+  await reportScan(summary, userId);
 
   // The shortlist, not the first three of everything: ninety analyses is more
   // than anyone reads, and the counts either side of it are what say how much
@@ -253,6 +259,39 @@ async function watchConfirmation(
     }
   } catch (err) {
     log(`   confirmation alerts skipped: ${err instanceof Error ? err.message : "unknown error"}`);
+  }
+}
+
+/**
+ * The 1h scan report for this pass, when both of its switches are on.
+ *
+ * Wrapped like `notify`, for the same reason. Quiet while a switch is off — a
+ * line every hour saying so would be noise — and otherwise says what happened,
+ * including why a pass got no report.
+ */
+async function reportScan(summary: Awaited<ReturnType<typeof runScan>>, userId: string) {
+  try {
+    const outcome = await deliverScanReport({
+      userId,
+      runId: summary.runId,
+      events: summary.events,
+    });
+
+    if (outcome.status === "SENT") log("   1h scan report sent");
+    else if (outcome.status === "DUPLICATE")
+      log("   1h scan report already recorded for this pass");
+    else if (outcome.status === "FAILED") {
+      log(`   1h scan report: ${outcome.delivery.toLowerCase().replace(/_/g, " ")}`);
+    } else if (
+      outcome.status === "SKIPPED" &&
+      !["NO_DATABASE", "TELEGRAM_OFF", "REPORT_OFF"].includes(outcome.reason)
+    ) {
+      log(
+        `   no 1h scan report for this pass (${outcome.reason.toLowerCase().replace(/_/g, " ")})`,
+      );
+    }
+  } catch (err) {
+    log(`   1h scan report skipped: ${err instanceof Error ? err.message : "unknown error"}`);
   }
 }
 

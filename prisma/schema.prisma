@@ -118,6 +118,11 @@ enum NotificationEventType {
   /// confirmation, it changes no lifecycle state, and it is the one event not
   /// derived from a closed candle — see `lib/entry-zone`.
   ENTRY_ZONE_REACHED
+  /// One report after a completed or partial scanner pass that covered 1h,
+  /// counting the 1h analyses only. Telegram-only and once per run — the
+  /// dedupe key is the run id. A count of what the pass recorded, never a
+  /// verdict of its own — see `lib/notifications/scan-report.ts`.
+  SCAN_REPORT
 }
 
 /// Where a notification was delivered.
@@ -793,6 +798,10 @@ model NotificationPreference {
   /// Live entry-zone alerts. On by default: the event is at most one per setup,
   /// and Telegram still only carries the subset `telegramPriorityFor` admits.
   entryZoneReached     Boolean @default(true)
+  /// The hourly 1h scan report. Off by default, and only ever delivered when
+  /// `telegramEnabled` is on as well: twenty-four messages a day is a volume
+  /// someone has to choose, and turning it off leaves every alert untouched.
+  scanReport           Boolean @default(false)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

@@ -24,6 +24,7 @@ const patchSchema = z
     systemError: z.boolean(),
     confirmationAlerts: z.boolean(),
     entryZoneReached: z.boolean(),
+    scanReport: z.boolean(),
   })
   .strict()
   .partial();
