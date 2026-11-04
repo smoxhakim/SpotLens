@@ -168,6 +168,22 @@ describe("a scan's notifications name their exact events", () => {
     });
   });
 
+  it("both halves of a replacement are notified, each under its own event's key", async () => {
+    // A replacement that opens straight at POTENTIAL_SETUP is announced too.
+    findMany.mockImplementation(async (args: { where: { id: { in: string[] } } }) =>
+      EVENTS.filter((row) => args.where.id.in.includes(row.id)).map((row) =>
+        row.id === "event-created" ? { ...row, toStatus: "POTENTIAL_SETUP" } : row,
+      ),
+    );
+
+    const notified = await eventsFromScan({ userId: OWNER, scannerEvents: replacement() });
+
+    expect(notified.map((n) => [n.type, n.setup?.setupId, n.dedupeKey])).toEqual([
+      ["SETUP_INVALIDATED", "setup-old", "setup-event:event-invalidated"],
+      ["SETUP_DETECTED", "setup-new", "setup-event:event-created"],
+    ]);
+  });
+
   it("an invalidation with no replacement in the pass stands alone", async () => {
     const [closing] = replacement();
     const [event] = await eventsFromScan({ userId: OWNER, scannerEvents: [closing] });
