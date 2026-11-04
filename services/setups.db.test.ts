@@ -27,6 +27,12 @@ import { downtrend, extendedAboveSupport, pullbackIntoSupport } from "@/lib/test
  *
  * About 70 seconds: three cases wait out a real timeout (the lock's 5 s twice,
  * the transaction's 10 s, and the 30 s idle limit).
+ *
+ * Give it a database of its own. The files run in parallel, and the entry-zone
+ * monitor's database test counts every open setup in the database it is given
+ * — so pointing `ENTRY_ZONE_TEST_DATABASE_URL` at this same database makes that
+ * count race the setups this file creates. (Its own `pg_locks` reads assume no
+ * other advisory-lock user, which holds today.)
  */
 
 const url = process.env.SETUPS_TEST_DATABASE_URL;
