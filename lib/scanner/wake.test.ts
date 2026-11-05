@@ -275,8 +275,8 @@ describe("over many cycles: nothing repeated, nothing skipped, nothing early", (
 });
 
 describe("stopping during a wait", () => {
-  // `sleep` is how the loop waits for a window and how the catch-up waits for a
-  // close to settle; Ctrl-C, SIGTERM and the engine going away all abort it.
+  // `sleep` is what the loop's `sleepUntil` waits on and how the catch-up waits for
+  // a close to settle; Ctrl-C, SIGTERM and the engine going away all abort it.
   afterEach(() => vi.useRealTimers());
 
   it("an abort ends a long wait at once", async () => {

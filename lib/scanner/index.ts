@@ -24,7 +24,7 @@ export {
   type ScanWindow,
   type WakeScan,
 } from "./schedule";
-export { mapWithConcurrency, sleep } from "./concurrency";
+export { MAX_WAIT_STEP_MS, mapWithConcurrency, sleep, sleepUntil } from "./concurrency";
 export {
   FAILED_PASS_RETRY_DELAYS_MS,
   classifyPass,

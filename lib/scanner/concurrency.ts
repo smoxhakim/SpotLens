@@ -47,3 +47,33 @@ export function sleep(ms: number, signal?: AbortSignal): Promise<void> {
     }
   });
 }
+
+/** The longest single wait `sleepUntil` makes before it reads the clock again. */
+export const MAX_WAIT_STEP_MS = 30_000;
+
+/**
+ * Pauses until the wall clock reaches `wakeAt`, or returns immediately once
+ * `signal` aborts.
+ *
+ * Node's timers do not count down while a Mac sleeps, but the wall clock does.
+ * One long `sleep` therefore carries on after waking for whatever it had left,
+ * which started a pass 45 minutes after the lid was opened. Waiting in short
+ * steps and reading the clock after each bounds that at one step of awake time.
+ *
+ * It never returns before `wakeAt` by the clock it reads, so a clock set back
+ * only means waiting longer. One wait is pending at a time, and each is cleared
+ * or finished before the next begins. `pause` is there for tests of the script
+ * that calls this, which replace `sleep` with a wait they end themselves.
+ */
+export async function sleepUntil(
+  wakeAt: number,
+  signal?: AbortSignal,
+  pause: typeof sleep = sleep,
+): Promise<void> {
+  while (!signal?.aborted) {
+    const remaining = wakeAt - Date.now();
+    // Not `remaining <= 0`: a NaN must end the wait, not spin on empty timers.
+    if (!(remaining > 0)) return;
+    await pause(Math.min(remaining, MAX_WAIT_STEP_MS), signal);
+  }
+}
