@@ -14,6 +14,7 @@ export {
   snapshotOf,
   TERMINAL_STATUS,
 } from "./lifecycle";
+export { closureCauseOf, closureOf, supportLostReason } from "./closure";
 export { confirmationCaveat, LIFECYCLE_LABELS, lifecycleLabel } from "./labels";
 export { readsCanonicalContext } from "./context";
 export {
@@ -31,12 +32,14 @@ export type {
   TransactionPhase,
 } from "./conflict";
 export type {
+  ClosureCause,
   ConfirmationPayload,
   ExistingSetup,
   NoActionCause,
   PlannedCreate,
   PlannedEvent,
   PlannedTransition,
+  SetupClosure,
   SetupEventType,
   SetupLifecycleStatus,
   SetupOrigin,
