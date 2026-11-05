@@ -275,6 +275,7 @@ function factsFor(s: SetupRow): SetupFacts {
     invalidationReason: null,
     regime: null,
     isReplacement: false,
+    closureCause: null,
     replacementZoneLow: null,
     replacementZoneHigh: null,
     everConfirmed: false,

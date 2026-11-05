@@ -70,6 +70,9 @@ export const TELEGRAM_TITLES: Record<LifecycleNotificationEventType, string> = {
 /** A replacement is not an invalidation, and must not wear its title. */
 export const REPLACEMENT_TITLE = "🔄 Setup re-anchored";
 
+/** Price closed below the zone, whether or not a replacement was created. */
+export const SUPPORT_LOST_TITLE = "🔴 Support lost";
+
 /**
  * Last line of defence against an enum reaching a reader.
  *
@@ -363,17 +366,19 @@ export function formatConfirmation(event: NotificationEvent): string {
 /**
  * A level that was being waited on has failed.
  *
- * A replacement is routed away from Telegram before it reaches here, but the
- * branch exists anyway: a formatter that produces the wrong words when called
- * with the wrong facts is a bug waiting for the routing rules to change.
+ * A replacement that lost nothing is routed away from Telegram before it reaches
+ * here, but the branch exists anyway: a formatter that produces the wrong words
+ * when called with the wrong facts is a bug waiting for the routing rules to
+ * change.
  */
 export function formatInvalidation(event: NotificationEvent): string {
   const setup = event.setup!;
+  const supportLost = setup.closureCause === "SUPPORT_LOST";
 
-  if (setup.isReplacement) return formatReplacement(event);
+  if (setup.isReplacement && !supportLost) return formatReplacement(event);
 
   return [
-    ...header(event, TELEGRAM_TITLES.SETUP_INVALIDATED),
+    ...header(event, supportLost ? SUPPORT_LOST_TITLE : TELEGRAM_TITLES.SETUP_INVALIDATED),
     "",
     `${bold("Was")}: ${escape(labelFrom(LIFECYCLE_LABELS, setup.previousStatus ?? "—"))}`,
     "",

@@ -295,6 +295,7 @@ describe("existing alerts are unaffected", () => {
       invalidationReason: null,
       regime: null,
       isReplacement: false,
+      closureCause: null,
       replacementZoneLow: null,
       replacementZoneHigh: null,
       everConfirmed: true,

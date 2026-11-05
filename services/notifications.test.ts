@@ -77,6 +77,7 @@ function event(overrides: Partial<NotificationEvent> = {}): NotificationEvent {
       invalidationReason: null,
       regime: null,
       isReplacement: false,
+      closureCause: null,
       replacementZoneLow: null,
       replacementZoneHigh: null,
       everConfirmed: false,
@@ -403,6 +404,30 @@ describe("channel routing", () => {
         setup: { ...event().setup!, isReplacement: true },
       }),
     ],
+    [
+      "a re-anchored setup that lost support without ever confirming",
+      event({
+        type: "SETUP_INVALIDATED",
+        setup: {
+          ...event().setup!,
+          isReplacement: true,
+          closureCause: "SUPPORT_LOST",
+          everConfirmed: false,
+        },
+      }),
+    ],
+    [
+      "a re-anchored setup whose level held, having confirmed",
+      event({
+        type: "SETUP_INVALIDATED",
+        setup: {
+          ...event().setup!,
+          isReplacement: true,
+          closureCause: "SUPERSEDED",
+          everConfirmed: true,
+        },
+      }),
+    ],
     // Phase Q: every confirmation, whatever the setup looks like. The
     // dedicated confirmation bot exists precisely so this traffic stops
     // reaching the main channel, and the routing rule is what enforces it.
@@ -446,6 +471,18 @@ describe("channel routing", () => {
         setup: { ...event().setup!, everConfirmed: true },
       }),
     ],
+    [
+      "a replaced setup that lost support, having confirmed",
+      event({
+        type: "SETUP_INVALIDATED",
+        setup: {
+          ...event().setup!,
+          isReplacement: true,
+          closureCause: "SUPPORT_LOST",
+          everConfirmed: true,
+        },
+      }),
+    ],
   ] as const;
 
   it.each(loud)("pushes %s to both channels", async (_name, e) => {
@@ -455,6 +492,26 @@ describe("channel routing", () => {
     expect(sendTelegramMessage).toHaveBeenCalledTimes(1);
     expect(outcome.telegramWithheld).toBe(0);
     expect(outcome.created).toBe(2);
+  });
+
+  it("sends nothing for a confirmed support loss while Telegram is off", async () => {
+    db.notificationPreference.findUnique.mockResolvedValue({ ...PREFS, telegramEnabled: false });
+
+    const outcome = await deliverEvents([
+      event({
+        type: "SETUP_INVALIDATED",
+        setup: {
+          ...event().setup!,
+          isReplacement: true,
+          closureCause: "SUPPORT_LOST",
+          everConfirmed: true,
+        },
+      }),
+    ]);
+
+    expect(outcome.created).toBe(1);
+    expect(db.notification.create.mock.calls[0][0].data.channel).toBe("IN_APP");
+    expect(sendTelegramMessage).not.toHaveBeenCalled();
   });
 
   it("keeps the in-app copy when Telegram is not connected at all", async () => {

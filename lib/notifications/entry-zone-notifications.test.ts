@@ -51,6 +51,7 @@ function facts(overrides: Partial<SetupFacts> = {}): SetupFacts {
     invalidationReason: null,
     regime: null,
     isReplacement: false,
+    closureCause: null,
     replacementZoneLow: null,
     replacementZoneHigh: null,
     everConfirmed: false,

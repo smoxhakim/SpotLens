@@ -13,7 +13,7 @@ import {
   type SetupFacts,
 } from "@/lib/notifications";
 import { buildShortlist, type ScannerEvent } from "@/lib/scanner";
-import type { SetupLifecycleStatus } from "@/lib/setups";
+import { closureCauseOf, type SetupLifecycleStatus } from "@/lib/setups";
 
 /**
  * Turns what a scan observed into notification events.
@@ -263,6 +263,7 @@ function toTransition(
       isReplacement: replacement.isReplacement,
       replacementZoneLow: replacement.replacementZoneLow,
       replacementZoneHigh: replacement.replacementZoneHigh,
+      closureCause: closureCauseOf(event.payload),
       // Phase D stamps `confirmedAt` the first time a setup reaches
       // CONFIRMATION_DETECTED or POTENTIAL_SETUP and never clears it, so this
       // is "did this level ever get going" read straight off the record.
