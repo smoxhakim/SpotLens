@@ -32,6 +32,19 @@ open items are collected here.
       image has still never been built.
 - [ ] Optional: tighten CSP off `unsafe-inline`/`unsafe-eval` via nonces.
 
+## Stage 2A: truthful records and correct clocks (one branch and PR per change)
+
+- [x] **E-1: a real support loss is told as one** (on
+      `fix/support-loss-closure-cause`, awaiting review). A typed `closure` on
+      moved-anchor invalidations, its own wording and tone, and HIGH routing for a
+      replaced support loss that had confirmed. No migration, no change to any
+      decision, and Telegram stays off.
+- [ ] O-1: the scanner waits on the wall clock, so it scans soon after waking.
+- [ ] A-1: manual routes judge "forming" from before the fetch, with a settle
+      condition on tracking only.
+- [ ] G-2: failed lifecycle writes and refusals are visible: a combined
+      `SYSTEM_ERROR` when the database is up, sanitised local logs when it is not.
+
 ## Stage 1C: lifecycle transactions (on `feat/stage-1c-lifecycle-transactions`, awaiting review)
 
 Concurrency and transaction safety for the one lifecycle writer. Code only: no
