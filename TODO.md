@@ -39,7 +39,11 @@ open items are collected here.
       moved-anchor invalidations, its own wording and tone, and HIGH routing for a
       replaced support loss that had confirmed. No migration, no change to any
       decision, and Telegram stays off.
-- [ ] O-1: the scanner waits on the wall clock, so it scans soon after waking.
+- [x] **O-1: the scanner waits on the wall clock** (on
+      `fix/scanner-wall-clock-wake`, awaiting review). `sleepUntil` waits in steps
+      of at most 30 s and re-reads the clock, so a pass starts within one step of
+      awake time after its window has passed. Passes can now also start during a
+      closed-lid maintenance wake. Not active until the scanner is restarted.
 - [ ] A-1: manual routes judge "forming" from before the fetch, with a settle
       condition on tracking only.
 - [ ] G-2: failed lifecycle writes and refusals are visible: a combined

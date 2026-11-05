@@ -10,6 +10,7 @@ import type { Timeframe } from "@/lib/market-data/provider";
  * Every wait the script makes goes through `sleep`, which is replaced by one
  * that records the wait instead of setting a timer; the test decides when it
  * ends, and can move the clock past it first to stand in for a laptop asleep.
+ * The real `sleepUntil` runs on top of it, so its steps are waits like any other.
  * `runScan` is scripted per pass. The real schedule, retry, catch-up, signal
  * and shutdown code runs unchanged. No exchange, no database, no Telegram, no
  * lock files: those are the services the script calls, and they are faked at
@@ -209,7 +210,12 @@ vi.mock("@/lib/engine", async () => {
 });
 vi.mock("@/lib/scanner", async () => {
   const actual = await vi.importActual<typeof import("@/lib/scanner")>("@/lib/scanner");
-  return { ...actual, sleep: (ms: number, signal?: AbortSignal) => fakeSleep(ms, signal) };
+  return {
+    ...actual,
+    sleep: (ms: number, signal?: AbortSignal) => fakeSleep(ms, signal),
+    sleepUntil: (wakeAt: number, signal?: AbortSignal) =>
+      actual.sleepUntil(wakeAt, signal, fakeSleep),
+  };
 });
 
 // --- driving the script ------------------------------------------------------
@@ -258,7 +264,7 @@ async function runUntil(t: number) {
 }
 
 /** The lid is shut: the clock moves to `t` and the pending wait has not ended. */
-function sleepUntil(t: number) {
+function lidShutUntil(t: number) {
   vi.setSystemTime(t);
 }
 
@@ -483,7 +489,7 @@ describe("after macOS sleep", () => {
   it("the lid shut through an H4 close: H1 and H4 on waking, then the hour resumes", async () => {
     await start(at(10, 2, 41));
     await runUntil(at(11, 10)); // the 11:01:30 pass is done
-    sleepUntil(at(16, 10)); // asleep until 16:10; the wait for 12:01:30 is overdue
+    lidShutUntil(at(16, 10)); // asleep until 16:10; the wait for 12:01:30 is overdue
     await runUntil(at(17, 30));
 
     expect(passTimes()).toEqual(["11:01:30", "16:10:00", "17:01:30"]);
@@ -496,11 +502,102 @@ describe("after macOS sleep", () => {
     kindOf = (i) => (i === 1 ? "TRANSIENT" : "COMPLETED");
     await start(at(10, 2, 41));
     await runUntil(at(11, 10));
-    sleepUntil(at(16, 10));
+    lidShutUntil(at(16, 10));
     await runUntil(at(17, 30));
 
     expect(passTimes()).toEqual(["11:01:30", "16:10:00", "16:12:00", "17:01:30"]);
     expect(passes[2].timeframes).toEqual(["H1", "H4"]);
+  });
+});
+
+describe("waiting on the wall clock", () => {
+  const said = (pattern: RegExp) => logs.filter((l) => pattern.test(l));
+
+  it("waits for a window in steps of 30 s at most, and the last ends exactly on it", async () => {
+    await start(at(10, 2, 41));
+    expect(waits).toHaveLength(1);
+    expect(waits[0].ms).toBe(30_000);
+
+    await runUntil(at(11, 1, 20));
+    expect(waits).toHaveLength(1);
+    expect(waits[0].due).toBe(at(11, 1, 30));
+  });
+
+  it("on schedule it says each window once, reports nothing late, and passes land on time", async () => {
+    await start(at(10, 2, 41));
+    await runUntil(at(12, 30));
+
+    expect(passTimes()).toEqual(["11:01:30", "12:01:30"]);
+    expect(said(/Next: /)).toHaveLength(3);
+    expect(said(/Woke /)).toHaveLength(0);
+  });
+
+  it("a clock set back while waiting: no pass until the window really arrives, then one", async () => {
+    await start(at(10, 2, 41));
+    await runUntil(at(11, 1));
+
+    vi.setSystemTime(at(9, 0));
+    waits[0].end();
+    await flush();
+    expect(runScan).not.toHaveBeenCalled();
+    expect(waits[0].due).toBe(at(9, 0) + 30_000);
+
+    await runUntil(at(11, 1, 29));
+    expect(runScan).not.toHaveBeenCalled();
+
+    await runUntil(at(11, 5));
+    expect(passTimes()).toEqual(["11:01:30"]);
+  });
+
+  it("maintenance wakes before the window scan nothing and say nothing", async () => {
+    await start(at(10, 2, 41));
+    for (const wake of [at(10, 20), at(10, 37), at(10, 54)]) {
+      lidShutUntil(wake);
+      await runUntil(wake + 5_000);
+    }
+
+    expect(runScan).not.toHaveBeenCalled();
+    expect(said(/Next: /)).toHaveLength(1);
+    expect(said(/Woke /)).toHaveLength(0);
+  });
+
+  it("the first wake past a window scans once, and later wakes do not repeat it", async () => {
+    await start(at(10, 2, 41));
+    lidShutUntil(at(11, 20));
+    await runUntil(at(11, 22));
+    expect(passTimes()).toEqual(["11:20:00"]);
+
+    lidShutUntil(at(11, 40));
+    await runUntil(at(11, 40, 5));
+    expect(passTimes()).toEqual(["11:20:00"]);
+    expect(maxInFlight).toBe(1);
+  });
+
+  it("a pass frozen across the next window: the next starts only after it has ended", async () => {
+    await start(at(10, 2, 41));
+    await runUntil(at(11, 2));
+    expect(inFlight).toBe(1);
+
+    lidShutUntil(at(14, 10));
+    await runUntil(at(14, 12));
+
+    expect(passTimes()).toEqual(["11:01:30", "14:10:01"]);
+    expect(passes[1].timeframes).toEqual(["H1", "H4"]);
+    expect(maxInFlight).toBe(1);
+  });
+
+  it("a retry waits the same way, and a wake past it retries once", async () => {
+    kindOf = (i) => (i === 0 ? "TRANSIENT" : "COMPLETED");
+    await start(at(10, 2, 41));
+    await runUntil(at(11, 3)); // failed at 11:02:30; the retry is due at 11:03:30
+    expect(waits).toHaveLength(1);
+    expect(waits[0].ms).toBeLessThanOrEqual(30_000);
+
+    lidShutUntil(at(11, 30));
+    await runUntil(at(11, 32));
+
+    expect(passTimes()).toEqual(["11:01:30", "11:30:00"]);
+    expect(maxInFlight).toBe(1);
   });
 });
 

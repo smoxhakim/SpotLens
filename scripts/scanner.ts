@@ -3,7 +3,7 @@
  *
  * A plain long-running Node process, deliberately. SpotLens is a local
  * application: a queue, a cloud worker or a cron service would each be more
- * moving parts than a single `setTimeout` that wakes when a candle closes, and
+ * moving parts than a single wait that ends when a candle closes, and
  * none of them would make the result more correct.
  *
  *   npm run spotlens       — the usual way: run with the entry-zone monitor, under the engine
@@ -46,6 +46,7 @@ import {
   scanOnWake,
   settlementDelayMs,
   sleep,
+  sleepUntil,
 } from "@/lib/scanner";
 import { deliverConfirmationAlerts } from "@/services/confirmation-alerts";
 import { buildDailySummary, eventsFromScan } from "@/services/notification-events";
@@ -547,7 +548,7 @@ async function main() {
       );
     }
 
-    await sleep(waitMs, controller.signal);
+    await sleepUntil(wakeAt.at, controller.signal);
     if (controller.signal.aborted) break;
 
     // Recalculated from the clock, not taken from the plan: after a sleep, every

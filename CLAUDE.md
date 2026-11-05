@@ -349,7 +349,12 @@ WAITING_CONFIRMATION` is price arriving somewhere, not structure changing,
   (`ScannedThrough`, `lib/scanner/schedule.ts`): it plans the first window after
   that, and on waking scans every timeframe with a newer window — so a laptop
   that slept through an H4 close scans H4 on waking, and a close still settling
-  at startup is not skipped. On schedule it plans exactly what it always did. A
+  at startup is not skipped. On schedule it plans exactly what it always did. It
+  waits for a window with `sleepUntil` (`lib/scanner/concurrency.ts`): steps of at
+  most 30 s that re-read the wall clock, because Node's timers do not count down
+  while a Mac sleeps. A pass starts within one step of awake time after its window
+  has passed, which can be during a closed-lid maintenance wake, and a clock set
+  back cannot start one early. A
   pass in which every market failed _transiently_ (`classifyPass`,
   `lib/scanner/retry.ts`) leaves its timeframes uncovered and is retried after
   1, 2, 5 and 10 min, never past the next scheduled window, which rescans them;
