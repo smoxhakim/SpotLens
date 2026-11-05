@@ -1,4 +1,4 @@
-import type { SetupLifecycleStatus } from "@/lib/setups";
+import type { ClosureCause, SetupLifecycleStatus } from "@/lib/setups";
 
 import type { LifecycleNotificationEventType, NotificationEventType } from "./types";
 
@@ -167,6 +167,7 @@ export interface RoutingFacts {
     analysisStatus: string;
     riskRewardIsSynthetic: boolean;
     isReplacement: boolean;
+    closureCause: ClosureCause | null;
     everConfirmed: boolean;
   } | null;
 }
@@ -206,10 +207,13 @@ export function telegramPriorityFor(event: RoutingFacts): TelegramPriority {
       const setup = event.setup;
       if (!setup) return "MEDIUM";
 
-      // The engine re-anchored to an adjacent zone and created a replacement in
-      // the same pass. Nothing failed; the bookkeeping moved. Recorded and
-      // shown in-app, never pushed.
-      if (setup.isReplacement) return "LOW";
+      // The engine re-anchored and created a replacement in the same pass. That
+      // is bookkeeping unless price closed below the zone: a level that failed
+      // having confirmed is one the reader was waiting on, replacement or not.
+      // Everything else here is recorded and shown in-app, never pushed.
+      if (setup.isReplacement) {
+        return setup.closureCause === "SUPPORT_LOST" && setup.everConfirmed ? "HIGH" : "LOW";
+      }
 
       // A level that had actually confirmed is one the reader was waiting on.
       return setup.everConfirmed ? "HIGH" : "MEDIUM";

@@ -232,3 +232,35 @@ describe("a scan's notifications name their exact events", () => {
     expect(findMany).not.toHaveBeenCalled();
   });
 });
+
+describe("why a moved anchor closed a setup", () => {
+  const closingWith = async (payload: unknown) => {
+    findMany.mockImplementation(async (args: { where: { id: { in: string[] } } }) =>
+      EVENTS.filter((row) => args.where.id.in.includes(row.id)).map((row) =>
+        row.id === "event-invalidated" ? { ...row, payload } : row,
+      ),
+    );
+    const [closing] = await eventsFromScan({ userId: OWNER, scannerEvents: replacement() });
+    return closing.setup;
+  };
+
+  it("reads the cause the lifecycle stored on that event", async () => {
+    const setup = await closingWith({ status: "PRESENT", closure: { cause: "SUPPORT_LOST" } });
+
+    expect(setup).toMatchObject({ isReplacement: true, closureCause: "SUPPORT_LOST" });
+  });
+
+  it("has none for an event written before causes were recorded", async () => {
+    const setup = await closingWith({ status: "PRESENT", signals: [] });
+
+    expect(setup).toMatchObject({ isReplacement: true, closureCause: null });
+  });
+
+  it("has none for an invalidation that carries no payload at all", async () => {
+    expect((await closingWith(null))?.closureCause).toBeNull();
+  });
+
+  it("does not trust a cause it does not recognise", async () => {
+    expect((await closingWith({ closure: { cause: "ELSEWHERE" } }))?.closureCause).toBeNull();
+  });
+});

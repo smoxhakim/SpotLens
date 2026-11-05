@@ -161,11 +161,14 @@ export function renderInApp(event: NotificationEvent): { title: string; body: st
 
     case "SETUP_INVALIDATED": {
       const setup = event.setup!;
+      // Price closed below the zone: a level failed, whether or not the engine
+      // found another one to anchor to in the same pass.
+      const supportLost = setup.closureCause === "SUPPORT_LOST";
 
-      // A replacement is bookkeeping: the engine re-anchored and created a new
-      // setup in the same pass. Calling that "invalidated" tells the reader a
-      // level failed when none did.
-      if (setup.isReplacement) {
+      // Any other replacement is bookkeeping: the engine re-anchored and created
+      // a new setup in the same pass. Calling that "invalidated" tells the reader
+      // a level failed when none did.
+      if (setup.isReplacement && !supportLost) {
         const newZone =
           setup.replacementZoneLow !== null && setup.replacementZoneHigh !== null
             ? ` The new zone is ${setup.replacementZoneLow} – ${setup.replacementZoneHigh}.`
@@ -180,7 +183,7 @@ export function renderInApp(event: NotificationEvent): { title: string; body: st
       }
 
       return {
-        title: `${IN_APP_MARKERS.invalidated} Setup invalidated — ${where}`,
+        title: `${IN_APP_MARKERS.invalidated} ${supportLost ? "Support lost" : "Setup invalidated"} — ${where}`,
         body: setup.invalidationReason ?? setup.statusReason,
       };
     }

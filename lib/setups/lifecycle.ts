@@ -1,12 +1,14 @@
 import type { AnalysisResult } from "@/lib/analysis";
 import { classifyRegime } from "@/lib/regime";
 
+import { closureOf, supportLostReason } from "./closure";
 import type {
   ConfirmationPayload,
   ExistingSetup,
   NoActionCause,
   PlannedCreate,
   PlannedTransition,
+  SetupClosure,
   SetupEventType,
   SetupLifecycleStatus,
   SetupOrigin,
@@ -155,10 +157,16 @@ export function reconcileSetup(input: {
 
   // --- the entry has moved to a different level ---------------------------
   if (!isSameOrigin(existing.origin, origin)) {
+    // Says why, and changes nothing about what happens next: the action and the
+    // states below are decided the same way whatever the cause is.
+    const closure = closureOf(existing.origin, result.read.price, origin);
     const invalidate = invalidation(
       existing,
-      "The entry no longer rests on this level — the engine has anchored to a different support zone, so this setup's premise is gone.",
+      closure.cause === "SUPPORT_LOST"
+        ? supportLostReason(closure, target !== TERMINAL_STATUS)
+        : "The entry no longer rests on this level — the engine has anchored to a different support zone, so this setup's premise is gone.",
       payload,
+      closure,
     );
 
     if (target === TERMINAL_STATUS) {
@@ -230,6 +238,7 @@ function invalidation(
   existing: ExistingSetup,
   reason: string,
   payload: ConfirmationPayload | null,
+  closure?: SetupClosure,
 ): PlannedTransition {
   return {
     setupId: existing.id,
@@ -238,6 +247,7 @@ function invalidation(
     event: { type: "INVALIDATED", detail: reason, payload },
     marksConfirmed: false,
     invalidationReason: reason,
+    ...(closure ? { closure } : {}),
   };
 }
 

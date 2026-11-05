@@ -114,6 +114,19 @@ from }` and refused as `LifecycleConflictError` unless it moved one row, so
   cooperative, so a writer outside `trackSetup` (psql, Studio, the e2e specs'
   direct creates) is unprotected. Real-Postgres tests:
   `services/setups.db.test.ts` (opt-in `SETUPS_TEST_DATABASE_URL`).
+- **A moved anchor says why it closed a setup.** `closureOf`
+  (`lib/setups/closure.ts`) judges the analysed close against the stored zone:
+  SUPPORT_LOST (closed below it), LOWER_HALF (inside it, at or below its midpoint)
+  or SUPERSEDED (above that). It is recorded beside the decision and is never part
+  of it: same action, same states, same snapshot, which
+  `lifecycle.plans.golden.txt` pins. It travels as `closure` in the INVALIDATED
+  event's JSON payload, so there is no migration, and it is absent on every other
+  transition. `closureCauseOf` reads it field by field, so a row written before
+  causes existed stays null and keeps saying what it said. A SUPPORT_LOST gets its
+  own stored reason and the "Support lost" title, replacement or not, and never the
+  "replaced rather than invalidated by the market" wording, which every other
+  replacement keeps. Routing: a replaced support loss on a setup that had confirmed
+  is HIGH, and every other replacement stays LOW, in-app only.
 - **The scanner has no strategy of its own.** `services/scanner.ts` calls the
   same `runAnalysis` and the same `trackSetup` everything else does; all its
   rules (scheduling, retries, ranking, failure classes) are pure functions in

@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 import type { Timeframe } from "@/lib/market-data/provider";
-import type { SetupLifecycleStatus } from "@/lib/setups";
+import type { ClosureCause, SetupLifecycleStatus } from "@/lib/setups";
 
 /**
  * The notification domain.
@@ -144,6 +144,15 @@ export interface SetupFacts {
   /** The zone the replacement setup anchored to, when there is one. */
   replacementZoneLow: number | null;
   replacementZoneHigh: number | null;
+  /**
+   * Why a moved anchor closed this setup, read off the event it was written on.
+   *
+   * Null for any other invalidation, and for every re-anchor written before
+   * causes were recorded, which keep saying what they said. Never guessed from
+   * prices. SUPPORT_LOST is the case `isReplacement` cannot see on its own: price
+   * closed below the zone, so a level failed, whether or not a replacement exists.
+   */
+  closureCause: ClosureCause | null;
   /**
    * Whether this setup ever reached CONFIRMATION_DETECTED or POTENTIAL_SETUP.
    *

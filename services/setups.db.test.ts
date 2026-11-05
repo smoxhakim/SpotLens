@@ -308,8 +308,13 @@ describe.skipIf(!url)("trackSetup on a real database", () => {
     expect(old.id).toBe(first.setupId);
     expect(old.status).toBe("INVALIDATED");
     expect(old.invalidatedAt).not.toBeNull();
-    expect(old.invalidationReason).toMatch(/different support zone/);
+    // 200–204 is above the new analysis's close, so the level failed.
+    expect(old.invalidationReason).toMatch(/^Price closed at .*, below this setup's zone /);
     expect(old.events.map((e) => e.type)).toEqual(["CREATED", "INVALIDATED"]);
+    // Why it closed, stored beside what confirmation said, which stays readable.
+    const payload = old.events[1].payload as { closure?: { cause?: string }; evaluatedAt?: number };
+    expect(payload.closure?.cause).toBe("SUPPORT_LOST");
+    expect(payload.evaluatedAt).toBeGreaterThan(0);
     expect(frozen(old)).toBe(frozen(before));
     expect(old.updatedAt.getTime()).toBeGreaterThan(before.updatedAt.getTime());
     expect(fresh).toMatchObject({ id: outcome.setupId, status: "POTENTIAL_SETUP" });
@@ -327,6 +332,31 @@ describe.skipIf(!url)("trackSetup on a real database", () => {
     for (const probe of seen) {
       expect(probe).toMatchObject({ lock_timeout: "5s", idle_timeout: "30s" });
     }
+  });
+
+  it("a nearer support forming above keeps its ordinary reason, and records why", async () => {
+    const pair = await newPair();
+    const first = await track(pair, bullish(T));
+
+    const outcome = await track(pair, elsewhere(T + H));
+
+    expect(outcome).toMatchObject({ action: "REPLACE", replacedSetupId: first.setupId });
+    const [old] = await setupsOf(pair);
+    expect(old.invalidationReason).toMatch(/different support zone/);
+    const payload = old.events.at(-1)!.payload as { closure?: { cause?: string } };
+    expect(payload.closure?.cause).toBe("SUPERSEDED");
+  });
+
+  it("a stored closure does not disturb the stale-analysis guard", async () => {
+    const pair = await newPair();
+    await track(pair, elsewhere(T));
+    await track(pair, bullish(T + H));
+
+    // Older than the candle the closing event names, so it may not write.
+    const older = await track(pair, elsewhere(T));
+
+    expect(older).toMatchObject({ action: "NONE", cause: "STALE_ANALYSIS" });
+    expect(await openCount(pair)).toBe(1);
   });
 
   it("a creation that fails mid-replacement leaves the old setup exactly as it was", async () => {

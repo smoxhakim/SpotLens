@@ -31,6 +31,28 @@ export interface SetupOrigin {
 }
 
 /**
+ * Why a moved anchor closed a setup, judged from where the analysed candle
+ * closed against the zone stored with the setup. See `closureOf`.
+ *
+ * - SUPPORT_LOST: closed below the zone. The level failed.
+ * - LOWER_HALF: closed inside the zone, at or below its midpoint, which
+ *   reclassified it as resistance. Nothing has closed through it.
+ * - SUPERSEDED: closed above the midpoint or above the zone, and the engine now
+ *   anchors elsewhere — usually a nearer support that formed above it.
+ */
+export type ClosureCause = "SUPPORT_LOST" | "LOWER_HALF" | "SUPERSEDED";
+
+/** The cause, and the prices it was judged from, as they stood. */
+export interface SetupClosure {
+  cause: ClosureCause;
+  close: number;
+  originLow: number;
+  originHigh: number;
+  anchorLow: number;
+  anchorHigh: number;
+}
+
+/**
  * The values as they stood when the setup was first seen.
  *
  * Written once and never updated. Later analysis moving the entry or the score
@@ -111,6 +133,12 @@ export interface PlannedTransition {
   event: PlannedEvent;
   /** Stamp `confirmedAt` — false whenever the stored setup already has one. */
   marksConfirmed: boolean;
+  /**
+   * Present only when a moved anchor closed the setup, and written onto the
+   * event's payload beside what confirmation said. Absent rather than null, so
+   * no other transition's plan changes shape.
+   */
+  closure?: SetupClosure;
   invalidationReason: string | null;
 }
 

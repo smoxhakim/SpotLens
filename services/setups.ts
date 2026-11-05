@@ -435,7 +435,7 @@ async function applyTransition(
       fromStatus: transition.from,
       toStatus: transition.to,
       detail: transition.event.detail,
-      payload: transition.event.payload ? toJson(transition.event.payload) : undefined,
+      payload: transitionPayload(transition),
     },
     select: { id: true },
   });
@@ -446,6 +446,14 @@ async function applyTransition(
     type: transition.event.type,
     toStatus: transition.to,
   };
+}
+
+/** What confirmation said, and why a moved anchor closed the setup, when one did. */
+function transitionPayload(transition: PlannedTransition): Prisma.InputJsonValue | undefined {
+  const { closure, event } = transition;
+
+  if (closure) return toJson({ ...event.payload, closure });
+  return event.payload ? toJson(event.payload) : undefined;
 }
 
 export interface ListSetupsQuery {

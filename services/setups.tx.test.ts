@@ -246,6 +246,39 @@ describe("the outcome names exactly what was written", () => {
     ]);
   });
 
+  it("a moved anchor's event carries why, beside what confirmation said", async () => {
+    findFirst.mockResolvedValue(elsewhere());
+
+    await trackSetup({ ...base, result: BULLISH });
+
+    // 200–204 is above the analysed close, so the level failed.
+    const { payload, detail } = eventCreate.mock.calls[0][0].data;
+    expect(payload.closure).toEqual({
+      cause: "SUPPORT_LOST",
+      close: BULLISH.read.price,
+      originLow: 200,
+      originHigh: 204,
+      anchorLow: BULLISH.setup!.entry.sourceZone.low,
+      anchorHigh: BULLISH.setup!.entry.sourceZone.high,
+    });
+    expect(detail).toMatch(/below this setup's zone/);
+    expect(updateMany.mock.calls[0][0].data.invalidationReason).toBe(detail);
+    // The stale-analysis guard reads this, so it has to stay where it was.
+    expect(payload.evaluatedAt).toBe(BULLISH.confirmation!.evaluatedAt);
+    expect(payload.status).toBe(BULLISH.confirmation!.status);
+    expect(payload.signals).toHaveLength(BULLISH.confirmation!.signals.length);
+  });
+
+  it("no other transition's event carries a closure", async () => {
+    findFirst.mockResolvedValue(here("SETUP_FORMING"));
+
+    await trackSetup({ ...base, result: BULLISH });
+
+    const { payload } = eventCreate.mock.calls[0][0].data;
+    expect(payload).not.toHaveProperty("closure");
+    expect(payload.evaluatedAt).toBe(BULLISH.confirmation!.evaluatedAt);
+  });
+
   it("a transition is guarded on its owner and the state it was planned from", async () => {
     findFirst.mockResolvedValue(here("WAITING_CONFIRMATION"));
 

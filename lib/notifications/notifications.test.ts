@@ -88,6 +88,7 @@ function setupFacts(overrides: Partial<SetupFacts> = {}): SetupFacts {
     invalidationReason: null,
     regime: { direction: "TRENDING_UP", volatility: "NORMAL" },
     isReplacement: false,
+    closureCause: null,
     replacementZoneLow: null,
     replacementZoneHigh: null,
     everConfirmed: false,
@@ -257,6 +258,20 @@ describe("Telegram messages", () => {
           isReplacement: true,
           replacementZoneLow: 98.5,
           replacementZoneHigh: 101.25,
+        }),
+      }),
+    ],
+    [
+      "SETUP_INVALIDATED (support lost)",
+      event({
+        type: "SETUP_INVALIDATED",
+        setup: setupFacts({
+          lifecycleStatus: "INVALIDATED",
+          isReplacement: true,
+          closureCause: "SUPPORT_LOST",
+          invalidationReason:
+            "Price closed at 99.5000, below this setup's zone 100.0000 – 104.0000, so the setup was closed. " +
+            "The engine now anchors to a lower zone: 90.0000 – 92.0000.",
         }),
       }),
     ],
@@ -940,6 +955,54 @@ describe("Telegram routing", () => {
       "LOW",
     ],
     [
+      "a replaced setup that lost support, having confirmed, is a level that failed",
+      {
+        type: "SETUP_INVALIDATED",
+        setup: setupFacts({
+          isReplacement: true,
+          everConfirmed: true,
+          closureCause: "SUPPORT_LOST",
+        }),
+      },
+      "HIGH",
+    ],
+    [
+      "a replaced setup that lost support without ever confirming stays in-app",
+      {
+        type: "SETUP_INVALIDATED",
+        setup: setupFacts({
+          isReplacement: true,
+          everConfirmed: false,
+          closureCause: "SUPPORT_LOST",
+        }),
+      },
+      "LOW",
+    ],
+    [
+      "a replaced setup closed in its lower half is bookkeeping, whatever it had reached",
+      {
+        type: "SETUP_INVALIDATED",
+        setup: setupFacts({ isReplacement: true, everConfirmed: true, closureCause: "LOWER_HALF" }),
+      },
+      "LOW",
+    ],
+    [
+      "a replaced setup superseded by a nearer support is bookkeeping, whatever it had reached",
+      {
+        type: "SETUP_INVALIDATED",
+        setup: setupFacts({ isReplacement: true, everConfirmed: true, closureCause: "SUPERSEDED" }),
+      },
+      "LOW",
+    ],
+    [
+      "a support loss with no replacement routes like any other invalidation",
+      {
+        type: "SETUP_INVALIDATED",
+        setup: setupFacts({ everConfirmed: false, closureCause: "SUPPORT_LOST" }),
+      },
+      "MEDIUM",
+    ],
+    [
       "a structure signal never reaches Telegram",
       { type: "STRUCTURE_CHANGED", setup: setupFacts() },
       "LOW",
@@ -1054,6 +1117,104 @@ describe("confirmation evidence is not confirmation", () => {
 
     expect(message).toContain("*Against*");
     expect(message).toContain("✕ Support has been lost");
+  });
+});
+
+describe("a support loss is not a replacement", () => {
+  const REASON =
+    "Price closed at 99.5000, below this setup's zone 100.0000 – 104.0000, so the setup was closed. " +
+    "The engine now anchors to a lower zone: 90.0000 – 92.0000.";
+
+  const closed = (overrides: Partial<SetupFacts> = {}) =>
+    event({
+      type: "SETUP_INVALIDATED",
+      setup: setupFacts({
+        lifecycleStatus: "INVALIDATED",
+        previousStatus: "CONFIRMATION_DETECTED",
+        isReplacement: true,
+        closureCause: "SUPPORT_LOST",
+        everConfirmed: true,
+        replacementZoneLow: 90,
+        replacementZoneHigh: 92,
+        invalidationReason: REASON,
+        ...overrides,
+      }),
+    });
+
+  it("in-app: says a level failed, in the words the lifecycle recorded", () => {
+    const { title, body } = renderInApp(closed());
+
+    expect(title).toMatch(/^🔴 Support lost — BTCUSDT/);
+    expect(body).toBe(REASON);
+    expect(body).not.toContain("rather than invalidated");
+    expect(title).not.toContain("re-anchored");
+  });
+
+  it("in-app: reads as a failure rather than as bookkeeping", () => {
+    const { title } = renderInApp(closed());
+
+    expect(toneForNotification({ type: "SETUP_INVALIDATED", title })).toBe("NEGATIVE");
+  });
+
+  it("in-app: says the same when nothing replaced the setup", () => {
+    const { title, body } = renderInApp(
+      closed({
+        isReplacement: false,
+        replacementZoneLow: null,
+        replacementZoneHigh: null,
+        invalidationReason:
+          "Price closed at 99.5000, below this setup's zone 100.0000 – 104.0000, so the setup was closed.",
+      }),
+    );
+
+    expect(title).toMatch(/^🔴 Support lost — /);
+    expect(body).toMatch(/so the setup was closed\.$/);
+  });
+
+  it("Telegram: wears the failure's title and names the zone that failed", () => {
+    const message = formatForTelegram(closed());
+
+    expect(message).toContain("Support lost");
+    expect(message).toContain(escape(REASON));
+    expect(message).toContain("*Invalidation level*");
+    expect(message).not.toContain("re\\-anchored");
+    expect(message).not.toContain("Nothing about the market invalidated it");
+  });
+
+  it.each([
+    ["closed in its lower half", "LOWER_HALF"],
+    ["superseded by a nearer support", "SUPERSEDED"],
+    ["written before causes were recorded", null],
+  ] as const)("a replacement %s keeps today's words", (_name, closureCause) => {
+    const replaced = closed({
+      closureCause,
+      invalidationReason: "The entry no longer rests on this level.",
+    });
+
+    const { title, body } = renderInApp(replaced);
+    expect(title).toMatch(/^🔄 Setup re-anchored — /);
+    expect(body).toBe(
+      "The engine anchored to a different support zone, so this setup was replaced rather than " +
+        "invalidated by the market. The new zone is 90 – 92.",
+    );
+    expect(toneForNotification({ type: "SETUP_INVALIDATED", title })).toBe("NEUTRAL");
+
+    const message = formatForTelegram(replaced);
+    expect(message).toContain("re\\-anchored");
+    expect(message).toContain("Nothing about the market invalidated it");
+  });
+
+  it("an invalidation with no cause and no replacement keeps today's words", () => {
+    const row = closed({
+      isReplacement: false,
+      closureCause: null,
+      invalidationReason: "The trend is bearish.",
+    });
+
+    const { title, body } = renderInApp(row);
+    expect(title).toMatch(/^🔴 Setup invalidated — /);
+    expect(body).toBe("The trend is bearish.");
+    expect(formatForTelegram(row)).toContain("Setup invalidated");
   });
 });
 
