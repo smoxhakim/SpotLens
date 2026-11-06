@@ -5,10 +5,18 @@ import { pullbackIntoSupport, downtrend } from "@/lib/test-utils/scenarios";
 import type { MarketSummary } from "@/types/market";
 
 // The database is stubbed out entirely: this exercises the pipeline, and Phase
-// D already proves the lifecycle against a real one.
+// D already proves the lifecycle against a real one. Configured, because a pass
+// refuses to run with nowhere to store what it finds.
 vi.mock("@/lib/db/prisma", () => ({
-  isDatabaseConfigured: false,
-  prisma: {},
+  isDatabaseConfigured: true,
+  prisma: {
+    scannerRun: {
+      create: async () => ({ id: "run-1" }),
+      update: (args: unknown) => args,
+    },
+    scannerResult: { createMany: (args: unknown) => args },
+    $transaction: async (ops: unknown[]) => ops,
+  },
 }));
 
 const getCandles = vi.fn();

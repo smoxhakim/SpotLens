@@ -133,6 +133,50 @@ from }` and refused as `LifecycleConflictError` unless it moved one row, so
   `lib/scanner`. It reads **closed candles only** — the forming candle is
   dropped before the engine sees it, which is what makes a repeated scan
   idempotent. It knows nothing about notifications.
+- **A pass that could not store what it found is not a successful pass.**
+  `trackSetup` still never throws, and now says when a write failed
+  (`outcome.failure`), so a lost write and an unchanged setup no longer look the
+  same. A market with a database failure is `ok: false`, category DATABASE_ERROR,
+  keeps its verdict for the record, and has no setup, event or observation. The
+  stored status, first match: interrupted FAILED; no markets FAILED; any database
+  failure FAILED; no failures COMPLETED; all failed FAILED; else PARTIAL, which now
+  means markets failed at the exchange or in analysis only. `classifyPass`, first
+  match: interrupted INTERRUPTED; any permanent database failure, on a market or
+  saving the results, FAILED_BLOCKED; any transient one FAILED_TRANSIENT; no markets
+  FAILED_BLOCKED; status not FAILED SUCCEEDED; any retryable failure
+  FAILED_TRANSIENT; else FAILED_PERMANENT. A pass that throws: database by class,
+  retryable transient, anything else FAILED_BLOCKED. BLOCKED leaves its window
+  uncovered with no retries, so it costs one attempt a window and H4 stays due until
+  a pass succeeds; FAILED_PERMANENT (the exchange, every market) is covered and moves
+  on, as before. `runScan` throws before reading a market if there is no database,
+  the universe cannot be read (`listMarketsForScan`: no curated-file fallback, no
+  cache) or the run cannot be created. A results save that fails leaves `runId` null,
+  so no scan report, and `unfinishedRunId` set: only the process that created that
+  run closes it, before its next pass, with `closeUnfinishedRun`, which is guarded on
+  RUNNING so it cannot overwrite a save that did land; if the process exits with the
+  database still down, the 3-hour sweep closes it instead. What a blocked or failed
+  pass commits stands, and its events are still delivered: notifications stay at most
+  once, with no recovery, and an event whose commit lost its answer, or whose delivery
+  met a dead store, is lost. `scanner:once` exits 1 unless the pass SUCCEEDED. The
+  consequence of the conservative rule: one market failing permanently keeps every
+  pass FAILED, so Opportunities stays on the last good pass and goes stale, and
+  entry-zone alerts are withheld, until it is fixed. `describeFailedPass`
+  (`lib/scanner/pass-report.ts`) names it every time: every market and timeframe, a
+  safe code, the counts, transient or permanent, and what the schedule will do. It
+  prints tokens only, never a failure's message.
+- **What a database failure is comes from its structure.** `databaseFailureOf`
+  (`lib/db/failure.ts`) reads `.code`, `.errorCode`, and `.meta.code` on P2010 (the
+  SQLSTATE: 40001, 40P01 and 55P03 are transient). P2010 with no SQLSTATE is
+  `P2010_NO_SQLSTATE`, transient: reproduced with a socket timeout, so Postgres
+  refused nothing. A real model-query deadlock or lock timeout is
+  `PrismaClientUnknownRequestError` with no `code` and no `meta`; the SQLSTATE is only
+  in the message, which is deliberately not read, so it is permanent: blocked for one
+  window, never a success, and the summary says the cause cannot be told from here.
+  It takes a writer outside the lifecycle lock holding a row to reach it. The one
+  message read is on a first-connect error, which has no code at all: only
+  "can't reach database server", which `classifyPassError` has always read and startup
+  retry depends on. Any other wording is permanent. `classifyLifecycleError` still
+  decides the retry inside `trackSetup`, unchanged.
 - **A potential setup needs its higher timeframe; without it, fail closed.** H1
   reads H4 and H4 reads D1 (`defaultHigherTimeframe`), and the counter-trend
   veto lives there. `assessHigherTimeframe` (`lib/analysis/higher-timeframe.ts`)
@@ -344,7 +388,7 @@ WAITING_CONFIRMATION` is price arriving somewhere, not structure changing,
   stopped part-way (Ctrl-C, SIGTERM, the engine going away) is FAILED too —
   `ScanSummary.interrupted` — even though the markets it reached keep their
   rows: it did not cover the universe. PARTIAL means markets failed on their
-  own. RUNNING runs older than 3h are closed as FAILED (`closeAbandonedRuns`).
+  own at the exchange or in analysis; any database failure is FAILED. RUNNING runs older than 3h are closed as FAILED (`closeAbandonedRuns`).
   The scheduled loop remembers what each timeframe was scanned through
   (`ScannedThrough`, `lib/scanner/schedule.ts`): it plans the first window after
   that, and on waking scans every timeframe with a newer window — so a laptop
@@ -355,10 +399,13 @@ WAITING_CONFIRMATION` is price arriving somewhere, not structure changing,
   while a Mac sleeps. A pass starts within one step of awake time after its window
   has passed, which can be during a closed-lid maintenance wake, and a clock set
   back cannot start one early. A
-  pass in which every market failed _transiently_ (`classifyPass`,
-  `lib/scanner/retry.ts`) leaves its timeframes uncovered and is retried after
-  1, 2, 5 and 10 min, never past the next scheduled window, which rescans them;
-  PARTIAL, permanent failures and interrupted passes are never retried. The
+  pass that failed _transiently_ (`classifyPass`, `lib/scanner/retry.ts`: every
+  market failed with at least one retryable, or any transient database failure)
+  leaves its timeframes uncovered and is retried after 1, 2, 5 and 10 min, never
+  past the next scheduled window, which rescans them; a successful pass, a blocked
+  one, permanent failures and interrupted passes are never retried. Any wake that
+  lands in the settle period after a close, a retry or a late one, waits it out
+  first, and every pass runs one at a time. The
   startup owner lookup is retried on the same delays when the database is
   unreachable (`startupRetryDelay`), never for a permanent error, and the
   scanner keeps its lock while it waits; a catch-up check that fails catches up
@@ -552,6 +599,9 @@ services/       DB-backed services (markets, candles, snapshots, backtests)
 npm run dev                  # port 3000
 npm run test                 # vitest — scope it: npx vitest run lib/analysis
 npm run e2e                  # playwright, serves on 3100 (3000 is often taken)
+SPOTLENS_FAULT_TESTS=1 npx vitest run lib/db/failure.db.test.ts scripts/scanner.process.db.test.ts services/scanner-faults.db.test.ts services/scanner-notifications.db.test.ts services/scanner-replay.db.test.ts
+                             # opt-in fault tests: Docker and a local postgres:16-alpine,
+                             # each file starts its own server and takes no database URL
 npm run scanner              # local scanner: wakes after each candle close
 npm run scanner:once         # one pass over the universe, then exit
 npm run spotlens             # the engine: scanner + entry-zone monitor, supervised
@@ -563,6 +613,22 @@ npm run prisma:seed          # assets, checklists, learn articles (idempotent)
 
 ## Things that will bite you
 
+- **Importing `@prisma/client` can load the checkout's `.env`.** No `new PrismaClient`,
+  no query: the import is enough, for every key the environment does not hold, and
+  that includes `DATABASE_URL` and the Telegram token. It happens when a `.env` existed
+  at `prisma generate`, because the lookup is built into the generated client: the main
+  checkout has it, and a fresh worktree does not, which hides this. So an unset key is
+  not a safe key: a real scanner started with no `DATABASE_URL`, with such a client,
+  connected to the database that file named (measured, with a fake one). A key that
+  is present but blank is left alone. So a test that spawns the scanner uses
+  `hermeticEnv`, and one that imports real services calls `applyHermeticEnv` in
+  `vi.hoisted`, before Prisma loads.
+- **The fault tests take no database URL, on purpose.** Each file starts its own
+  in-memory server on a port the OS picks, and `assertThrowawayUrl` refuses anything
+  else (`lib/test-utils/throwaway-postgres.ts`). They cut connections, add constraints
+  and rename columns, so do not add a setting that points them somewhere. They are
+  skipped in the normal suite and in CI. The two older `*.db.test.ts` files still take
+  a URL of their own: only ever a throwaway server.
 - **The engine must stay pure.** No `Date.now()`, no randomness, no I/O in
   `lib/analysis`. State that depends on "now" is passed in (see
   `lastCandleIsForming`). The backtester replays history and must be

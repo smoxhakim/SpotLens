@@ -46,8 +46,25 @@ open items are collected here.
       closed-lid maintenance wake. Not active until the scanner is restarted.
 - [ ] A-1: manual routes judge "forming" from before the fetch, with a settle
       condition on tracking only.
-- [ ] G-2: failed lifecycle writes and refusals are visible: a combined
-      `SYSTEM_ERROR` when the database is up, sanitised local logs when it is not.
+- [x] **G-2 Part A: a pass that could not store what it found is not a success** (on
+      `fix/g2-part-a-pass-truth`, awaiting review). Lost writes, refused saves and an
+      empty universe are FAILED; blocked windows stay uncovered with one attempt per
+      window; `scanner:once` exits 1 unless the pass succeeded; every failed pass prints
+      a sanitised summary. No migration, no change to any decision or to delivery, and
+      Telegram stays off. Not active until the scanner is restarted. Known limits:
+      a code-less model-query deadlock or lock timeout is permanent, blocked for one
+      window; one market failing permanently keeps every pass FAILED, so Opportunities
+      goes stale and entry-zone alerts are withheld until it is fixed; an outage that
+      outlasts `scanner:once` leaves its run RUNNING until the 3-hour sweep; notifications
+      stay at most once, with no recovery.
+- [ ] **G-2 Part B: failures reach the operator without a console.** Separate from Part A
+      and not started. An aggregated `SYSTEM_ERROR` when the database is up, sanitised
+      local logs with 14-day retention when it is not, no migration and no
+      `ScannerResult.untrackedReason` in this phase, and a review of Telegram HIGH routing
+      with Telegram still off. Includes the host and port still printed to the local
+      console during an outage: `prisma:error` lines (stdout, from `log: ["error"]` in
+      `lib/db/prisma.ts`) and `warnOnce`'s raw detail (stderr, `lib/log.ts`). Part A left
+      both alone on purpose. See `SECURITY.md`.
 
 ## Stage 1C: lifecycle transactions (on `feat/stage-1c-lifecycle-transactions`, awaiting review)
 

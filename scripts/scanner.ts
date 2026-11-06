@@ -18,6 +18,9 @@
  * Both load `.env` through Node's own `--env-file`, so the scanner reads the
  * same configuration the app does without a second copy of it anywhere.
  *
+ * `scanner:once` exits 1 unless its pass succeeded (COMPLETED or PARTIAL with nothing
+ * wrong in the database), so a script calling it can tell.
+ *
  * Stop it with Ctrl-C; an in-flight pass is allowed to unwind first.
  */
 import { prisma } from "@/lib/db/prisma";
@@ -35,11 +38,13 @@ import {
   classifyPass,
   classifyPassError,
   describeBreakdown,
+  describeFailedPass,
   nextWake,
   recordPass,
   startSchedule,
   startupRetryDelay,
   classifyFailure,
+  type PassNext,
   type PassOutcome,
   type ScheduleState,
   planScan,
@@ -55,6 +60,7 @@ import { deliverScanReport } from "@/services/scan-report";
 import {
   DEFAULT_MAX_CONCURRENCY,
   closeAbandonedRuns,
+  closeUnfinishedRun,
   describeScannerUserFailure,
   lastSuccessfulPassStartedAt,
   resolveScannerUser,
@@ -90,17 +96,79 @@ stopWhenEngineGone(process, () => {
   log("The engine is gone; stopping after the current pass.");
 });
 
+/**
+ * Runs this process left RUNNING because it could not save them. Nobody else's: only
+ * the ids its own passes handed back can get in here. Each is closed before the next
+ * pass, which is what stops a retry leaving two rows for one window.
+ */
+const ownUnfinishedRuns = new Set<string>();
+
+async function closeOwnUnfinishedRuns() {
+  for (const id of [...ownUnfinishedRuns]) {
+    const result = await closeUnfinishedRun(id);
+    // A close that failed is kept and tried before the next pass. It never blocks one.
+    if (result === "FAILED") continue;
+    ownUnfinishedRuns.delete(id);
+    if (result === "CLOSED") log(`Closed this scanner's unfinished run ${id} as FAILED.`);
+  }
+}
+
+/** The last pass this process ran, for its failure summary. */
+let lastPass: {
+  timeframes: Timeframe[];
+  summary: Awaited<ReturnType<typeof runScan>> | null;
+  thrown: unknown;
+} | null = null;
+
+/** The sanitised summary of a pass that did not succeed. Says nothing otherwise. */
+function reportPass(outcome: PassOutcome, next: PassNext) {
+  if (!lastPass) return;
+  for (const line of describeFailedPass({
+    outcome,
+    timeframes: lastPass.timeframes,
+    summary: lastPass.summary,
+    thrown: lastPass.thrown,
+    next,
+  })) {
+    log(line);
+  }
+}
+
+/** What the schedule will do, in the summary's terms. */
+function nextFrom(schedule: ScheduleState, outcome: PassOutcome): PassNext {
+  if (schedule.retry) {
+    return {
+      kind: "RETRY",
+      inMs: schedule.retry.at - Date.now(),
+      attempt: schedule.retry.attempt,
+      of: FAILED_PASS_RETRY_DELAYS_MS.length,
+    };
+  }
+  const at = nextWake({ state: schedule, timeframes, delayMs: closeDelayMs }).at;
+  return outcome === "FAILED_PERMANENT" ? { kind: "MOVED_ON", at } : { kind: "NEXT_WINDOW", at };
+}
+
 async function scan(triggeredBy: "SCHEDULE" | "MANUAL", due: Timeframe[], userId: string) {
   const started = Date.now();
+  await closeOwnUnfinishedRuns();
   log(`Scanning ${due.map((t) => TIMEFRAME_LABELS[t]).join(" + ")}…`);
 
-  const summary = await runScan({
-    userId,
-    timeframes: due,
-    maxConcurrency: concurrency,
-    triggeredBy,
-    signal: controller.signal,
-  });
+  lastPass = { timeframes: due, summary: null, thrown: null };
+  let summary: Awaited<ReturnType<typeof runScan>>;
+  try {
+    summary = await runScan({
+      userId,
+      timeframes: due,
+      maxConcurrency: concurrency,
+      triggeredBy,
+      signal: controller.signal,
+    });
+  } catch (err) {
+    lastPass.thrown = err;
+    throw err;
+  }
+  lastPass.summary = summary;
+  if (summary.unfinishedRunId) ownUnfinishedRuns.add(summary.unfinishedRunId);
 
   const seconds = ((Date.now() - started) / 1000).toFixed(1);
 
@@ -128,7 +196,7 @@ async function scan(triggeredBy: "SCHEDULE" | "MANUAL", due: Timeframe[], userId
     for (const event of summary.events.filter((e) => e.type !== "ANALYSIS_FAILED")) {
       log(`   → ${event.type} ${event.symbol} ${event.timeframe}`);
     }
-  } else {
+  } else if (summary.status !== "FAILED") {
     log("   nothing changed since the last pass");
   }
 
@@ -230,7 +298,7 @@ async function notify(
       );
     }
   } catch (err) {
-    log(`   notifications skipped: ${err instanceof Error ? err.message : "unknown error"}`);
+    log(`   notifications skipped: ${classifyFailure(err).message}`);
   }
 }
 
@@ -259,7 +327,7 @@ async function watchConfirmation(
       );
     }
   } catch (err) {
-    log(`   confirmation alerts skipped: ${err instanceof Error ? err.message : "unknown error"}`);
+    log(`   confirmation alerts skipped: ${classifyFailure(err).message}`);
   }
 }
 
@@ -292,7 +360,7 @@ async function reportScan(summary: Awaited<ReturnType<typeof runScan>>, userId: 
       );
     }
   } catch (err) {
-    log(`   1h scan report skipped: ${err instanceof Error ? err.message : "unknown error"}`);
+    log(`   1h scan report skipped: ${classifyFailure(err).message}`);
   }
 }
 
@@ -312,7 +380,7 @@ async function maybeSendDailySummary(userId: string) {
     const outcome = await deliverEvents([event]);
     if (outcome.created > 0) log(`   daily summary sent for ${event.summary?.date}`);
   } catch (err) {
-    log(`   daily summary skipped: ${err instanceof Error ? err.message : "unknown error"}`);
+    log(`   daily summary skipped: ${classifyFailure(err).message}`);
   }
 }
 
@@ -360,22 +428,6 @@ async function withStartupRetries<T>(
   }
 }
 
-/** Says what the schedule will do about a pass that failed transiently, if anything. */
-function announceRetry(schedule: ScheduleState) {
-  if (schedule.retry) {
-    log(
-      `   every market failed, probably transiently (network, timeout, exchange or database ` +
-        `unavailable). Retrying in ${Math.round((schedule.retry.at - Date.now()) / 60_000)} min ` +
-        `(retry ${schedule.retry.attempt} of ${FAILED_PASS_RETRY_DELAYS_MS.length}).`,
-    );
-  } else if (schedule.notBefore !== null) {
-    log(
-      "   every market failed again; no more retries before the next window at " +
-        `${new Date(schedule.notBefore).toISOString()}, which rescans these timeframes too.`,
-    );
-  }
-}
-
 /** `closeAbandonedRuns`, logged. A failure here must never stop a scan. */
 async function recoverAbandonedRuns() {
   try {
@@ -384,7 +436,7 @@ async function recoverAbandonedRuns() {
       log(`Closed ${closed} scanner run(s) left RUNNING by a scanner that was stopped mid-pass.`);
     }
   } catch (err) {
-    log(`Could not close abandoned runs: ${err instanceof Error ? err.message : "unknown error"}`);
+    log(`Could not close abandoned runs: ${classifyFailure(err).message}`);
   }
 }
 
@@ -445,7 +497,7 @@ async function maybeCatchUp(userId: string): Promise<CatchUpResult | null> {
     outcome = classifyPass(await scan("SCHEDULE", timeframes, userId));
     await maybeSendDailySummary(userId);
   } catch (err) {
-    log(`Catch-up pass failed: ${err instanceof Error ? err.message : "unknown error"}`);
+    log(`Catch-up pass failed: ${classifyFailure(err).message}`);
     if (decidedAt !== null) outcome = classifyPassError(err, controller.signal.aborted);
   }
   return decidedAt === null ? null : { decidedAt, finishedAt: Date.now(), outcome };
@@ -507,7 +559,17 @@ async function main() {
       if (controller.signal.aborted) return;
     }
 
-    await scan("MANUAL", timeframes, userId);
+    let outcome: PassOutcome;
+    try {
+      outcome = classifyPass(await scan("MANUAL", timeframes, userId));
+    } catch (err) {
+      log(`Pass failed: ${classifyFailure(err).message}`);
+      outcome = classifyPassError(err, controller.signal.aborted);
+    }
+    reportPass(outcome, { kind: "EXIT" });
+    await closeOwnUnfinishedRuns();
+    if (outcome !== "SUCCEEDED") process.exitCode = 1;
+
     // Reachable from a single pass too. The dedupe key is the UTC date, so
     // running `scanner:once` five times in an afternoon still produces exactly
     // one summary — the unique index rejects the rest.
@@ -530,7 +592,7 @@ async function main() {
     delayMs: closeDelayMs,
     catchUp: caughtUp,
   });
-  announceRetry(schedule);
+  if (caughtUp) reportPass(caughtUp.outcome, nextFrom(schedule, caughtUp.outcome));
 
   while (!controller.signal.aborted) {
     const wakeAt = nextWake({ state: schedule, timeframes, delayMs: closeDelayMs });
@@ -550,6 +612,16 @@ async function main() {
 
     await sleepUntil(wakeAt.at, controller.signal);
     if (controller.signal.aborted) break;
+
+    // Never read a candle that closed moments ago. Zero on schedule, which already
+    // waits. Non-zero for a retry, or a late wake, that lands in the settle period
+    // just after a close: analysing that bar early is what churned setups.
+    const settle = settlementDelayMs(timeframes, Date.now(), closeDelayMs);
+    if (settle > 0) {
+      log(`A candle closed moments ago. Waiting ${Math.ceil(settle / 1000)}s for it to settle.`);
+      await sleep(settle, controller.signal);
+      if (controller.signal.aborted) break;
+    }
 
     // Recalculated from the clock, not taken from the plan: after a sleep, every
     // timeframe that closed meanwhile is due, not just the one the plan named;
@@ -585,7 +657,7 @@ async function main() {
     } catch (err) {
       // A pass that blows up must not end the process — the next candle close
       // is another chance, and a scanner that dies overnight is useless.
-      log(`Pass failed: ${err instanceof Error ? err.message : "unknown error"}`);
+      log(`Pass failed: ${classifyFailure(err).message}`);
       outcome = classifyPassError(err, controller.signal.aborted);
     }
 
@@ -597,17 +669,13 @@ async function main() {
       outcome,
       delayMs: closeDelayMs,
     });
-    if (outcome === "FAILED_PERMANENT") {
-      log(
-        "   every market failed, for reasons a retry would not change; moving on to the next window.",
-      );
-    }
-    announceRetry(schedule);
+    reportPass(outcome, nextFrom(schedule, outcome));
 
     // Past the close we just handled, so the next window is the following one.
     await sleep(1_000, controller.signal);
   }
 
+  await closeOwnUnfinishedRuns();
   log("Stopped.");
 }
 
@@ -647,7 +715,7 @@ function log(message: string) {
 
 main()
   .catch((err) => {
-    log(`Fatal: ${err instanceof Error ? err.message : "unknown error"}`);
+    log(`Fatal: ${classifyFailure(err).message}`);
     process.exitCode = 1;
   })
   .finally(async () => {
