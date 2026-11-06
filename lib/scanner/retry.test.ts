@@ -134,12 +134,12 @@ describe("classifying a pass", () => {
     ).toBe("FAILED_TRANSIENT");
   });
 
-  it("a pass that threw for a reason that will not change is not retried", () => {
+  it("a pass that threw for a reason that will not change is not retried, and its window stays open", () => {
     expect(classifyPassError(new Error("Cannot read properties of undefined"), false)).toBe(
-      "FAILED_PERMANENT",
+      "FAILED_BLOCKED",
     );
     expect(classifyPassError(Object.assign(new Error("x"), { code: "P2002" }), false)).toBe(
-      "FAILED_PERMANENT",
+      "FAILED_BLOCKED",
     );
   });
 
@@ -377,5 +377,73 @@ describe("startupRetryDelay", () => {
     ["a bug", new TypeError("Cannot read properties of undefined")],
   ])("%s is not retried", (_, error) => {
     expect(startupRetryDelay(error, 1)).toBeNull();
+  });
+});
+
+describe("a day of failing: how many passes each outcome costs", () => {
+  const simulate = (outcome: PassOutcome) => {
+    const H = 3_600_000;
+    let state = startSchedule({ timeframes: ["H1"], now: Date.UTC(2026, 3, 1, 0, 2) });
+    let at = Date.UTC(2026, 3, 1, 0, 2);
+    const end = at + 24 * H;
+    const attempts: number[] = [];
+    for (;;) {
+      const wake = nextWake({ state, timeframes: ["H1"] });
+      at = wake.at;
+      if (at >= end) break;
+      attempts.push(at);
+      state = recordPass(state, {
+        timeframes: ["H1"],
+        scanned: ["H1"],
+        decidedAt: at,
+        finishedAt: at + 30_000,
+        outcome,
+      });
+    }
+    const perHour = new Map<number, number>();
+    for (const a of attempts)
+      perHour.set(Math.floor(a / H), (perHour.get(Math.floor(a / H)) ?? 0) + 1);
+    return { attempts: attempts.length, maxPerHour: Math.max(...perHour.values()) };
+  };
+
+  it("blocked: one attempt a window, never a retry", () => {
+    expect(simulate("FAILED_BLOCKED")).toEqual({ attempts: 24, maxPerHour: 1 });
+  });
+  it("transient: at most five an hour", () => {
+    expect(simulate("FAILED_TRANSIENT")).toEqual({ attempts: 116, maxPerHour: 5 });
+  });
+  it("failed for good at the exchange: one a window, and covered", () => {
+    expect(simulate("FAILED_PERMANENT")).toEqual({ attempts: 24, maxPerHour: 1 });
+  });
+});
+
+describe("a blocked pass", () => {
+  const base = Date.UTC(2026, 3, 1, 12, 1, 30);
+  const start = () => startSchedule({ timeframes: ["H1", "H4"], now: base - 1000 });
+
+  it("leaves its window uncovered, with no retry, and nothing before the next window", () => {
+    const before = start();
+    const after = recordPass(before, {
+      timeframes: ["H1", "H4"],
+      scanned: ["H1", "H4"],
+      decidedAt: base,
+      finishedAt: base + 30_000,
+      outcome: "FAILED_BLOCKED",
+    });
+    expect(after.covered).toEqual(before.covered);
+    expect(after.retry).toBeNull();
+    expect(after.notBefore).toBe(Date.UTC(2026, 3, 1, 13, 1, 30));
+  });
+
+  it("a blocked catch-up is treated the same, not as covered", () => {
+    const state = startSchedule({
+      timeframes: ["H1", "H4"],
+      now: base + 60_000,
+      catchUp: { decidedAt: base, finishedAt: base + 30_000, outcome: "FAILED_BLOCKED" },
+    });
+    expect(state.retry).toBeNull();
+    expect(state.notBefore).toBe(Date.UTC(2026, 3, 1, 13, 1, 30));
+    const wake = nextWake({ state, timeframes: ["H1", "H4"] });
+    expect(wake.at).toBe(Date.UTC(2026, 3, 1, 13, 1, 30));
   });
 });

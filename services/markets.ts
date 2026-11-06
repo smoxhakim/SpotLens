@@ -38,6 +38,28 @@ export async function listMarkets(): Promise<MarketSummary[]> {
   return loadMarkets();
 }
 
+/**
+ * The universe for a scan, from the database or not at all.
+ *
+ * `listMarkets` serves the curated file when the database is out, which is right for
+ * a page that only wants to show something and wrong for a scan: every result of the
+ * pass would then be for pairs the database may not hold, and a scan that cannot read
+ * its universe cannot store what it finds either. So this has no fallback and no
+ * cache, and it throws. The caller decides what that means for the pass.
+ */
+export async function listMarketsForScan(): Promise<MarketSummary[]> {
+  if (!isDatabaseConfigured) throw new NoDatabaseError();
+  return listMarketsFromDb();
+}
+
+/** A scan needs somewhere to store what it finds. */
+export class NoDatabaseError extends Error {
+  constructor() {
+    super("No database is configured.");
+    this.name = "NoDatabaseError";
+  }
+}
+
 export async function findMarketByPairId(pairId: string): Promise<MarketSummary | undefined> {
   const markets = await listMarkets();
   return markets.find((m) => m.pairId === pairId);

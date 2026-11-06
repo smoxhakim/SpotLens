@@ -92,7 +92,7 @@ beforeEach(() => {
   abortOnCall = 0;
   abortWhileTracking = null;
   failSymbols = new Set();
-  dbState.configured = false;
+  dbState.configured = true;
   for (const key of Object.keys(written)) delete written[key as keyof typeof written];
   vi.clearAllMocks();
 });
@@ -151,7 +151,12 @@ describe("a pass that was not interrupted keeps the existing statuses", () => {
     expect(await scan(universe(5))).toMatchObject({ interrupted: false, status: "COMPLETED" });
   });
 
-  it("an empty universe is COMPLETED, as before", async () => {
-    expect(await scan([])).toMatchObject({ interrupted: false, status: "COMPLETED", analysed: 0 });
+  it("an empty universe is FAILED: it scanned nothing, so it is not a successful pass", async () => {
+    expect(await scan([])).toMatchObject({
+      interrupted: false,
+      status: "FAILED",
+      analysed: 0,
+      emptyUniverse: true,
+    });
   });
 });

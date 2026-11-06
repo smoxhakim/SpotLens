@@ -8,6 +8,7 @@ import {
   type AnalysisResult,
 } from "@/lib/analysis";
 import type { ConfirmationObservation } from "@/lib/confirmation-watch";
+import { databaseFailureOf, type DatabaseFailure } from "@/lib/db/failure";
 import { isDatabaseConfigured, prisma } from "@/lib/db/prisma";
 import type { Candle, Timeframe } from "@/lib/market-data/provider";
 import {
@@ -32,7 +33,7 @@ import {
 import { classifyRegime } from "@/lib/regime";
 import type { MarketSummary } from "@/types/market";
 import { getCandles } from "@/services/candles";
-import { listMarkets } from "@/services/markets";
+import { NoDatabaseError, listMarketsForScan } from "@/services/markets";
 import { lifecycleStatusFor, untrackedReasonOf, type UntrackedReason } from "@/lib/setups";
 import { trackSetup } from "@/services/setups";
 
@@ -99,10 +100,24 @@ export interface MarketScanOutcome {
 }
 
 export interface ScanSummary {
+  /** The stored run, once its results are saved. Null when they could not be. */
   runId: string | null;
   /**
-   * FAILED when every market failed, or when the pass was interrupted (see
-   * `interrupted`); PARTIAL when some markets failed on their own; else COMPLETED.
+   * A run this pass created and could not finish, because saving its results failed.
+   * Possibly still RUNNING. Only the process that created it may close it, which is
+   * why it travels out of the pass rather than being left for a sweep to guess at.
+   */
+  unfinishedRunId: string | null;
+  /** Saving this pass's results failed. The analysis and the lifecycle writes stand. */
+  saveFailure: DatabaseFailure | null;
+  /** There were no active markets to scan, so nothing was covered. */
+  emptyUniverse: boolean;
+  /**
+   * First match: FAILED when the pass was interrupted (see `interrupted`), had no
+   * markets, hit any database failure on any market, or its results could not be
+   * saved. COMPLETED when nothing failed. FAILED when every market failed. Otherwise
+   * PARTIAL: the markets that failed failed on their own, and everything else is
+   * stored. Only COMPLETED and PARTIAL count as a successful pass.
    */
   status: "COMPLETED" | "PARTIAL" | "FAILED";
   /**
@@ -163,9 +178,15 @@ export interface ScanSummary {
 /**
  * Runs one pass over the market universe.
  *
- * Failures are isolated per market and per timeframe: an exchange hiccup on one
- * symbol leaves the other forty-four analysed, and the run is reported PARTIAL
- * rather than thrown away. A run only fails outright when every market failed.
+ * Failures at the exchange are isolated per market and per timeframe: a hiccup on
+ * one symbol leaves the other forty-four analysed, and the run is reported PARTIAL
+ * rather than thrown away. A database failure is not isolated in that sense. Each
+ * market still gets its turn, but a pass that could not store what it found is not a
+ * successful pass, however many others went well.
+ *
+ * Throws, before any market is read, when there is no database, when the universe
+ * cannot be read, or when the run cannot be recorded. A pass that cannot record
+ * itself cannot vouch for anything it finds.
  */
 export async function runScan(options: ScanOptions): Promise<ScanSummary> {
   const startedAt = Date.now();
@@ -173,7 +194,8 @@ export async function runScan(options: ScanOptions): Promise<ScanSummary> {
   const concurrency = options.maxConcurrency ?? DEFAULT_MAX_CONCURRENCY;
   const now = options.now ?? Date.now();
 
-  const markets = options.markets ?? (await listMarkets());
+  if (!isDatabaseConfigured) throw new NoDatabaseError();
+  const markets = options.markets ?? (await listMarketsForScan());
 
   const runId = await createRun(timeframes, markets.length, options.triggeredBy ?? "SCHEDULE");
 
@@ -206,14 +228,18 @@ export async function runScan(options: ScanOptions): Promise<ScanSummary> {
     interrupted,
   );
 
-  await finishRun(runId, summary, results);
+  const saveFailure = await finishRun(runId, summary, results);
 
   // Built from this pass's own results, in memory, by the same pure function
   // the stored-run path uses. One pass in, one shortlist out — nothing from a
   // previous run can reach it.
   return {
     ...summary,
-    runId,
+    status: saveFailure ? "FAILED" : summary.status,
+    runId: saveFailure ? null : runId,
+    unfinishedRunId: saveFailure ? runId : null,
+    saveFailure,
+    emptyUniverse: results.length === 0,
     results: rankResults(results),
     shortlist: buildShortlist(results.map(toShortlistInput)),
     observations,
@@ -355,6 +381,43 @@ async function scanOne(
     timeframe,
     result,
   });
+
+  // The write failed, so this market's result is a failure even though its analysis
+  // ran. Its verdict is kept for the record. No setup, no event and no observation:
+  // whether the write landed is not known here, and an alert on it would be a guess.
+  if (outcome.failure) {
+    return {
+      observation: null,
+      events: [],
+      result: {
+        symbol: market.exchangeSymbol,
+        tradingPairId: market.pairId,
+        timeframe,
+        ok: false,
+        analysisStatus: result.status,
+        score: result.score?.total ?? null,
+        riskReward: result.setup?.riskReward.ratio ?? null,
+        riskRewardIsSynthetic: result.setup?.riskReward.isSynthetic ?? null,
+        analysedAtCandle: closed.at(-1)?.openTime ?? null,
+        setupId: null,
+        lifecycleStatus: null,
+        untrackedReason: null,
+        trend: result.read.trend.trend,
+        mtfAgreement: result.mtf?.agreement ?? null,
+        regimeDirection: classifyRegime(result.read).direction,
+        diagnostics,
+        failure: {
+          category: "DATABASE_ERROR",
+          code: outcome.failure.code,
+          message: `Database error ${outcome.failure.code}`,
+          retryable: false,
+          database: outcome.failure.class,
+        },
+        attempts: attempt.attempts,
+        durationMs: Date.now() - started,
+      },
+    };
+  }
 
   const events = eventsForOutcome({
     outcome,
@@ -534,6 +597,18 @@ function observationFor(
   };
 }
 
+/** A pass's counts and status, before its results are saved. */
+type PassSummary = Omit<
+  ScanSummary,
+  | "runId"
+  | "unfinishedRunId"
+  | "saveFailure"
+  | "emptyUniverse"
+  | "results"
+  | "shortlist"
+  | "observations"
+>;
+
 function summarise(
   results: MarketScanOutcome[],
   events: ScannerEvent[],
@@ -541,21 +616,24 @@ function summarise(
   marketCount: number,
   durationMs: number,
   interrupted: boolean,
-): Omit<ScanSummary, "runId" | "results" | "shortlist" | "observations"> {
+): PassSummary {
   const succeeded = results.filter((r) => r.ok).length;
   const failed = results.length - succeeded;
 
   const count = (status: AnalysisResult["status"]) =>
     results.filter((r) => r.analysisStatus === status).length;
 
+  const lostAWrite = results.some((r) => r.failure?.category === "DATABASE_ERROR");
+
   return {
-    status: interrupted
-      ? "FAILED"
-      : failed === 0
-        ? "COMPLETED"
-        : succeeded === 0
-          ? "FAILED"
-          : "PARTIAL",
+    status:
+      interrupted || results.length === 0 || lostAWrite
+        ? "FAILED"
+        : failed === 0
+          ? "COMPLETED"
+          : succeeded === 0
+            ? "FAILED"
+            : "PARTIAL",
     interrupted,
     timeframes,
     marketCount,
@@ -575,32 +653,25 @@ function summarise(
   };
 }
 
+/** Throws: nothing else in a pass can be vouched for if the run cannot be recorded. */
 async function createRun(
   timeframes: Timeframe[],
   marketCount: number,
   triggeredBy: string,
-): Promise<string | null> {
-  if (!isDatabaseConfigured) return null;
-
-  try {
-    const run = await prisma.scannerRun.create({
-      data: { timeframes, marketCount, triggeredBy, status: "RUNNING" },
-      select: { id: true },
-    });
-    return run.id;
-  } catch {
-    // A scan that cannot record itself is still worth running.
-    return null;
-  }
+): Promise<string> {
+  const run = await prisma.scannerRun.create({
+    data: { timeframes, marketCount, triggeredBy, status: "RUNNING" },
+    select: { id: true },
+  });
+  return run.id;
 }
 
+/** Null when the results are stored; otherwise what kind of failure stopped them. */
 async function finishRun(
-  runId: string | null,
-  summary: Omit<ScanSummary, "runId" | "results" | "shortlist" | "observations">,
+  runId: string,
+  summary: PassSummary,
   results: MarketScanOutcome[],
-): Promise<void> {
-  if (!runId || !isDatabaseConfigured) return;
-
+): Promise<DatabaseFailure | null> {
   try {
     await prisma.$transaction([
       prisma.scannerResult.createMany({
@@ -644,16 +715,40 @@ async function finishRun(
         },
       }),
     ]);
+    return null;
   } catch (err) {
-    // Recording the outcome is best-effort; the analysis already happened. It
-    // is still said: a pass whose rows were lost otherwise looks exactly like
-    // one still running. The run's status handling is unchanged — it stays
-    // RUNNING until `closeAbandonedRuns` closes it. Category and sanitised
-    // message only, never the raw error.
+    // The analysis and the lifecycle writes already happened and stand, but this
+    // pass has no stored results, so it is not a successful one. The run stays
+    // RUNNING: the commit may even have landed with only its answer lost, so this
+    // process closes it later with a write that cannot overwrite a saved run (see
+    // `closeUnfinishedRun`), and `closeAbandonedRuns` is the backstop if it never
+    // gets to. Category and sanitised message only, never the raw error.
     const failure = classifyFailure(err);
     console.error(
       `[scanner] results not recorded for run ${runId}: ${failure.category} — ${failure.message}`,
     );
+    return databaseFailureOf(err) ?? { code: "UNKNOWN", class: "PERMANENT" };
+  }
+}
+
+/**
+ * Closes a run this process created and could not finish. Never another process's:
+ * the caller holds only the ids `runScan` handed it.
+ *
+ * Guarded on RUNNING, so if the save did land after all this moves nothing and the
+ * saved status stands. FAILED means the close itself failed, and is tried again later.
+ */
+export async function closeUnfinishedRun(
+  id: string,
+): Promise<"CLOSED" | "ALREADY_FINAL" | "FAILED"> {
+  try {
+    const moved = await prisma.scannerRun.updateMany({
+      where: { id, status: "RUNNING", completedAt: null },
+      data: { status: "FAILED", completedAt: new Date() },
+    });
+    return moved.count === 1 ? "CLOSED" : "ALREADY_FINAL";
+  } catch {
+    return "FAILED";
   }
 }
 

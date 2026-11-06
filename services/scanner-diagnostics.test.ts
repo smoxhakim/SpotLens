@@ -67,7 +67,7 @@ const scan = () =>
 
 beforeEach(() => {
   tracked.length = 0;
-  dbState.configured = false;
+  dbState.configured = true;
   db.scannerRun.create.mockClear();
   db.scannerRun.update.mockClear();
   db.scannerResult.createMany.mockClear();

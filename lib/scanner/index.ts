@@ -37,6 +37,13 @@ export {
   type ScheduleState,
 } from "./retry";
 export {
+  describeFailedPass,
+  safeCode,
+  type PassNext,
+  type ReportedPass,
+  type ReportedResult,
+} from "./pass-report";
+export {
   MAX_ATTEMPTS,
   RETRY_BASE_DELAY_MS,
   classifyFailure,

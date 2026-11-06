@@ -1,6 +1,7 @@
 import type { Prisma } from "@prisma/client";
 
 import type { AnalysisResult } from "@/lib/analysis";
+import { databaseFailureOf, type DatabaseFailureClass } from "@/lib/db/failure";
 import { isDatabaseConfigured, prisma } from "@/lib/db/prisma";
 import type { Timeframe } from "@/lib/market-data/provider";
 import type { AnalysisRead } from "@/lib/scanner/freshness";
@@ -70,6 +71,13 @@ export interface TrackSetupOutcome {
    * newest event" or "the setup invalidated most recently on this market".
    */
   events: WrittenSetupEvent[];
+  /**
+   * Set when the write failed: the attempt ended in an error rather than a decision
+   * to write nothing. Reported rather than thrown, because this function never
+   * throws. Without it a failed write and an unchanged setup look exactly the same,
+   * and a pass that lost a write would be recorded as a success.
+   */
+  failure?: { kind: LifecycleFailure["kind"]; code: string; class: DatabaseFailureClass };
 }
 
 const NOTHING: TrackSetupOutcome = {
@@ -160,7 +168,16 @@ export async function trackSetup(input: TrackSetupInput): Promise<TrackSetupOutc
       const failure = classifyLifecycleError(err, phase);
       if (failure.kind === "RETRY" && attempt < MAX_ATTEMPTS) continue;
       reportFailure(input, failure);
-      return NOTHING;
+      // What is said about it, never what was decided: no plan changes on this.
+      const database = databaseFailureOf(err);
+      return {
+        ...NOTHING,
+        failure: {
+          kind: failure.kind,
+          code: database?.code ?? failure.code,
+          class: database?.class ?? "PERMANENT",
+        },
+      };
     }
   }
 }

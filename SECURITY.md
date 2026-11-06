@@ -51,6 +51,13 @@ to an order.
 key with trading scope is ever requested or stored. This is structural, not a
 setting.
 
+Tests that inject database faults cannot reach a real database or service. They take
+no database URL: each file starts its own in-memory PostgreSQL on a port the OS picks,
+and a check refuses any other target, including port 5432 and any remote host. A
+generated Prisma client can load a checkout's `.env` when it is imported, so every key
+that file names is set blank before it can be. Their exchange is a local fixture, Telegram is answered by an
+in-process stub with a stub token, and every other host is refused.
+
 ## Deliberately not built
 
 This is a single-user application, so the following are cost without benefit
@@ -60,6 +67,14 @@ also absent — it needs a transactional email provider, and the only account ca
 be reset directly in the database.
 
 ## Outstanding
+
+**A database host and port can reach the local console during an outage.** The
+scanner's own log lines are sanitised, but Prisma's `prisma:error` lines (stdout, from
+`log: ["error"]` in `lib/db/prisma.ts`) and the raw detail `warnOnce` prints (stderr,
+`lib/log.ts`) can still name the host and port when the database is unreachable. No
+password or connection string appeared in any real-process test run, and the tests
+assert that. Local console only: neither reaches a database row, a notification or the
+UI. Left for G-2 Part B, by decision, rather than changing logging in Part A.
 
 **Dependency advisories: one, with no fix published.** Verified on
 2026-10-04 against Next 16.3.8: `npm audit` reports 7 high, 0 critical, and

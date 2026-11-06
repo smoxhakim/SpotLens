@@ -1,4 +1,5 @@
 import type { HigherTimeframeShortfall } from "@/lib/analysis/higher-timeframe";
+import { databaseFailureOf } from "@/lib/db/failure";
 import { MarketDataError } from "@/lib/market-data/provider";
 
 import { sleep } from "./concurrency";
@@ -12,6 +13,14 @@ export interface ClassifiedFailure {
   message: string;
   /** Whether trying again could plausibly succeed. */
   retryable: boolean;
+  /** A stable token, never free text: a Prisma code, a SQLSTATE or a provider code. */
+  code?: string;
+  /**
+   * Set only for a database failure: whether the pass can be retried. Separate from
+   * `retryable`, which `withRetries` reads to decide about the market's own attempts,
+   * and which stays false here: a lifecycle write has already had its one retry.
+   */
+  database?: "TRANSIENT" | "PERMANENT";
 }
 
 /**
@@ -96,14 +105,18 @@ export function classifyFailure(error: unknown): ClassifiedFailure {
       // which of its own faults are transient, and a second rule here would be
       // one more place for the two to disagree.
       retryable: error.retryable,
+      code: error.code,
     };
   }
 
-  if (isPrismaError(error)) {
+  const database = databaseFailureOf(error);
+  if (database) {
     return {
       category: "DATABASE_ERROR",
-      message: sanitise(`Database error ${prismaCode(error)}`),
+      message: sanitise(`Database error ${database.code}`),
       retryable: false,
+      code: database.code,
+      database: database.class,
     };
   }
 
@@ -133,20 +146,6 @@ function sanitise(message: string): string {
     .replace(/\s+/g, " ")
     .trim()
     .slice(0, MAX_MESSAGE_LENGTH);
-}
-
-function isPrismaError(error: unknown): boolean {
-  return (
-    typeof error === "object" &&
-    error !== null &&
-    "code" in error &&
-    typeof (error as { code: unknown }).code === "string" &&
-    /^P\d{4}$/.test((error as { code: string }).code)
-  );
-}
-
-function prismaCode(error: unknown): string {
-  return (error as { code: string }).code;
 }
 
 /** One attempt, then at most this many more. Three tries, then give up. */

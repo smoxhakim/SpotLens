@@ -623,8 +623,8 @@ describe("retrying a pass in which every market failed", () => {
       ["H1"],
       ["H1", "H4"],
     ]);
-    expect(logs.filter((l) => /Retrying in \d+ min \(retry \d of 4\)/.test(l))).toHaveLength(4);
-    expect(logs.some((l) => /no more retries before the next window/.test(l))).toBe(true);
+    expect(logs.filter((l) => /will retry in \d+ min \(retry \d of 4\)/.test(l))).toHaveLength(4);
+    expect(logs.some((l) => /will not retry\. .*next scheduled window/.test(l))).toBe(true);
   });
 
   it("a successful retry ends the series: the next pass is the next window", async () => {
